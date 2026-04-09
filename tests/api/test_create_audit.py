@@ -47,7 +47,11 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.runs_per_query, 2)
         self.assertEqual(
             result.seed_queries,
-            ["best ai brand monitoring", "how to monitor brand visibility"],
+            [
+                "best ai brand monitoring",
+                "best ai brand monitoring",
+                "how to monitor brand visibility",
+            ],
         )
 
         async with self.session_factory() as session:
@@ -69,7 +73,11 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
             ).scalars().all()
             self.assertEqual(
                 [row.text for row in query_rows],
-                ["best ai brand monitoring", "how to monitor brand visibility"],
+                [
+                    "best ai brand monitoring",
+                    "best ai brand monitoring",
+                    "how to monitor brand visibility",
+                ],
             )
 
     async def test_empty_brand_name_rejected(self) -> None:

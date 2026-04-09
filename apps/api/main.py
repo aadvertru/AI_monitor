@@ -10,6 +10,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.database import get_db_session, init_models
+from libs.control.query_normalization import normalize_seed_queries
 from libs.storage.models import Audit, AuditStatus, Brand, Query
 
 SUPPORTED_PROVIDERS = frozenset({"mock", "openai", "anthropic", "gemini"})
@@ -84,22 +85,7 @@ class AuditCreateRequest(BaseModel):
     @field_validator("seed_queries")
     @classmethod
     def normalize_seed_queries(cls, value: list[str] | None) -> list[str] | None:
-        if value is None:
-            return None
-
-        normalized: list[str] = []
-        seen: set[str] = set()
-
-        for raw_query in value:
-            query = raw_query.strip()
-            if not query:
-                continue
-            dedupe_key = query.casefold()
-            if dedupe_key in seen:
-                continue
-            seen.add(dedupe_key)
-            normalized.append(query)
-
+        normalized = normalize_seed_queries(value)
         return normalized or None
 
     @field_validator("max_queries")
