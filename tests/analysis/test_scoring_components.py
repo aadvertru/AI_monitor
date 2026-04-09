@@ -4,8 +4,10 @@ import unittest
 
 from libs.analysis.scoring import (
     WEIGHT_SUM,
+    apply_visibility_cap,
     compute_component_metrics,
     compute_final_score,
+    compute_score,
 )
 
 
@@ -158,6 +160,65 @@ class ScoringComponentTests(unittest.TestCase):
 
     def test_weight_constants_sum_to_one(self) -> None:
         self.assertEqual(WEIGHT_SUM, 1.0)
+
+    def test_visibility_cap_forces_zero_when_visibility_is_zero(self) -> None:
+        components = {
+            "visibility_score": 0.0,
+            "prominence_score": 1.0,
+            "sentiment_score": 1.0,
+            "recommendation_score": 1.0,
+            "source_quality_score": 1.0,
+        }
+        self.assertEqual(apply_visibility_cap(components, 0.95), 0.0)
+
+    def test_visibility_cap_triggers_on_exact_zero(self) -> None:
+        components = {"visibility_score": 0.0}
+        self.assertEqual(apply_visibility_cap(components, 0.42), 0.0)
+
+    def test_visibility_cap_does_not_trigger_for_near_zero(self) -> None:
+        components = {"visibility_score": 0.01}
+        self.assertEqual(apply_visibility_cap(components, 0.7777), 0.7777)
+
+    def test_visibility_cap_leaves_score_unchanged_when_visibility_is_one(self) -> None:
+        components = {"visibility_score": 1.0}
+        self.assertEqual(apply_visibility_cap(components, 0.88), 0.88)
+
+    def test_compute_score_pipeline_brand_detected_returns_expected_final(self) -> None:
+        parsed = {
+            "visible_brand": True,
+            "prominence_score": 0.6,
+            "sentiment": 0.0,
+            "recommendation_score": 0.8,
+            "source_quality_score": 0.5,
+        }
+
+        result = compute_score(parsed)
+
+        self.assertEqual(
+            result,
+            {
+                "visibility_score": 1.0,
+                "prominence_score": 0.6,
+                "sentiment_score": 0.5,
+                "recommendation_score": 0.8,
+                "source_quality_score": 0.5,
+                "final_score": 0.72,
+            },
+        )
+
+    def test_compute_score_pipeline_brand_not_detected_forces_zero_final(self) -> None:
+        parsed = {
+            "visible_brand": False,
+            "prominence_score": 1.0,
+            "sentiment": 1.0,
+            "recommendation_score": 1.0,
+            "source_quality_score": 1.0,
+        }
+
+        result = compute_score(parsed)
+
+        self.assertEqual(result["visibility_score"], 0.0)
+        self.assertEqual(result["final_score"], 0.0)
 
 
 if __name__ == "__main__":

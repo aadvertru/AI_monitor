@@ -126,3 +126,36 @@ def compute_final_score(components: dict) -> float:
         return round(bounded, 4)
     except Exception:
         return 0.0
+
+
+def apply_visibility_cap(components: dict, final_score: float) -> float:
+    """Force final score to zero only when visibility_score is exactly zero."""
+    try:
+        if not isinstance(components, dict):
+            components = {}
+
+        visibility_score = _component_value_or_default(components, "visibility_score")
+        bounded_final = _clamp(float(final_score), 0.0, 1.0)
+        if visibility_score == 0.0:
+            return 0.0
+        return bounded_final
+    except Exception:
+        return 0.0
+
+
+def compute_score(parsed: dict) -> dict[str, float]:
+    """Compute component metrics, final score, and apply visibility cap."""
+    try:
+        components = compute_component_metrics(parsed)
+        raw_final = compute_final_score(components)
+        capped_final = apply_visibility_cap(components, raw_final)
+        return {**components, "final_score": capped_final}
+    except Exception:
+        return {
+            "visibility_score": 0.0,
+            "prominence_score": 0.0,
+            "sentiment_score": 0.0,
+            "recommendation_score": 0.0,
+            "source_quality_score": 0.0,
+            "final_score": 0.0,
+        }
