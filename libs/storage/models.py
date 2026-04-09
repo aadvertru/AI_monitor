@@ -225,6 +225,7 @@ class RawResponse(Base):
     citations: Mapped[list | None] = mapped_column(JSON, nullable=True)
     provider_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     provider_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    response_time: Mapped[float | None] = mapped_column(Float, nullable=True)
     error_object: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utc_now, nullable=False
