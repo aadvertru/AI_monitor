@@ -3,9 +3,11 @@ from __future__ import annotations
 import unittest
 
 from libs.analysis.aggregation import (
+    CRITICAL_SCORE_THRESHOLD,
     build_audit_summary,
     compute_provider_scores,
     compute_query_score,
+    find_critical_queries,
 )
 
 
@@ -366,6 +368,151 @@ class AggregationTests(unittest.TestCase):
                 "provider_scores": {},
             },
         )
+
+    def test_find_critical_queries_not_visible_reason(self) -> None:
+        run_results = [
+            {
+                "query": "q_not_visible",
+                "provider": "openai",
+                "status": "success",
+                "final_score": 0.9,
+                "visible_brand": False,
+            },
+            {
+                "query": "q_not_visible",
+                "provider": "mock",
+                "status": "error",
+                "final_score": 0.1,
+                "visible_brand": False,
+            },
+        ]
+
+        self.assertEqual(
+            find_critical_queries(run_results),
+            [
+                {
+                    "query": "q_not_visible",
+                    "reason": "not_visible",
+                    "query_score": 0.9,
+                }
+            ],
+        )
+
+    def test_find_critical_queries_low_score_reason(self) -> None:
+        run_results = [
+            {
+                "query": "q_low",
+                "provider": "openai",
+                "status": "success",
+                "final_score": 0.2,
+                "visible_brand": True,
+            },
+            {
+                "query": "q_low",
+                "provider": "mock",
+                "status": "success",
+                "final_score": 0.2,
+                "visible_brand": True,
+            },
+        ]
+
+        self.assertEqual(
+            find_critical_queries(run_results),
+            [
+                {
+                    "query": "q_low",
+                    "reason": "low_score",
+                    "query_score": 0.2,
+                }
+            ],
+        )
+
+    def test_find_critical_queries_no_successful_runs_reason(self) -> None:
+        run_results = [
+            {
+                "query": "q_no_success",
+                "provider": "openai",
+                "status": "error",
+                "final_score": 0.7,
+                "visible_brand": True,
+            },
+            {
+                "query": "q_no_success",
+                "provider": "mock",
+                "status": "timeout",
+                "final_score": 0.4,
+                "visible_brand": True,
+            },
+        ]
+
+        self.assertEqual(
+            find_critical_queries(run_results),
+            [
+                {
+                    "query": "q_no_success",
+                    "reason": "no_successful_runs",
+                    "query_score": None,
+                }
+            ],
+        )
+
+    def test_find_critical_queries_score_exactly_threshold_is_not_critical(self) -> None:
+        run_results = [
+            {
+                "query": "q_exact_threshold",
+                "provider": "openai",
+                "status": "success",
+                "final_score": CRITICAL_SCORE_THRESHOLD,
+                "visible_brand": True,
+            }
+        ]
+
+        self.assertEqual(find_critical_queries(run_results), [])
+
+    def test_find_critical_queries_score_just_below_threshold_is_critical(self) -> None:
+        run_results = [
+            {
+                "query": "q_below_threshold",
+                "provider": "openai",
+                "status": "success",
+                "final_score": 0.2999,
+                "visible_brand": True,
+            }
+        ]
+
+        self.assertEqual(
+            find_critical_queries(run_results),
+            [
+                {
+                    "query": "q_below_threshold",
+                    "reason": "low_score",
+                    "query_score": 0.2999,
+                }
+            ],
+        )
+
+    def test_find_critical_queries_visible_high_score_not_critical(self) -> None:
+        run_results = [
+            {
+                "query": "q_good",
+                "provider": "openai",
+                "status": "success",
+                "final_score": 0.8,
+                "visible_brand": True,
+            },
+            {
+                "query": "q_good",
+                "provider": "mock",
+                "status": "success",
+                "final_score": 0.9,
+                "visible_brand": True,
+            },
+        ]
+
+        self.assertEqual(find_critical_queries(run_results), [])
+
+    def test_find_critical_queries_empty_input_returns_empty_list(self) -> None:
+        self.assertEqual(find_critical_queries([]), [])
 
 
 if __name__ == "__main__":

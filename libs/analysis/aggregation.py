@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 from typing import Any
 
+CRITICAL_SCORE_THRESHOLD = 0.3
+
 
 def _clamp(value: float, min_value: float, max_value: float) -> float:
     return max(min_value, min(value, max_value))
@@ -134,6 +136,58 @@ def compute_provider_scores(run_results: list[dict]) -> dict[str, float | None]:
         return {}
 
 
+def find_critical_queries(run_results: list[dict]) -> list[dict]:
+    """Return detailed critical queries with deterministic reason priority."""
+    try:
+        if not isinstance(run_results, list):
+            return []
+        if not run_results:
+            return []
+
+        for run_result in run_results:
+            if not isinstance(run_result, dict):
+                return []
+            if not _is_valid_run_result_for_summary(run_result):
+                return []
+
+        query_groups: dict[str, list[dict]] = {}
+        for run_result in run_results:
+            query_groups.setdefault(run_result["query"], []).append(run_result)
+
+        critical_queries: list[dict] = []
+        for query in sorted(query_groups):
+            query_runs = query_groups[query]
+            all_runs_not_visible = all(
+                run_result["visible_brand"] is False for run_result in query_runs
+            )
+            query_score = compute_query_score(query_runs)
+            no_successful_runs = query_score is None
+            low_score = (
+                query_score is not None and query_score < CRITICAL_SCORE_THRESHOLD
+            )
+
+            if all_runs_not_visible:
+                reason = "not_visible"
+            elif no_successful_runs:
+                reason = "no_successful_runs"
+            elif low_score:
+                reason = "low_score"
+            else:
+                continue
+
+            critical_queries.append(
+                {
+                    "query": query,
+                    "reason": reason,
+                    "query_score": query_score,
+                }
+            )
+
+        return critical_queries
+    except Exception:
+        return []
+
+
 def build_audit_summary(run_results: list[dict]) -> dict[str, Any]:
     """Build deterministic audit-level summary from run-level results."""
     try:
@@ -170,22 +224,7 @@ def build_audit_summary(run_results: list[dict]) -> dict[str, Any]:
 
         average_score = compute_query_score(run_results)
         provider_scores = compute_provider_scores(run_results)
-
-        query_groups: dict[str, list[dict]] = {}
-        for run_result in run_results:
-            query_groups.setdefault(run_result["query"], []).append(run_result)
-
-        critical_query_count = 0
-        for query in sorted(query_groups):
-            query_runs = query_groups[query]
-            all_runs_not_visible = all(
-                run_result["visible_brand"] is False for run_result in query_runs
-            )
-            query_score = compute_query_score(query_runs)
-            low_query_score = query_score is not None and query_score < 0.3
-
-            if all_runs_not_visible or low_query_score:
-                critical_query_count += 1
+        critical_query_count = len(find_critical_queries(run_results))
 
         return {
             "total_queries": len(unique_queries),
