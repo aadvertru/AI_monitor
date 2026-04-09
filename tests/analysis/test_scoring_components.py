@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from libs.analysis.scoring import compute_component_metrics
+from libs.analysis.scoring import (
+    WEIGHT_SUM,
+    compute_component_metrics,
+    compute_final_score,
+)
 
 
 class ScoringComponentTests(unittest.TestCase):
@@ -97,6 +101,63 @@ class ScoringComponentTests(unittest.TestCase):
         self.assertEqual(result["sentiment_score"], 0.0)
         self.assertEqual(result["recommendation_score"], 0.0)
         self.assertEqual(result["source_quality_score"], 1.0)
+
+    def test_final_score_all_zero_components_returns_zero(self) -> None:
+        components = {
+            "visibility_score": 0.0,
+            "prominence_score": 0.0,
+            "sentiment_score": 0.0,
+            "recommendation_score": 0.0,
+            "source_quality_score": 0.0,
+        }
+        self.assertEqual(compute_final_score(components), 0.0)
+
+    def test_final_score_all_one_components_returns_one(self) -> None:
+        components = {
+            "visibility_score": 1.0,
+            "prominence_score": 1.0,
+            "sentiment_score": 1.0,
+            "recommendation_score": 1.0,
+            "source_quality_score": 1.0,
+        }
+        self.assertEqual(compute_final_score(components), 1.0)
+
+    def test_final_score_known_values_match_expected_formula(self) -> None:
+        components = {
+            "visibility_score": 1.0,
+            "prominence_score": 0.6,
+            "sentiment_score": 0.5,
+            "recommendation_score": 0.8,
+            "source_quality_score": 0.5,
+        }
+        self.assertEqual(compute_final_score(components), 0.72)
+
+    def test_final_score_missing_fields_use_zero_substitution(self) -> None:
+        components = {"visibility_score": 1.0}
+        self.assertEqual(compute_final_score(components), 0.3)
+
+    def test_final_score_rounding_is_stable_to_four_decimals(self) -> None:
+        components = {
+            "visibility_score": 0.33333,
+            "prominence_score": 0.66667,
+            "sentiment_score": 0.12345,
+            "recommendation_score": 0.98765,
+            "source_quality_score": 0.54321,
+        }
+        self.assertEqual(compute_final_score(components), 0.4938)
+
+    def test_final_score_clamps_out_of_range_component_values(self) -> None:
+        components = {
+            "visibility_score": 5.0,
+            "prominence_score": -1.0,
+            "sentiment_score": 2.0,
+            "recommendation_score": -3.0,
+            "source_quality_score": 9.0,
+        }
+        self.assertEqual(compute_final_score(components), 0.6)
+
+    def test_weight_constants_sum_to_one(self) -> None:
+        self.assertEqual(WEIGHT_SUM, 1.0)
 
 
 if __name__ == "__main__":
