@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from libs.analysis.aggregation import compute_provider_scores, compute_query_score
+from libs.analysis.aggregation import (
+    build_audit_summary,
+    compute_provider_scores,
+    compute_query_score,
+)
 
 
 class AggregationTests(unittest.TestCase):
@@ -140,6 +144,228 @@ class AggregationTests(unittest.TestCase):
         ]
 
         self.assertEqual(compute_provider_scores(run_results), {})
+
+    def test_build_audit_summary_happy_path_multiple_queries_providers(self) -> None:
+        run_results = [
+            {
+                "query": "q1",
+                "provider": "openai",
+                "status": "success",
+                "final_score": 0.9,
+                "visible_brand": True,
+            },
+            {
+                "query": "q1",
+                "provider": "mock",
+                "status": "success",
+                "final_score": 0.3,
+                "visible_brand": False,
+            },
+            {
+                "query": "q1",
+                "provider": "openai",
+                "status": "error",
+                "final_score": 0.7,
+                "visible_brand": False,
+            },
+            {
+                "query": "q2",
+                "provider": "openai",
+                "status": "success",
+                "final_score": 0.2,
+                "visible_brand": False,
+            },
+            {
+                "query": "q2",
+                "provider": "mock",
+                "status": "success",
+                "final_score": 0.4,
+                "visible_brand": False,
+            },
+            {
+                "query": "q2",
+                "provider": "mock",
+                "status": "timeout",
+                "final_score": 0.5,
+                "visible_brand": False,
+            },
+            {
+                "query": "q3",
+                "provider": "openai",
+                "status": "error",
+                "final_score": 0.1,
+                "visible_brand": False,
+            },
+            {
+                "query": "q3",
+                "provider": "mock",
+                "status": "rate_limited",
+                "final_score": 0.1,
+                "visible_brand": False,
+            },
+        ]
+
+        summary = build_audit_summary(run_results)
+
+        self.assertEqual(summary["total_queries"], 3)
+        self.assertEqual(summary["total_runs"], 8)
+        self.assertEqual(summary["successful_runs"], 4)
+        self.assertEqual(summary["failed_runs"], 4)
+        self.assertEqual(summary["completion_ratio"], 0.5)
+        self.assertEqual(summary["visibility_ratio"], 0.25)
+        self.assertEqual(summary["average_score"], 0.45)
+        self.assertEqual(summary["critical_query_count"], 2)
+        self.assertEqual(
+            summary["provider_scores"],
+            {
+                "mock": 0.35,
+                "openai": 0.55,
+            },
+        )
+
+    def test_build_audit_summary_partial_audit_ratios(self) -> None:
+        run_results = [
+            {
+                "query": "q1",
+                "provider": "openai",
+                "status": "success",
+                "final_score": 0.6,
+                "visible_brand": True,
+            },
+            {
+                "query": "q1",
+                "provider": "mock",
+                "status": "error",
+                "final_score": 0.0,
+                "visible_brand": False,
+            },
+            {
+                "query": "q2",
+                "provider": "openai",
+                "status": "success",
+                "final_score": 0.2,
+                "visible_brand": False,
+            },
+        ]
+
+        summary = build_audit_summary(run_results)
+
+        self.assertEqual(summary["completion_ratio"], 0.6667)
+        self.assertEqual(summary["visibility_ratio"], 0.5)
+        self.assertEqual(summary["average_score"], 0.4)
+        self.assertEqual(summary["critical_query_count"], 1)
+        self.assertEqual(summary["provider_scores"], {"mock": None, "openai": 0.4})
+
+    def test_build_audit_summary_all_failed_runs(self) -> None:
+        run_results = [
+            {
+                "query": "q1",
+                "provider": "openai",
+                "status": "error",
+                "final_score": 0.2,
+                "visible_brand": False,
+            },
+            {
+                "query": "q2",
+                "provider": "mock",
+                "status": "timeout",
+                "final_score": 0.4,
+                "visible_brand": False,
+            },
+        ]
+
+        summary = build_audit_summary(run_results)
+
+        self.assertEqual(summary["total_runs"], 2)
+        self.assertEqual(summary["successful_runs"], 0)
+        self.assertEqual(summary["failed_runs"], 2)
+        self.assertEqual(summary["completion_ratio"], 0.0)
+        self.assertEqual(summary["visibility_ratio"], 0.0)
+        self.assertIsNone(summary["average_score"])
+        self.assertEqual(summary["critical_query_count"], 2)
+        self.assertEqual(summary["provider_scores"], {"mock": None, "openai": None})
+
+    def test_build_audit_summary_empty_runs_returns_safe_defaults(self) -> None:
+        self.assertEqual(
+            build_audit_summary([]),
+            {
+                "total_queries": 0,
+                "total_runs": 0,
+                "successful_runs": 0,
+                "failed_runs": 0,
+                "completion_ratio": 0.0,
+                "visibility_ratio": 0.0,
+                "average_score": None,
+                "critical_query_count": 0,
+                "provider_scores": {},
+            },
+        )
+
+    def test_build_audit_summary_known_input_exact_output(self) -> None:
+        run_results = [
+            {
+                "query": "q1",
+                "provider": "a",
+                "status": "success",
+                "final_score": 0.2,
+                "visible_brand": False,
+            },
+            {
+                "query": "q1",
+                "provider": "a",
+                "status": "success",
+                "final_score": 0.4,
+                "visible_brand": False,
+            },
+            {
+                "query": "q2",
+                "provider": "b",
+                "status": "error",
+                "final_score": 0.9,
+                "visible_brand": False,
+            },
+        ]
+
+        self.assertEqual(
+            build_audit_summary(run_results),
+            {
+                "total_queries": 2,
+                "total_runs": 3,
+                "successful_runs": 2,
+                "failed_runs": 1,
+                "completion_ratio": 0.6667,
+                "visibility_ratio": 0.0,
+                "average_score": 0.3,
+                "critical_query_count": 2,
+                "provider_scores": {"a": 0.3, "b": None},
+            },
+        )
+
+    def test_build_audit_summary_malformed_input_returns_safe_defaults(self) -> None:
+        malformed_run_results = [
+            {
+                "query": "q1",
+                "provider": "openai",
+                "status": "success",
+                "final_score": 0.8,
+                "visible_brand": "yes",
+            }
+        ]
+
+        self.assertEqual(
+            build_audit_summary(malformed_run_results),
+            {
+                "total_queries": 0,
+                "total_runs": 0,
+                "successful_runs": 0,
+                "failed_runs": 0,
+                "completion_ratio": 0.0,
+                "visibility_ratio": 0.0,
+                "average_score": None,
+                "critical_query_count": 0,
+                "provider_scores": {},
+            },
+        )
 
 
 if __name__ == "__main__":
