@@ -56,3 +56,34 @@ def compute_query_score(run_results: list[dict]) -> float | None:
         return round(mean_score, 4)
     except Exception:
         return None
+
+
+def compute_provider_scores(run_results: list[dict]) -> dict[str, float | None]:
+    """Return per-provider query-style averages over successful runs only."""
+    try:
+        if not isinstance(run_results, list):
+            return {}
+        if not run_results:
+            return {}
+
+        grouped_runs: dict[str, list[dict]] = {}
+        for run_result in run_results:
+            if not isinstance(run_result, dict):
+                return {}
+
+            provider = run_result.get("provider")
+            status = run_result.get("status")
+            if not isinstance(provider, str):
+                return {}
+            if not isinstance(status, str):
+                return {}
+
+            grouped_runs.setdefault(provider, []).append(run_result)
+
+        provider_scores: dict[str, float | None] = {}
+        for provider in sorted(grouped_runs):
+            provider_scores[provider] = compute_query_score(grouped_runs[provider])
+
+        return provider_scores
+    except Exception:
+        return {}
