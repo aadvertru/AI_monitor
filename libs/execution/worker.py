@@ -6,7 +6,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from libs.execution.provider_adapter import BaseProviderAdapter, ProviderResponse
-from libs.storage.models import Job, JobStatus, RawResponse, Run, RunStatus
+from libs.storage.models import Job, JobStatus, Run, RunStatus
+from libs.storage.raw_response_storage import store_raw_response_for_run
 
 
 def _map_provider_status_to_run_status(provider_status: str) -> RunStatus:
@@ -62,32 +63,17 @@ async def execute_job(session: Session, job_id: int, provider: BaseProviderAdapt
     run.status = _map_provider_status_to_run_status(response.status)
     job.status = JobStatus.COMPLETED if response.status == "success" else JobStatus.FAILED
 
-    raw_response = run.raw_response
-    if raw_response is None:
-        raw_response = RawResponse(
-            run_id=run.id,
-            request_snapshot={
-                "query": query_text,
-                "provider": job.provider,
-                "run_number": job.run_number,
-            },
-            raw_answer=response.raw_answer,
-            citations=response.citations,
-            provider_metadata=response.provider_metadata,
-            provider_status=response.status,
-            response_time=response.response_time,
-            error_object=response.error,
-        )
-        session.add(raw_response)
-    else:
-        raw_response.raw_answer = response.raw_answer
-        raw_response.citations = response.citations
-        raw_response.provider_metadata = response.provider_metadata
-        raw_response.provider_status = response.status
-        raw_response.response_time = response.response_time
-        raw_response.error_object = response.error
+    store_raw_response_for_run(
+        session,
+        run_id=run.id,
+        provider_response=response,
+        request_snapshot={
+            "query": query_text,
+            "provider": job.provider,
+            "run_number": job.run_number,
+        },
+    )
 
     session.commit()
     session.refresh(run)
     return run
-
