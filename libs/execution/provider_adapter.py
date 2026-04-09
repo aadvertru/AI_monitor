@@ -31,8 +31,8 @@ class ProviderResponse:
         if self.error is not None:
             if not isinstance(self.error, dict):
                 raise ValueError("error must be a dict when provided.")
-            if set(self.error.keys()) != {"code", "message"}:
-                raise ValueError("error must contain exactly {'code', 'message'}.")
+            if "code" not in self.error or "message" not in self.error:
+                raise ValueError("error must contain 'code' and 'message'.")
             if not isinstance(self.error["code"], str) or not isinstance(
                 self.error["message"], str
             ):
@@ -68,4 +68,3 @@ class BaseProviderAdapter(ABC):
         Implementations must never raise exceptions outward. Failures must be
         mapped to ProviderResponse with status in ALLOWED_PROVIDER_STATUSES.
         """
-
