@@ -16,12 +16,20 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 def _utc_now() -> datetime:
     return datetime.now(tz=timezone.utc)
+
+
+def build_job_idempotency_key(
+    audit_id: int, query_id: int, provider: str, run_number: int
+) -> str:
+    """Build a stable idempotency key for job scheduling records."""
+    return f"{audit_id}:{query_id}:{provider}:{run_number}"
 
 
 class Base(DeclarativeBase):
@@ -42,6 +50,13 @@ class RunStatus(str, Enum):
     ERROR = "error"
     TIMEOUT = "timeout"
     RATE_LIMITED = "rate_limited"
+
+
+class JobStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
 
 class Brand(Base):
@@ -99,6 +114,9 @@ class Audit(Base):
     queries: Mapped[list["Query"]] = relationship(
         back_populates="audit", cascade="all, delete-orphan"
     )
+    jobs: Mapped[list["Job"]] = relationship(
+        back_populates="audit", cascade="all, delete-orphan"
+    )
     runs: Mapped[list["Run"]] = relationship(
         back_populates="audit", cascade="all, delete-orphan"
     )
@@ -117,9 +135,43 @@ class Query(Base):
     )
 
     audit: Mapped[Audit] = relationship(back_populates="queries")
+    jobs: Mapped[list["Job"]] = relationship(
+        back_populates="query", cascade="all, delete-orphan"
+    )
     runs: Mapped[list["Run"]] = relationship(
         back_populates="query", cascade="all, delete-orphan"
     )
+
+
+class Job(Base):
+    __tablename__ = "jobs"
+    __table_args__ = (
+        CheckConstraint("run_number >= 1"),
+        UniqueConstraint("idempotency_key", name="uq_jobs_idempotency_key"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    audit_id: Mapped[int] = mapped_column(
+        ForeignKey("audits.id", ondelete="CASCADE"), nullable=False
+    )
+    query_id: Mapped[int] = mapped_column(
+        ForeignKey("queries.id", ondelete="CASCADE"), nullable=False
+    )
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    run_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[JobStatus] = mapped_column(
+        SQLEnum(JobStatus, native_enum=False), nullable=False, default=JobStatus.PENDING
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, onupdate=_utc_now, nullable=False
+    )
+
+    audit: Mapped[Audit] = relationship(back_populates="jobs")
+    query: Mapped[Query] = relationship(back_populates="jobs")
 
 
 class Run(Base):
