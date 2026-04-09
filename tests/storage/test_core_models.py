@@ -127,6 +127,34 @@ class CoreModelsTests(unittest.TestCase):
             self.session.commit()
         self.session.rollback()
 
+    def test_duplicate_run_execution_identity_is_rejected(self) -> None:
+        brand = Brand(name="Acme AI")
+        audit = Audit(brand=brand, providers=["openai"], runs_per_query=1)
+        query = Query(audit=audit, text="best ai monitoring")
+        self.session.add_all([brand, audit, query])
+        self.session.commit()
+
+        first_run = Run(
+            audit_id=audit.id,
+            query_id=query.id,
+            provider="openai",
+            run_number=1,
+        )
+        duplicate_run = Run(
+            audit_id=audit.id,
+            query_id=query.id,
+            provider="openai",
+            run_number=1,
+        )
+
+        self.session.add(first_run)
+        self.session.commit()
+
+        self.session.add(duplicate_run)
+        with self.assertRaises(IntegrityError):
+            self.session.commit()
+        self.session.rollback()
+
 
 if __name__ == "__main__":
     unittest.main()

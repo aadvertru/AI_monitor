@@ -176,7 +176,16 @@ class Job(Base):
 
 class Run(Base):
     __tablename__ = "runs"
-    __table_args__ = (CheckConstraint("run_number >= 1"),)
+    __table_args__ = (
+        CheckConstraint("run_number >= 1"),
+        UniqueConstraint(
+            "audit_id",
+            "query_id",
+            "provider",
+            "run_number",
+            name="uq_runs_execution_identity",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     audit_id: Mapped[int] = mapped_column(
