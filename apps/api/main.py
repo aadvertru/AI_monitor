@@ -5,11 +5,13 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.database import get_db_session, init_models
+from libs.control.query_capping import cap_queries
+from libs.control.query_deduplication import deduplicate_queries
 from libs.control.query_normalization import normalize_seed_queries
 from libs.storage.models import Audit, AuditStatus, Brand, Query
 
@@ -26,12 +28,12 @@ class AuditCreateRequest(BaseModel):
 
     brand_domain: str | None = None
     brand_description: str | None = None
-    seed_queries: list[str] | None = None
 
     language: str | None = None
     country: str | None = None
     locale: str | None = None
     max_queries: int | None = None
+    seed_queries: list[str] | None = None
     enable_query_expansion: bool = False
     enable_source_intelligence: bool = False
     follow_up_depth: int = 0
@@ -84,9 +86,13 @@ class AuditCreateRequest(BaseModel):
 
     @field_validator("seed_queries")
     @classmethod
-    def normalize_seed_queries(cls, value: list[str] | None) -> list[str] | None:
+    def normalize_seed_queries(
+        cls, value: list[str] | None, info: ValidationInfo
+    ) -> list[str] | None:
         normalized = normalize_seed_queries(value)
-        return normalized or None
+        deduplicated = deduplicate_queries(normalized)
+        capped = cap_queries(deduplicated, max_queries=info.data.get("max_queries"))
+        return capped or None
 
     @field_validator("max_queries")
     @classmethod

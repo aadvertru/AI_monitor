@@ -49,7 +49,6 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
             result.seed_queries,
             [
                 "best ai brand monitoring",
-                "best ai brand monitoring",
                 "how to monitor brand visibility",
             ],
         )
@@ -74,7 +73,6 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 [row.text for row in query_rows],
                 [
-                    "best ai brand monitoring",
                     "best ai brand monitoring",
                     "how to monitor brand visibility",
                 ],
