@@ -6,10 +6,11 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.database import get_db_session, init_models
+from apps.api.database import get_db_session, init_models, should_auto_create_schema
 from libs.control.query_capping import cap_queries
 from libs.control.query_deduplication import deduplicate_queries
 from libs.control.query_normalization import normalize_seed_queries
@@ -124,11 +125,26 @@ async def create_audit_record(
     session: AsyncSession,
     payload: AuditCreateRequest,
 ) -> AuditCreateResponse:
-    brand = Brand(
-        name=payload.brand_name,
-        domain=payload.brand_domain,
-        description=payload.brand_description,
+    normalized_brand_name = payload.brand_name.lower()
+    existing_brand_stmt = (
+        select(Brand)
+        .where(func.lower(Brand.name) == normalized_brand_name)
+        .order_by(Brand.id)
     )
+    brand = (await session.execute(existing_brand_stmt)).scalars().first()
+    if brand is None:
+        brand = Brand(
+            name=payload.brand_name,
+            domain=payload.brand_domain,
+            description=payload.brand_description,
+        )
+        session.add(brand)
+    else:
+        if brand.domain is None and payload.brand_domain is not None:
+            brand.domain = payload.brand_domain
+        if brand.description is None and payload.brand_description is not None:
+            brand.description = payload.brand_description
+
     audit = Audit(
         brand=brand,
         status=AuditStatus.CREATED,
@@ -167,7 +183,8 @@ app = FastAPI(title="AI Brand Visibility Monitor API")
 
 @app.on_event("startup")
 async def on_startup() -> None:
-    await init_models()
+    if should_auto_create_schema():
+        await init_models()
 
 
 @app.post("/audits", response_model=AuditCreateResponse)

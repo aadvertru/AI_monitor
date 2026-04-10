@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from sqlalchemy import event, select
+from sqlalchemy.exc import StatementError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from libs.execution.provider_adapter import BaseProviderAdapter, ProviderResponse
@@ -44,6 +45,18 @@ class _ErrorProvider(BaseProviderAdapter):
             response_time=0.3,
             error={"code": "mock_error", "message": "Provider failed."},
             provider_metadata={"provider": "mock-error"},
+        )
+
+
+class _UnserializableMetadataProvider(BaseProviderAdapter):
+    async def query(self, query: str, **kwargs) -> ProviderResponse:
+        return ProviderResponse(
+            status="success",
+            raw_answer=f"Answer for: {query}",
+            citations=[{"url": "https://example.com", "title": "Example"}],
+            response_time=0.1,
+            error=None,
+            provider_metadata={"invalid": {1, 2, 3}},
         )
 
 
@@ -149,6 +162,33 @@ class WorkerExecutionTests(unittest.IsolatedAsyncioTestCase):
         )).scalars().all()
         self.assertEqual(parsed_count, [])
         self.assertEqual(score_count, [])
+
+    async def test_worker_rolls_back_when_persistence_fails(self) -> None:
+        job = await self._create_job(provider_code="mock")
+        job_id = job.id
+        audit_id = job.audit_id
+        query_id = job.query_id
+        provider_code = job.provider
+        run_number = job.run_number
+
+        with self.assertRaises(StatementError):
+            await execute_job(self.session, job_id, _UnserializableMetadataProvider())
+
+        persisted_job = await self.session.get(Job, job_id)
+        assert persisted_job is not None
+        self.assertEqual(persisted_job.status, JobStatus.PENDING)
+
+        persisted_runs = (
+            await self.session.execute(
+                select(Run).where(
+                    Run.audit_id == audit_id,
+                    Run.query_id == query_id,
+                    Run.provider == provider_code,
+                    Run.run_number == run_number,
+                )
+            )
+        ).scalars().all()
+        self.assertEqual(persisted_runs, [])
 
 
 if __name__ == "__main__":

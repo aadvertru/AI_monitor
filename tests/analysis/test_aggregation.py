@@ -139,10 +139,19 @@ class AggregationTests(unittest.TestCase):
         result = compute_provider_scores(run_results)
         self.assertEqual(list(result.keys()), ["alpha", "zeta"])
 
-    def test_provider_scores_malformed_input_returns_empty_dict(self) -> None:
+    def test_provider_scores_malformed_rows_are_skipped(self) -> None:
         run_results = [
             {"provider": "openai", "status": "success", "final_score": 0.8},
             {"provider": None, "status": "success", "final_score": 0.7},
+        ]
+
+        self.assertEqual(compute_provider_scores(run_results), {"openai": 0.8})
+
+    def test_provider_scores_all_malformed_rows_return_empty_dict(self) -> None:
+        run_results = [
+            {"provider": None, "status": "success", "final_score": 0.7},
+            {"provider": 123, "status": "error", "final_score": 0.2},
+            "bad-row",
         ]
 
         self.assertEqual(compute_provider_scores(run_results), {})
@@ -513,6 +522,36 @@ class AggregationTests(unittest.TestCase):
 
     def test_find_critical_queries_empty_input_returns_empty_list(self) -> None:
         self.assertEqual(find_critical_queries([]), [])
+
+    def test_find_critical_queries_skips_malformed_rows(self) -> None:
+        run_results = [
+            {
+                "query": "q_low",
+                "provider": "openai",
+                "status": "success",
+                "final_score": 0.2,
+                "visible_brand": True,
+            },
+            {
+                "query": "q_bad",
+                "provider": "mock",
+                "status": "success",
+                "final_score": "bad",
+                "visible_brand": True,
+            },
+            "not-a-dict",
+        ]
+
+        self.assertEqual(
+            find_critical_queries(run_results),
+            [
+                {
+                    "query": "q_low",
+                    "reason": "low_score",
+                    "query_score": 0.2,
+                }
+            ],
+        )
 
 
 if __name__ == "__main__":

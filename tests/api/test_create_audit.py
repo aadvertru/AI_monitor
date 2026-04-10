@@ -108,6 +108,36 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
                 }
             )
 
+    async def test_repeated_audits_reuse_existing_brand(self) -> None:
+        first_payload = AuditCreateRequest.model_validate(
+            {
+                "brand_name": "Acme AI",
+                "providers": ["openai"],
+                "runs_per_query": 1,
+                "brand_domain": "acme.ai",
+            }
+        )
+        second_payload = AuditCreateRequest.model_validate(
+            {
+                "brand_name": "  ACME AI  ",
+                "providers": ["mock"],
+                "runs_per_query": 1,
+            }
+        )
+
+        async with self.session_factory() as session:
+            first_result = await create_audit(payload=first_payload, session=session)
+
+        async with self.session_factory() as session:
+            second_result = await create_audit(payload=second_payload, session=session)
+
+        self.assertEqual(first_result.brand_id, second_result.brand_id)
+
+        async with self.session_factory() as session:
+            brands = (await session.execute(select(Brand).order_by(Brand.id))).scalars().all()
+            self.assertEqual(len(brands), 1)
+            self.assertEqual(brands[0].name, "Acme AI")
+
 
 if __name__ == "__main__":
     unittest.main()

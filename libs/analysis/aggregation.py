@@ -116,16 +116,19 @@ def compute_provider_scores(run_results: list[dict]) -> dict[str, float | None]:
         grouped_runs: dict[str, list[dict]] = {}
         for run_result in run_results:
             if not isinstance(run_result, dict):
-                return {}
+                continue
 
             provider = run_result.get("provider")
             status = run_result.get("status")
             if not isinstance(provider, str):
-                return {}
+                continue
             if not isinstance(status, str):
-                return {}
+                continue
 
             grouped_runs.setdefault(provider, []).append(run_result)
+
+        if not grouped_runs:
+            return {}
 
         provider_scores: dict[str, float | None] = {}
         for provider in sorted(grouped_runs):
@@ -144,14 +147,19 @@ def find_critical_queries(run_results: list[dict]) -> list[dict]:
         if not run_results:
             return []
 
+        valid_run_results: list[dict[str, Any]] = []
         for run_result in run_results:
             if not isinstance(run_result, dict):
-                return []
+                continue
             if not _is_valid_run_result_for_summary(run_result):
-                return []
+                continue
+            valid_run_results.append(run_result)
+
+        if not valid_run_results:
+            return []
 
         query_groups: dict[str, list[dict]] = {}
-        for run_result in run_results:
+        for run_result in valid_run_results:
             query_groups.setdefault(run_result["query"], []).append(run_result)
 
         critical_queries: list[dict] = []

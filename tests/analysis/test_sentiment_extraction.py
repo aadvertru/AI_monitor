@@ -44,6 +44,21 @@ class SentimentExtractionTests(unittest.TestCase):
         preprocessed = preprocess("This is the greatest product.")
         self.assertEqual(extract_sentiment(preprocessed), 0.0)
 
+    def test_negated_positive_keyword_is_not_counted_as_positive(self) -> None:
+        preprocessed = preprocess("This is not the best choice.")
+        score = extract_sentiment(preprocessed)
+        self.assertLess(score, 0.0)
+
+    def test_negated_recommend_keyword_is_negative(self) -> None:
+        preprocessed = preprocess("I wouldn't recommend this tool.")
+        score = extract_sentiment(preprocessed)
+        self.assertLess(score, 0.0)
+
+    def test_negated_negative_keyword_becomes_positive(self) -> None:
+        preprocessed = preprocess("The service is not bad.")
+        score = extract_sentiment(preprocessed)
+        self.assertGreater(score, 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

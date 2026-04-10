@@ -127,6 +127,18 @@ class CoreModelsTests(unittest.TestCase):
             self.session.commit()
         self.session.rollback()
 
+    def test_duplicate_brand_name_is_rejected(self) -> None:
+        first_brand = Brand(name="Acme AI")
+        second_brand = Brand(name="Acme AI")
+
+        self.session.add(first_brand)
+        self.session.commit()
+
+        self.session.add(second_brand)
+        with self.assertRaises(IntegrityError):
+            self.session.commit()
+        self.session.rollback()
+
     def test_duplicate_run_execution_identity_is_rejected(self) -> None:
         brand = Brand(name="Acme AI")
         audit = Audit(brand=brand, providers=["openai"], runs_per_query=1)
