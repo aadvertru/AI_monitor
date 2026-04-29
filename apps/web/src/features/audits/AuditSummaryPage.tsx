@@ -6,6 +6,7 @@ import { Bar, BarChart, CartesianGrid, Tooltip, XAxis, YAxis } from "recharts";
 import { Button } from "../../components/ui/Button";
 import { getAuditSummary } from "../../lib/api/client";
 import type { AuditSummaryResponse } from "../../lib/api/types";
+import { AuditBreadcrumbs } from "./AuditBreadcrumbs";
 import { AuditStatusBadge } from "./AuditStatusBadge";
 
 function formatPercent(value: number) {
@@ -71,11 +72,16 @@ export function AuditSummaryPage() {
     <section className="rounded-md border border-border bg-surface shadow-panel">
       <div className="flex flex-col gap-3 border-b border-border px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
+          <AuditBreadcrumbs
+            auditId={auditId}
+            auditNumber={summary.data.audit_number}
+            current="Summary"
+          />
           <div className="flex items-center gap-3">
             <h1 className="text-xl font-semibold text-ink">Audit summary</h1>
             <AuditStatusBadge status={summary.data.status} />
           </div>
-          <p className="mt-1 text-sm text-subtle">Audit #{summary.data.audit_id}</p>
+          <p className="mt-1 text-sm text-subtle">Audit #{summary.data.audit_number}</p>
         </div>
         <Button asChild variant="ghost">
           <Link to={`/audits/${auditId}`}>

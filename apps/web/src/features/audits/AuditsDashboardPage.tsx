@@ -23,7 +23,7 @@ function matchesSearch(audit: AuditListItem, query: string) {
   }
 
   return [
-    audit.audit_id.toString(),
+    audit.audit_number.toString(),
     audit.brand_name,
     audit.brand_domain ?? "",
     audit.status,
@@ -115,7 +115,7 @@ export function AuditsDashboardPage() {
           <table className="min-w-full divide-y divide-border text-sm">
             <thead className="bg-muted text-left text-xs uppercase text-subtle">
               <tr>
-                <th className="px-5 py-3 font-semibold">ID</th>
+                <th className="px-5 py-3 font-semibold">Audit</th>
                 <th className="px-5 py-3 font-semibold">Brand</th>
                 <th className="px-5 py-3 font-semibold">Status</th>
                 <th className="px-5 py-3 font-semibold">Level</th>
@@ -128,7 +128,7 @@ export function AuditsDashboardPage() {
               {filteredAudits.map((audit) => (
                 <tr key={audit.audit_id} className="hover:bg-muted/70">
                   <td className="px-5 py-3 font-mono text-xs text-subtle">
-                    #{audit.audit_id}
+                    #{audit.audit_number}
                   </td>
                   <td className="px-5 py-3">
                     <Link

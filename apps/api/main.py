@@ -179,6 +179,7 @@ class AuditCreateRequest(BaseModel):
 
 class AuditCreateResponse(BaseModel):
     audit_id: int
+    audit_number: int
     brand_id: int
     status: str
     providers: list[str]
@@ -292,9 +293,11 @@ async def create_audit_record(
 
     await session.commit()
     await session.refresh(audit)
+    audit_number = await get_relative_audit_number(session, audit)
 
     return AuditCreateResponse(
         audit_id=audit.id,
+        audit_number=audit_number,
         brand_id=audit.brand_id,
         status=audit.status.value,
         providers=audit.providers,
@@ -421,6 +424,29 @@ def _scdl_level_value(level: object) -> str:
     return level.value if hasattr(level, "value") else str(level)
 
 
+async def get_relative_audit_number(session: AsyncSession, audit: Audit) -> int:
+    owner_filter = (
+        Audit.user_id.is_(None) if audit.user_id is None else Audit.user_id == audit.user_id
+    )
+    return (
+        await session.execute(
+            select(func.count()).select_from(Audit).where(owner_filter, Audit.id <= audit.id)
+        )
+    ).scalar_one()
+
+
+def relative_audit_numbers(audits: list[Audit]) -> dict[int, int]:
+    grouped: dict[int | None, list[Audit]] = defaultdict(list)
+    for audit in audits:
+        grouped[audit.user_id].append(audit)
+
+    numbers: dict[int, int] = {}
+    for owner_audits in grouped.values():
+        for index, audit in enumerate(sorted(owner_audits, key=lambda item: item.id), start=1):
+            numbers[audit.id] = index
+    return numbers
+
+
 async def load_accessible_audit(
     session: AsyncSession,
     audit_id: int,
@@ -444,6 +470,7 @@ async def build_audit_detail_response(
     audit: Audit,
     brand: Brand,
 ) -> AuditDetailResponse:
+    audit_number = await get_relative_audit_number(session, audit)
     queries = (
         await session.execute(
             select(Query.text).where(Query.audit_id == audit.id).order_by(Query.id)
@@ -451,6 +478,7 @@ async def build_audit_detail_response(
     ).scalars().all()
     return AuditDetailResponse(
         audit_id=audit.id,
+        audit_number=audit_number,
         brand_id=brand.id,
         brand_name=brand.name,
         brand_domain=brand.domain,
@@ -485,9 +513,11 @@ async def list_audit_records(
         stmt = stmt.where(Audit.user_id == current_user.id)
 
     rows = (await session.execute(stmt)).all()
+    audit_numbers = relative_audit_numbers([audit for audit, _brand in rows])
     return [
         AuditListItemResponse(
             audit_id=audit.id,
+            audit_number=audit_numbers[audit.id],
             brand_name=brand.name,
             brand_domain=brand.domain,
             status=_status_value(audit.status),
@@ -513,6 +543,7 @@ async def build_audit_status_response(
     session: AsyncSession,
     audit: Audit,
 ) -> AuditStatusResponse:
+    audit_number = await get_relative_audit_number(session, audit)
     run_statuses = list(
         (
             await session.execute(
@@ -535,6 +566,7 @@ async def build_audit_status_response(
 
     return AuditStatusResponse(
         audit_id=audit.id,
+        audit_number=audit_number,
         status=_status_value(audit.status),
         scdl_level=_scdl_level_value(audit.scdl_level),
         total_runs=total_runs,
@@ -549,6 +581,7 @@ async def trigger_audit_run_record(
     session: AsyncSession,
     audit: Audit,
 ) -> AuditRunTriggerResponse:
+    audit_number = await get_relative_audit_number(session, audit)
     if audit.status == AuditStatus.RUNNING:
         raise HTTPException(status_code=409, detail=AUDIT_RUNNING_DETAIL)
     if audit.status != AuditStatus.CREATED:
@@ -573,6 +606,7 @@ async def trigger_audit_run_record(
     ).scalar_one()
     return AuditRunTriggerResponse(
         audit_id=audit.id,
+        audit_number=audit_number,
         status=_status_value(audit.status),
         scheduled_jobs=scheduled_jobs,
         total_jobs=total_jobs,
@@ -653,6 +687,7 @@ async def build_audit_results_response(
     session: AsyncSession,
     audit: Audit,
 ) -> AuditResultsResponse:
+    audit_number = await get_relative_audit_number(session, audit)
     stmt = (
         select(Run, Query, ParsedResult, Score, RawResponse)
         .join(Query, Run.query_id == Query.id)
@@ -710,7 +745,12 @@ async def build_audit_results_response(
             )
         )
 
-    return AuditResultsResponse(audit_id=audit.id, rows=rows, total=len(rows))
+    return AuditResultsResponse(
+        audit_id=audit.id,
+        audit_number=audit_number,
+        rows=rows,
+        total=len(rows),
+    )
 
 
 def _run_results_for_summary(results: AuditResultsResponse) -> list[dict[str, Any]]:
@@ -813,6 +853,7 @@ async def build_audit_summary_response(
 
     return AuditSummaryResponse(
         audit_id=audit.id,
+        audit_number=await get_relative_audit_number(session, audit),
         status=_status_value(audit.status),
         total_queries=summary["total_queries"],
         total_runs=summary["total_runs"],

@@ -12,6 +12,7 @@ import { renderRoute } from "../../test/render";
 
 const createAuditResponse = {
   audit_id: 88,
+  audit_number: 2,
   brand_id: 12,
   status: "created",
   providers: ["mock", "openai"],
@@ -112,7 +113,7 @@ describe("create audit page", () => {
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Acme AI" })).toBeInTheDocument();
     });
-    expect(screen.getByText("Audit #88 · acme.example")).toBeInTheDocument();
+    expect(screen.getByText("Audit #1 · acme.example")).toBeInTheDocument();
   });
 
   it("displays API validation errors", async () => {

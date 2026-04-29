@@ -25,7 +25,7 @@ describe("audits dashboard page", () => {
     expect(await screen.findByRole("heading", { name: "Audits" })).toBeInTheDocument();
     expect(await screen.findByRole("link", { name: "Acme AI" })).toBeInTheDocument();
     expect(screen.getByText("acme.example")).toBeInTheDocument();
-    expect(screen.getByText("#42")).toBeInTheDocument();
+    expect(screen.getByText("#1")).toBeInTheDocument();
     expect(screen.getByText("L1")).toBeInTheDocument();
     expect(screen.getByText("mock")).toBeInTheDocument();
   });
@@ -81,7 +81,7 @@ describe("audits dashboard page", () => {
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Acme AI" })).toBeInTheDocument();
     });
-    expect(screen.getByText("Audit #42 · acme.example")).toBeInTheDocument();
+    expect(screen.getByText("Audit #1 · acme.example")).toBeInTheDocument();
   });
 
   it("navigates to the create audit route", async () => {
@@ -101,6 +101,7 @@ describe("audits dashboard page", () => {
     const audits = statuses.map((status, index) => ({
       ...auditListFixture[0],
       audit_id: index + 1,
+      audit_number: index + 1,
       brand_name: `Brand ${status}`,
       status,
     }));

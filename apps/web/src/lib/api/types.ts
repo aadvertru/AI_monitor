@@ -22,6 +22,7 @@ export type LogoutResponse = {
 
 export type AuditListItem = {
   audit_id: number;
+  audit_number: number;
   brand_name: string;
   brand_domain: string | null;
   status: AuditStatus;
@@ -51,6 +52,7 @@ export type AuditCreateRequest = {
 
 export type AuditCreateResponse = {
   audit_id: number;
+  audit_number: number;
   brand_id: number;
   status: AuditStatus;
   providers: string[];
@@ -74,6 +76,7 @@ export type AuditDetail = AuditListItem & {
 
 export type AuditStatusResponse = {
   audit_id: number;
+  audit_number: number;
   status: AuditStatus;
   scdl_level: SCDLLevel;
   total_runs: number;
@@ -85,6 +88,7 @@ export type AuditStatusResponse = {
 
 export type AuditRunTriggerResponse = {
   audit_id: number;
+  audit_number: number;
   status: AuditStatus;
   scheduled_jobs: number;
   total_jobs: number;
@@ -131,6 +135,7 @@ export type AuditResultRow = {
 
 export type AuditResultsResponse = {
   audit_id: number;
+  audit_number: number;
   rows: AuditResultRow[];
   total: number;
 };
@@ -150,6 +155,7 @@ export type CriticalQueryItem = {
 
 export type AuditSummaryResponse = {
   audit_id: number;
+  audit_number: number;
   status: AuditStatus;
   total_queries: number;
   total_runs: number;

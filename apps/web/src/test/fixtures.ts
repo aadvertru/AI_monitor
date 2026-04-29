@@ -28,6 +28,7 @@ export const logoutResponseFixture: LogoutResponse = {
 export const auditListFixture: AuditListItem[] = [
   {
     audit_id: 42,
+    audit_number: 1,
     brand_name: "Acme AI",
     brand_domain: "acme.example",
     status: "created",
@@ -41,6 +42,7 @@ export const auditListFixture: AuditListItem[] = [
 
 export const auditCreateResponseFixture: AuditCreateResponse = {
   audit_id: 42,
+  audit_number: 1,
   brand_id: 7,
   status: "created",
   providers: ["mock"],
@@ -65,6 +67,7 @@ export const auditDetailFixture: AuditDetail = {
 
 export const auditStatusFixture: AuditStatusResponse = {
   audit_id: 42,
+  audit_number: 1,
   status: "created",
   scdl_level: "L1",
   total_runs: 4,
@@ -76,6 +79,7 @@ export const auditStatusFixture: AuditStatusResponse = {
 
 export const auditRunTriggerFixture: AuditRunTriggerResponse = {
   audit_id: 42,
+  audit_number: 1,
   status: "running",
   scheduled_jobs: 4,
   total_jobs: 4,
@@ -113,6 +117,7 @@ export const sourcesSummaryFixture: AuditSummaryResponse["sources"] = [
 
 export const auditSummaryFixture: AuditSummaryResponse = {
   audit_id: 42,
+  audit_number: 1,
   status: "completed",
   total_queries: 3,
   total_runs: 6,
@@ -166,6 +171,7 @@ export const failedAuditSummaryFixture: AuditSummaryResponse = {
 
 export const auditResultsFixture: AuditResultsResponse = {
   audit_id: 42,
+  audit_number: 1,
   total: 3,
   rows: [
     {
@@ -247,6 +253,7 @@ export const auditResultsFixture: AuditResultsResponse = {
 
 export const emptyAuditResultsFixture: AuditResultsResponse = {
   audit_id: 42,
+  audit_number: 1,
   total: 0,
   rows: [],
 };

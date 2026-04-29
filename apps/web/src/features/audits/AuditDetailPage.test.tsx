@@ -26,7 +26,10 @@ describe("audit detail page", () => {
     renderDetail();
 
     expect(await screen.findByRole("heading", { name: "Acme AI" })).toBeInTheDocument();
-    expect(screen.getByText("Audit #42 · acme.example")).toBeInTheDocument();
+    expect(screen.getByText("Audit #1 · acme.example")).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Breadcrumb" })).toHaveTextContent(
+      "AuditsAudit #1",
+    );
     expect(screen.getByText("AI visibility monitoring platform.")).toBeInTheDocument();
     expect(screen.getByText("mock")).toBeInTheDocument();
     expect(screen.getByText("25%")).toBeInTheDocument();
@@ -114,7 +117,15 @@ describe("audit detail page", () => {
       { body: currentUserFixture },
       { body: auditDetailFixture },
       { body: auditStatusFixture },
-      { body: { audit_id: 42, status: "running", scheduled_jobs: 4, total_jobs: 4 } },
+      {
+        body: {
+          audit_id: 42,
+          audit_number: 1,
+          status: "running",
+          scheduled_jobs: 4,
+          total_jobs: 4,
+        },
+      },
     ]);
     const user = userEvent.setup();
 

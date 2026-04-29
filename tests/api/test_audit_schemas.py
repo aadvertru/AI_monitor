@@ -48,6 +48,7 @@ def test_audit_list_item_serializes_dashboard_fields() -> None:
     payload = _dump_json(
         AuditListItemResponse(
             audit_id=42,
+            audit_number=3,
             brand_name="Acme AI",
             brand_domain="acme.example",
             status="running",
@@ -60,6 +61,7 @@ def test_audit_list_item_serializes_dashboard_fields() -> None:
 
     assert payload == {
         "audit_id": 42,
+        "audit_number": 3,
         "brand_name": "Acme AI",
         "brand_domain": "acme.example",
         "status": "running",
@@ -76,6 +78,7 @@ def test_audit_detail_serializes_metadata_and_optional_fields() -> None:
     payload = _dump_json(
         AuditDetailResponse(
             audit_id=42,
+            audit_number=3,
             brand_id=7,
             brand_name="Acme AI",
             status="created",
@@ -95,6 +98,7 @@ def test_audit_detail_serializes_metadata_and_optional_fields() -> None:
     )
 
     assert payload["audit_id"] == 42
+    assert payload["audit_number"] == 3
     assert payload["brand_id"] == 7
     assert payload["brand_domain"] is None
     assert payload["scdl_level"] == "L1"
@@ -107,6 +111,7 @@ def test_audit_status_serializes_without_internal_job_details() -> None:
     payload = _dump_json(
         AuditStatusResponse(
             audit_id=42,
+            audit_number=3,
             status="partial",
             total_runs=4,
             completed_runs=2,
@@ -118,6 +123,7 @@ def test_audit_status_serializes_without_internal_job_details() -> None:
 
     assert payload == {
         "audit_id": 42,
+        "audit_number": 3,
         "status": "partial",
         "scdl_level": "L1",
         "total_runs": 4,
@@ -177,10 +183,11 @@ def test_audit_result_row_serializes_query_provider_run_shape() -> None:
 
 
 def test_empty_results_response_serializes_stable_shape() -> None:
-    payload = _dump_json(AuditResultsResponse(audit_id=42))
+    payload = _dump_json(AuditResultsResponse(audit_id=42, audit_number=3))
 
     assert payload == {
         "audit_id": 42,
+        "audit_number": 3,
         "rows": [],
         "total": 0,
     }
@@ -191,6 +198,7 @@ def test_audit_summary_serializes_metrics_competitors_sources_and_critical_queri
     payload = _dump_json(
         AuditSummaryResponse(
             audit_id=42,
+            audit_number=3,
             status="completed",
             total_queries=2,
             total_runs=4,
@@ -229,6 +237,7 @@ def test_audit_summary_serializes_metrics_competitors_sources_and_critical_queri
     )
 
     assert payload["completion_ratio"] == 0.75
+    assert payload["audit_number"] == 3
     assert payload["visibility_ratio"] == 0.67
     assert payload["critical_queries"][0]["reason"] == "low_score"
     assert payload["competitors"][0]["name"] == "Other Monitor"
@@ -240,6 +249,7 @@ def test_partial_or_failed_summary_shape_serializes_missing_optional_metrics() -
     payload = _dump_json(
         AuditSummaryResponse(
             audit_id=42,
+            audit_number=3,
             status="failed",
             total_queries=1,
             total_runs=2,
@@ -272,6 +282,7 @@ def test_audit_response_schemas_reject_sensitive_auth_or_raw_fields() -> None:
     with pytest.raises(ValidationError):
         AuditListItemResponse(
             audit_id=42,
+            audit_number=3,
             brand_name="Acme AI",
             status="created",
             providers=["mock"],

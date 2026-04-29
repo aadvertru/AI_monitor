@@ -6,6 +6,7 @@ import { Link, useParams } from "react-router-dom";
 import { Button } from "../../components/ui/Button";
 import { getAuditSummary } from "../../lib/api/client";
 import type { SourceSummaryItem } from "../../lib/api/types";
+import { AuditBreadcrumbs } from "./AuditBreadcrumbs";
 
 type SortMode = "citations" | "provider" | "source_type";
 
@@ -74,9 +75,14 @@ export function AuditSourcesPage() {
     <section className="rounded-md border border-border bg-surface shadow-panel">
       <div className="flex flex-col gap-3 border-b border-border px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
+          <AuditBreadcrumbs
+            auditId={auditId}
+            auditNumber={summary.data.audit_number}
+            current="Sources"
+          />
           <h1 className="text-xl font-semibold text-ink">Source intelligence</h1>
           <p className="mt-1 text-sm text-subtle">
-            Audit #{summary.data.audit_id} · {summary.data.sources.length} sources
+            Audit #{summary.data.audit_number} · {summary.data.sources.length} sources
           </p>
         </div>
         <Button asChild variant="ghost">

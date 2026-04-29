@@ -5,6 +5,7 @@ import { Link, useParams } from "react-router-dom";
 import { Button } from "../../components/ui/Button";
 import { getAuditDetail, getAuditStatus, runAudit } from "../../lib/api/client";
 import type { AuditRunTriggerResponse, AuditStatusResponse } from "../../lib/api/types";
+import { AuditBreadcrumbs } from "./AuditBreadcrumbs";
 import { AuditStatusBadge } from "./AuditStatusBadge";
 
 function formatTimestamp(value: string | null) {
@@ -62,6 +63,7 @@ export function AuditDetailPage() {
             ? { ...current, status: response.status }
             : {
                 audit_id: response.audit_id,
+                audit_number: response.audit_number,
                 status: response.status,
                 scdl_level: detail.data?.scdl_level ?? "L1",
                 total_runs: response.total_jobs,
@@ -110,12 +112,13 @@ export function AuditDetailPage() {
     <section className="rounded-md border border-border bg-surface shadow-panel">
       <div className="flex flex-col gap-3 border-b border-border px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
+          <AuditBreadcrumbs auditId={auditId} auditNumber={detail.data.audit_number} />
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-xl font-semibold text-ink">{detail.data.brand_name}</h1>
             <AuditStatusBadge status={status.data.status} />
           </div>
           <p className="mt-1 text-sm text-subtle">
-            Audit #{detail.data.audit_id}
+            Audit #{detail.data.audit_number}
             {detail.data.brand_domain ? ` · ${detail.data.brand_domain}` : ""}
           </p>
         </div>

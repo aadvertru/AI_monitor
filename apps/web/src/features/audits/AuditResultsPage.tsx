@@ -6,6 +6,7 @@ import { Link, useParams } from "react-router-dom";
 import { Button } from "../../components/ui/Button";
 import { getAuditResults } from "../../lib/api/client";
 import type { AuditResultRow, RunStatus } from "../../lib/api/types";
+import { AuditBreadcrumbs } from "./AuditBreadcrumbs";
 import { RunStatusBadge } from "./RunStatusBadge";
 
 type VisibilityFilter = "all" | "visible" | "not_visible" | "unknown";
@@ -115,9 +116,14 @@ export function AuditResultsPage() {
     <section className="rounded-md border border-border bg-surface shadow-panel">
       <div className="flex flex-col gap-3 border-b border-border px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
+          <AuditBreadcrumbs
+            auditId={auditId}
+            auditNumber={results.data.audit_number}
+            current="Results"
+          />
           <h1 className="text-xl font-semibold text-ink">Audit results</h1>
           <p className="mt-1 text-sm text-subtle">
-            Audit #{results.data.audit_id} · {results.data.total} rows
+            Audit #{results.data.audit_number} · {results.data.total} rows
           </p>
         </div>
         <Button asChild variant="ghost">

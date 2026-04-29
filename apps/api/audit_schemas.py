@@ -30,6 +30,7 @@ class FrontendAuditSchema(BaseModel):
 
 class AuditListItemResponse(FrontendAuditSchema):
     audit_id: int
+    audit_number: int
     brand_name: str
     brand_domain: str | None = None
     status: AuditStatusValue
@@ -42,6 +43,7 @@ class AuditListItemResponse(FrontendAuditSchema):
 
 class AuditDetailResponse(FrontendAuditSchema):
     audit_id: int
+    audit_number: int
     brand_id: int
     brand_name: str
     brand_domain: str | None = None
@@ -64,6 +66,7 @@ class AuditDetailResponse(FrontendAuditSchema):
 
 class AuditStatusResponse(FrontendAuditSchema):
     audit_id: int
+    audit_number: int
     status: AuditStatusValue
     scdl_level: SCDLLevelValue = "L1"
     total_runs: int = 0
@@ -75,6 +78,7 @@ class AuditStatusResponse(FrontendAuditSchema):
 
 class AuditRunTriggerResponse(FrontendAuditSchema):
     audit_id: int
+    audit_number: int
     status: AuditStatusValue
     scheduled_jobs: int = 0
     total_jobs: int = 0
@@ -121,6 +125,7 @@ class AuditResultRowResponse(FrontendAuditSchema):
 
 class AuditResultsResponse(FrontendAuditSchema):
     audit_id: int
+    audit_number: int
     rows: list[AuditResultRowResponse] = Field(default_factory=list)
     total: int = 0
 
@@ -140,6 +145,7 @@ class CriticalQueryItemResponse(FrontendAuditSchema):
 
 class AuditSummaryResponse(FrontendAuditSchema):
     audit_id: int
+    audit_number: int
     status: AuditStatusValue
     total_queries: int = 0
     total_runs: int = 0
