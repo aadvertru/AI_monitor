@@ -2,3 +2,7 @@
 __pycache__/
 *.py[cod]
 toclaude.txt
+
+# Frontend
+apps/web/node_modules/
+apps/web/dist/
