@@ -1,4 +1,6 @@
 import type {
+  AuditCreateRequest,
+  AuditCreateResponse,
   AuditDetail,
   AuditListItem,
   AuditResultsResponse,
@@ -102,6 +104,13 @@ export function logoutUser() {
 
 export function listAudits() {
   return apiFetch<AuditListItem[]>("/audits");
+}
+
+export function createAudit(payload: AuditCreateRequest) {
+  return apiFetch<AuditCreateResponse>("/audits", {
+    method: "POST",
+    body: jsonBody(payload),
+  });
 }
 
 export function getAuditDetail(auditId: number) {

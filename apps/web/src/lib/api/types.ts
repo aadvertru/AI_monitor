@@ -32,6 +32,33 @@ export type AuditListItem = {
   updated_at: string;
 };
 
+export type AuditCreateRequest = {
+  brand_name: string;
+  providers: string[];
+  runs_per_query: number;
+  brand_domain?: string | null;
+  brand_description?: string | null;
+  language?: string | null;
+  country?: string | null;
+  locale?: string | null;
+  max_queries?: number | null;
+  seed_queries?: string[] | null;
+  enable_query_expansion?: boolean;
+  enable_source_intelligence?: boolean;
+  follow_up_depth?: number;
+  scdl_level?: SCDLLevel;
+};
+
+export type AuditCreateResponse = {
+  audit_id: number;
+  brand_id: number;
+  status: AuditStatus;
+  providers: string[];
+  runs_per_query: number;
+  scdl_level: SCDLLevel;
+  seed_queries: string[];
+};
+
 export type AuditDetail = AuditListItem & {
   brand_id: number;
   brand_description: string | null;

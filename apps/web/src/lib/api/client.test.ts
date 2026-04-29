@@ -1,7 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { ApiError, getAuditDetail, getCurrentUser, loginUser, listAudits } from "./client";
-import { auditListFixture, currentUserFixture } from "../../test/fixtures";
+import {
+  ApiError,
+  getAuditDetail,
+  getAuditResults,
+  getAuditSummary,
+  getCurrentUser,
+  loginUser,
+  listAudits,
+} from "./client";
+import {
+  auditDetailFixture,
+  auditListFixture,
+  auditResultsFixture,
+  auditSummaryFixture,
+  currentUserFixture,
+  unauthenticatedAuthErrorFixture,
+} from "../../test/fixtures";
 import { mockFetchSequence } from "../../test/mockFetch";
 
 describe("api client", () => {
@@ -16,12 +31,14 @@ describe("api client", () => {
   });
 
   it("parses API errors into a predictable shape", async () => {
-    mockFetchSequence([
-      { body: { detail: "Invalid authentication credentials." }, status: 401 },
-    ]);
+    mockFetchSequence([{ body: unauthenticatedAuthErrorFixture, status: 401 }]);
+    const expectedMessage =
+      typeof unauthenticatedAuthErrorFixture.detail === "string"
+        ? unauthenticatedAuthErrorFixture.detail
+        : "Request failed.";
 
     await expect(loginUser({ email: "user@example.com", password: "bad" })).rejects.toMatchObject({
-      message: "Invalid authentication credentials.",
+      message: expectedMessage,
       status: 401,
     } satisfies Partial<ApiError>);
   });
@@ -33,22 +50,21 @@ describe("api client", () => {
   });
 
   it("loads audit detail responses", async () => {
-    const detail = {
-      ...auditListFixture[0],
-      brand_id: 7,
-      brand_description: null,
-      language: null,
-      country: null,
-      locale: null,
-      max_queries: null,
-      seed_queries: ["best ai visibility monitor"],
-      enable_query_expansion: false,
-      enable_source_intelligence: false,
-      follow_up_depth: 0,
-    };
-    mockFetchSequence([{ body: detail }]);
+    mockFetchSequence([{ body: auditDetailFixture }]);
 
-    await expect(getAuditDetail(42)).resolves.toEqual(detail);
+    await expect(getAuditDetail(42)).resolves.toEqual(auditDetailFixture);
+  });
+
+  it("loads audit results responses", async () => {
+    mockFetchSequence([{ body: auditResultsFixture }]);
+
+    await expect(getAuditResults(42)).resolves.toEqual(auditResultsFixture);
+  });
+
+  it("loads audit summary responses", async () => {
+    mockFetchSequence([{ body: auditSummaryFixture }]);
+
+    await expect(getAuditSummary(42)).resolves.toEqual(auditSummaryFixture);
   });
 
   it("does not use browser token storage during credentialed API calls", async () => {
