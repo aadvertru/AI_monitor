@@ -30,8 +30,21 @@ export class ApiError extends Error {
   }
 }
 
-export const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "http://localhost:8000";
+export function resolveApiBaseUrl(
+  configuredUrl = import.meta.env.VITE_API_BASE_URL,
+  locationLike: Pick<Location, "protocol" | "hostname"> | undefined = globalThis.location,
+) {
+  const normalizedConfiguredUrl = configuredUrl?.trim().replace(/\/$/, "");
+  if (normalizedConfiguredUrl) {
+    return normalizedConfiguredUrl;
+  }
+
+  const protocol = locationLike?.protocol || "http:";
+  const hostname = locationLike?.hostname || "localhost";
+  return `${protocol}//${hostname}:8000`;
+}
+
+export const API_BASE_URL = resolveApiBaseUrl();
 
 async function parseError(response: Response): Promise<ApiError> {
   let payload: ApiErrorPayload | null = null;

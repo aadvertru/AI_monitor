@@ -8,6 +8,7 @@ import {
   getCurrentUser,
   loginUser,
   listAudits,
+  resolveApiBaseUrl,
 } from "./client";
 import {
   auditDetailFixture,
@@ -20,6 +21,21 @@ import {
 import { mockFetchSequence } from "../../test/mockFetch";
 
 describe("api client", () => {
+  it("defaults API origin to the current browser hostname", () => {
+    expect(resolveApiBaseUrl(undefined, { protocol: "http:", hostname: "127.0.0.1" })).toBe(
+      "http://127.0.0.1:8000",
+    );
+    expect(resolveApiBaseUrl(undefined, { protocol: "http:", hostname: "localhost" })).toBe(
+      "http://localhost:8000",
+    );
+  });
+
+  it("uses configured API base URL when provided", () => {
+    expect(resolveApiBaseUrl("http://api.local:9000/", undefined)).toBe(
+      "http://api.local:9000",
+    );
+  });
+
   it("loads the current user with credentialed requests", async () => {
     const fetchMock = mockFetchSequence([{ body: currentUserFixture }]);
 
