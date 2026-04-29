@@ -66,6 +66,12 @@ class UserRole(str, Enum):
     ADMIN = "admin"
 
 
+class SCDLLevel(str, Enum):
+    # L1 = no web access; L2 = web access.
+    L1 = "L1"
+    L2 = "L2"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -132,6 +138,11 @@ class Audit(Base):
         Boolean, nullable=False, default=False
     )
     follow_up_depth: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    scdl_level: Mapped[SCDLLevel] = mapped_column(
+        SQLEnum(SCDLLevel, native_enum=False),
+        nullable=False,
+        default=SCDLLevel.L1,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utc_now, nullable=False
     )

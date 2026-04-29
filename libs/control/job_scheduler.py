@@ -16,7 +16,12 @@ from libs.storage.models import (
 )
 
 
-def schedule_jobs_for_audit(session: Session, audit_id: int) -> list[Job]:
+def schedule_jobs_for_audit(
+    session: Session,
+    audit_id: int,
+    *,
+    commit: bool = True,
+) -> list[Job]:
     """Create missing scheduling jobs for an audit without executing them."""
     audit = session.get(Audit, audit_id)
     if audit is None:
@@ -68,6 +73,8 @@ def schedule_jobs_for_audit(session: Session, audit_id: int) -> list[Job]:
         created_jobs.append(job)
         existing_keys.add(key)
 
-    session.commit()
+    if commit:
+        session.commit()
+    else:
+        session.flush()
     return created_jobs
-

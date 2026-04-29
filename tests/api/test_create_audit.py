@@ -81,6 +81,7 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.status, "created")
         self.assertEqual(result.providers, ["openai", "mock"])
         self.assertEqual(result.runs_per_query, 2)
+        self.assertEqual(result.scdl_level, "L1")
         self.assertEqual(
             result.seed_queries,
             [
@@ -95,6 +96,7 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
             assert saved_audit is not None
             self.assertEqual(saved_audit.providers, ["openai", "mock"])
             self.assertEqual(saved_audit.user_id, user.id)
+            self.assertEqual(saved_audit.scdl_level.value, "L1")
 
             brand = await session.get(Brand, saved_audit.brand_id)
             self.assertIsNotNone(brand)
@@ -166,6 +168,67 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
                     "runs_per_query": 6,
                 }
             )
+
+    def test_invalid_scdl_level_rejected(self) -> None:
+        with self.assertRaises(ValidationError):
+            AuditCreateRequest.model_validate(
+                {
+                    "brand_name": "Acme",
+                    "providers": ["openai"],
+                    "runs_per_query": 1,
+                    "scdl_level": "L3",
+                }
+            )
+
+    async def test_create_audit_accepts_and_persists_l1_scdl_level(self) -> None:
+        user = await self._create_user()
+        payload = AuditCreateRequest.model_validate(
+            {
+                "brand_name": "Acme L1",
+                "providers": ["mock"],
+                "runs_per_query": 1,
+                "scdl_level": "L1",
+            }
+        )
+
+        async with self.session_factory() as session:
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                result = await create_audit(
+                    payload=payload,
+                    request=self._authenticated_request(user),
+                    session=session,
+                )
+
+        self.assertEqual(result.scdl_level, "L1")
+        async with self.session_factory() as session:
+            saved_audit = await session.get(Audit, result.audit_id)
+        assert saved_audit is not None
+        self.assertEqual(saved_audit.scdl_level.value, "L1")
+
+    async def test_create_audit_accepts_and_persists_l2_scdl_level(self) -> None:
+        user = await self._create_user()
+        payload = AuditCreateRequest.model_validate(
+            {
+                "brand_name": "Acme L2",
+                "providers": ["mock"],
+                "runs_per_query": 1,
+                "scdl_level": "L2",
+            }
+        )
+
+        async with self.session_factory() as session:
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                result = await create_audit(
+                    payload=payload,
+                    request=self._authenticated_request(user),
+                    session=session,
+                )
+
+        self.assertEqual(result.scdl_level, "L2")
+        async with self.session_factory() as session:
+            saved_audit = await session.get(Audit, result.audit_id)
+        assert saved_audit is not None
+        self.assertEqual(saved_audit.scdl_level.value, "L2")
 
     async def test_repeated_audits_reuse_existing_brand(self) -> None:
         user = await self._create_user()
