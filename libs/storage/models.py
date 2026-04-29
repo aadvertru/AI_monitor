@@ -10,13 +10,15 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
-    Enum as SQLEnum,
     Float,
     ForeignKey,
     Integer,
     String,
     Text,
     UniqueConstraint,
+)
+from sqlalchemy import (
+    Enum as SQLEnum,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -59,6 +61,30 @@ class JobStatus(str, Enum):
     FAILED = "failed"
 
 
+class UserRole(str, Enum):
+    USER = "user"
+    ADMIN = "admin"
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[UserRole] = mapped_column(
+        SQLEnum(UserRole, native_enum=False), nullable=False, default=UserRole.USER
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, onupdate=_utc_now, nullable=False
+    )
+
+    audits: Mapped[list["Audit"]] = relationship(back_populates="user")
+
+
 class Brand(Base):
     __tablename__ = "brands"
 
@@ -83,6 +109,9 @@ class Audit(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     brand_id: Mapped[int] = mapped_column(
         ForeignKey("brands.id", ondelete="RESTRICT"), nullable=False
+    )
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
     )
     status: Mapped[AuditStatus] = mapped_column(
         SQLEnum(AuditStatus, native_enum=False),
@@ -110,6 +139,7 @@ class Audit(Base):
         DateTime(timezone=True), default=_utc_now, onupdate=_utc_now, nullable=False
     )
 
+    user: Mapped[User | None] = relationship(back_populates="audits")
     brand: Mapped[Brand] = relationship(back_populates="audits")
     queries: Mapped[list["Query"]] = relationship(
         back_populates="audit", cascade="all, delete-orphan"
@@ -292,4 +322,3 @@ class Score(Base):
     )
 
     run: Mapped[Run] = relationship(back_populates="score")
-

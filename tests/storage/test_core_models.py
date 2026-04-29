@@ -17,6 +17,8 @@ from libs.storage.models import (
     Run,
     RunStatus,
     Score,
+    User,
+    UserRole,
 )
 
 
@@ -167,7 +169,111 @@ class CoreModelsTests(unittest.TestCase):
             self.session.commit()
         self.session.rollback()
 
+    def test_user_can_be_created_with_required_auth_fields(self) -> None:
+        user = User(
+            email="user@example.com",
+            hashed_password="hashed-password-value",
+        )
+
+        self.session.add(user)
+        self.session.commit()
+
+        self.assertIsNotNone(user.id)
+        self.assertEqual(user.email, "user@example.com")
+        self.assertEqual(user.hashed_password, "hashed-password-value")
+        self.assertEqual(user.role, UserRole.USER)
+        self.assertIsNotNone(user.created_at)
+        self.assertIsNotNone(user.updated_at)
+
+    def test_duplicate_user_email_is_rejected(self) -> None:
+        first_user = User(
+            email="user@example.com",
+            hashed_password="first-hash",
+        )
+        duplicate_user = User(
+            email="user@example.com",
+            hashed_password="second-hash",
+        )
+
+        self.session.add(first_user)
+        self.session.commit()
+
+        self.session.add(duplicate_user)
+        with self.assertRaises(IntegrityError):
+            self.session.commit()
+        self.session.rollback()
+
+    def test_user_can_own_multiple_audits(self) -> None:
+        user = User(email="owner@example.com", hashed_password="hash")
+        first_brand = Brand(name="Acme AI")
+        second_brand = Brand(name="Example CRM")
+        first_audit = Audit(
+            user=user,
+            brand=first_brand,
+            providers=["openai"],
+            runs_per_query=1,
+        )
+        second_audit = Audit(
+            user=user,
+            brand=second_brand,
+            providers=["mock"],
+            runs_per_query=2,
+        )
+
+        self.session.add_all(
+            [user, first_brand, second_brand, first_audit, second_audit]
+        )
+        self.session.commit()
+
+        self.assertEqual(first_audit.user_id, user.id)
+        self.assertEqual(second_audit.user_id, user.id)
+        self.assertEqual(
+            [audit.id for audit in user.audits],
+            [first_audit.id, second_audit.id],
+        )
+
+    def test_audits_can_be_queried_by_owner(self) -> None:
+        owner = User(email="owner@example.com", hashed_password="hash")
+        other_user = User(email="other@example.com", hashed_password="hash")
+        owned_brand = Brand(name="Acme AI")
+        other_brand = Brand(name="Other AI")
+        owned_audit = Audit(
+            user=owner,
+            brand=owned_brand,
+            providers=["openai"],
+            runs_per_query=1,
+        )
+        other_audit = Audit(
+            user=other_user,
+            brand=other_brand,
+            providers=["mock"],
+            runs_per_query=1,
+        )
+
+        self.session.add_all(
+            [owner, other_user, owned_brand, other_brand, owned_audit, other_audit]
+        )
+        self.session.commit()
+
+        owned_audits = (
+            self.session.query(Audit)
+            .filter(Audit.user_id == owner.id)
+            .order_by(Audit.id)
+            .all()
+        )
+
+        self.assertEqual(owned_audits, [owned_audit])
+
+    def test_audit_can_still_be_created_without_owner_for_compatibility(self) -> None:
+        brand = Brand(name="Acme AI")
+        audit = Audit(brand=brand, providers=["openai"], runs_per_query=1)
+
+        self.session.add_all([brand, audit])
+        self.session.commit()
+
+        self.assertIsNotNone(audit.id)
+        self.assertIsNone(audit.user_id)
+
 
 if __name__ == "__main__":
     unittest.main()
-
