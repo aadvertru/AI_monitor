@@ -1,6 +1,11 @@
 # Python bytecode and cache
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.tmp/
+pytest-cache-files-*/
+testtmp/
+*.db
 toclaude.txt
 
 # Frontend

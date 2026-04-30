@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from apps.api.database import should_auto_create_schema
-from apps.api.main import on_startup
+from apps.api.main import app, lifespan
 
 
 class StartupSchemaPolicyTests(unittest.IsolatedAsyncioTestCase):
@@ -29,7 +29,8 @@ class StartupSchemaPolicyTests(unittest.IsolatedAsyncioTestCase):
             patch("apps.api.main.should_auto_create_schema", return_value=False),
             patch("apps.api.main.init_models", new_callable=AsyncMock) as init_mock,
         ):
-            await on_startup()
+            async with lifespan(app):
+                pass
             init_mock.assert_not_awaited()
 
     async def test_startup_runs_schema_creation_when_enabled(self) -> None:
@@ -37,7 +38,8 @@ class StartupSchemaPolicyTests(unittest.IsolatedAsyncioTestCase):
             patch("apps.api.main.should_auto_create_schema", return_value=True),
             patch("apps.api.main.init_models", new_callable=AsyncMock) as init_mock,
         ):
-            await on_startup()
+            async with lifespan(app):
+                pass
             init_mock.assert_awaited_once()
 
 
