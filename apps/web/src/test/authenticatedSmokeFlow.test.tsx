@@ -80,6 +80,7 @@ describe("authenticated SCDL smoke flow", () => {
 
     await user.click(screen.getAllByRole("link", { name: "New audit" })[0]);
     await user.type(await screen.findByLabelText("Brand name"), "Acme AI");
+    await user.type(screen.getByLabelText("Brand domain"), "acme.example");
     await user.type(screen.getByLabelText("Seed queries"), "best ai visibility tools");
     await user.click(screen.getByRole("button", { name: "Create audit" }));
 

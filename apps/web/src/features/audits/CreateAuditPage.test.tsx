@@ -34,7 +34,14 @@ describe("create audit page", () => {
     expect(screen.getByLabelText("Brand name")).toBeInTheDocument();
     expect(screen.getByLabelText("Brand domain")).toBeInTheDocument();
     expect(screen.getByLabelText("Seed queries")).toBeInTheDocument();
+    expect(screen.getByLabelText("Language")).toBeInTheDocument();
+    expect(screen.getByLabelText("Country")).toBeInTheDocument();
     expect(screen.getByLabelText("SCDL level")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Locale")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Runs per query")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Follow-up depth")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Query expansion · 15 tokens" })).toBeDisabled();
+    expect(screen.getByText(/Estimated audit cost:/)).toHaveTextContent("0 tokens");
     expect(screen.getByRole("button", { name: "Create audit" })).toBeInTheDocument();
   });
 
@@ -48,19 +55,60 @@ describe("create audit page", () => {
     expect(await screen.findByText("Enter a brand name.")).toBeInTheDocument();
   });
 
-  it("blocks invalid runs-per-query values before API submission", async () => {
+  it("validates required brand domain before API submission", async () => {
     await openCreatePage();
     const user = userEvent.setup();
 
     await user.type(screen.getByLabelText("Brand name"), "Acme AI");
-    await user.clear(screen.getByLabelText("Runs per query"));
-    await user.type(screen.getByLabelText("Runs per query"), "6");
     await user.click(screen.getByRole("button", { name: "Create audit" }));
 
-    expect(await screen.findByText("Runs per query cannot exceed 5.")).toBeInTheDocument();
+    expect(await screen.findByText("Enter a brand domain.")).toBeInTheDocument();
   });
 
-  it("submits seed queries and SCDL level in the backend contract format", async () => {
+  it("expands seed queries with mocked PAA and AI suggestions without duplicates", async () => {
+    await openCreatePage();
+    const user = userEvent.setup();
+
+    await user.type(
+      screen.getByLabelText("Seed queries"),
+      "best ai visibility tools\nPAA query 1: what are the best AI visibility monitoring tools?",
+    );
+    await user.click(screen.getByRole("button", { name: "Query expansion · 15 tokens" }));
+
+    expect(screen.getByRole("button", { name: "Expanding queries..." })).toBeDisabled();
+    await waitFor(() => {
+      expect((screen.getByLabelText("Seed queries") as HTMLTextAreaElement).value).toContain(
+        "AI expansion query 10: track citations and sources in AI answers",
+      );
+    });
+    const seedQueries = screen.getByLabelText("Seed queries") as HTMLTextAreaElement;
+    expect(seedQueries.value).toContain("PAA query 2: how do brands track visibility in AI answers?");
+    expect(seedQueries.value).not.toContain(
+      "PAA query 1: what are the best AI visibility monitoring tools?\nPAA query 1",
+    );
+  });
+
+  it("updates the estimated audit token cost from selected parameters", async () => {
+    await openCreatePage();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByLabelText("Seed queries"), "query one\nquery two");
+    expect(screen.getByText(/Estimated audit cost:/)).toHaveTextContent("20 tokens");
+
+    await user.click(screen.getByLabelText("OpenAI"));
+    expect(screen.getByText(/Estimated audit cost:/)).toHaveTextContent("40 tokens");
+
+    await user.selectOptions(screen.getByLabelText("SCDL level"), "L2");
+    expect(screen.getByText(/Estimated audit cost:/)).toHaveTextContent("60 tokens");
+
+    await user.click(screen.getByLabelText("Source intelligence"));
+    expect(screen.getByText(/Estimated audit cost:/)).toHaveTextContent("80 tokens");
+
+    await user.type(screen.getByLabelText("Max queries"), "1");
+    expect(screen.getByText(/Estimated audit cost:/)).toHaveTextContent("40 tokens");
+  });
+
+  it("submits seed queries, location fields, and hidden defaults in the backend contract format", async () => {
     const fetchMock = mockFetchSequence([
       { body: currentUserFixture },
       { body: createAuditResponse },
@@ -70,9 +118,9 @@ describe("create audit page", () => {
     renderRoute("/audits/new");
     await user.type(await screen.findByLabelText("Brand name"), "Acme AI");
     await user.type(screen.getByLabelText("Brand domain"), " acme.ai ");
-    await user.clear(screen.getByLabelText("Runs per query"));
-    await user.type(screen.getByLabelText("Runs per query"), "2");
     await user.click(screen.getByLabelText("OpenAI"));
+    await user.selectOptions(screen.getByLabelText("Language"), "uk");
+    await user.selectOptions(screen.getByLabelText("Country"), "UA");
     await user.selectOptions(screen.getByLabelText("SCDL level"), "L2");
     await user.type(
       screen.getByLabelText("Seed queries"),
@@ -91,8 +139,13 @@ describe("create audit page", () => {
       brand_name: "Acme AI",
       brand_domain: "acme.ai",
       providers: ["mock", "openai"],
-      runs_per_query: 2,
+      runs_per_query: 1,
       seed_queries: ["best ai visibility tools", "brand monitoring platforms"],
+      language: "uk",
+      country: "UA",
+      locale: "uk-UA",
+      enable_query_expansion: false,
+      follow_up_depth: 0,
       scdl_level: "L2",
     });
   });
@@ -108,6 +161,7 @@ describe("create audit page", () => {
 
     renderRoute("/audits/new");
     await user.type(await screen.findByLabelText("Brand name"), "Acme AI");
+    await user.type(screen.getByLabelText("Brand domain"), "acme.ai");
     await user.click(screen.getByRole("button", { name: "Create audit" }));
 
     await waitFor(() => {
@@ -125,6 +179,7 @@ describe("create audit page", () => {
 
     renderRoute("/audits/new");
     await user.type(await screen.findByLabelText("Brand name"), "Acme AI");
+    await user.type(screen.getByLabelText("Brand domain"), "acme.ai");
     await user.click(screen.getByRole("button", { name: "Create audit" }));
 
     expect(

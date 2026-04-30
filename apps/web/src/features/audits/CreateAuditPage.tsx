@@ -1,7 +1,8 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation } from "@tanstack/react-query";
-import { ArrowLeft, Plus } from "lucide-react";
-import { useForm } from "react-hook-form";
+import { ArrowLeft, Loader2, Plus, Sparkles } from "lucide-react";
+import { useState } from "react";
+import { useForm, useWatch } from "react-hook-form";
 import { Link, useNavigate } from "react-router-dom";
 import { z } from "zod";
 
@@ -18,24 +19,58 @@ const providerOptions = [
   { label: "Gemini", value: "gemini" },
 ] as const;
 
+const languageOptions = [
+  { label: "English", value: "en" },
+  { label: "Ukrainian", value: "uk" },
+  { label: "Russian", value: "ru" },
+  { label: "Spanish", value: "es" },
+  { label: "German", value: "de" },
+  { label: "French", value: "fr" },
+] as const;
+
+const countryOptions = [
+  { label: "United States", value: "US" },
+  { label: "Ukraine", value: "UA" },
+  { label: "United Kingdom", value: "GB" },
+  { label: "Canada", value: "CA" },
+  { label: "Germany", value: "DE" },
+  { label: "France", value: "FR" },
+] as const;
+
+const queryExpansionTokenCost = 15;
+
+const mockPaaQueries = [
+  "PAA query 1: what are the best AI visibility monitoring tools?",
+  "PAA query 2: how do brands track visibility in AI answers?",
+];
+
+const mockAiExpansionQueries = [
+  "AI expansion query 1: compare AI brand monitoring platforms",
+  "AI expansion query 2: tools for tracking ChatGPT brand mentions",
+  "AI expansion query 3: how to measure brand visibility in LLM answers",
+  "AI expansion query 4: best platforms for AI search visibility audits",
+  "AI expansion query 5: monitor competitor mentions in AI responses",
+  "AI expansion query 6: AI answer optimization tools for marketing teams",
+  "AI expansion query 7: brand monitoring software for generative AI",
+  "AI expansion query 8: measure Share of Voice in AI-generated answers",
+  "AI expansion query 9: LLM visibility audit tools for B2B SaaS",
+  "AI expansion query 10: track citations and sources in AI answers",
+];
+
+function localeFrom(language: string, country: string) {
+  return `${language}-${country}`;
+}
+
 const schema = z.object({
   brandName: z.string().trim().min(1, "Enter a brand name."),
-  brandDomain: z.string().trim().optional(),
+  brandDomain: z.string().trim().min(1, "Enter a brand domain."),
   brandDescription: z.string().trim().optional(),
   seedQueries: z.string().trim().optional(),
   providers: z.array(z.string()).min(1, "Select at least one provider."),
-  runsPerQuery: z.coerce
-    .number({ error: "Enter a number of runs." })
-    .int("Runs per query must be a whole number.")
-    .min(1, "Runs per query must be at least 1.")
-    .max(5, "Runs per query cannot exceed 5."),
-  language: z.string().trim().optional(),
-  country: z.string().trim().optional(),
-  locale: z.string().trim().optional(),
+  language: z.enum(languageOptions.map((option) => option.value)),
+  country: z.enum(countryOptions.map((option) => option.value)),
   maxQueries: z.union([z.literal(""), z.coerce.number().int().positive()]).optional(),
-  enableQueryExpansion: z.boolean(),
   enableSourceIntelligence: z.boolean(),
-  followUpDepth: z.coerce.number().int().min(0).max(1),
   scdlLevel: z.enum(["L1", "L2"]),
 });
 
@@ -62,6 +97,58 @@ function parseSeedQueries(value?: string) {
   return queries;
 }
 
+function mergeSeedQueries(currentValue: string | undefined, expandedQueries: string[]) {
+  return [...parseSeedQueries(currentValue), ...expandedQueries]
+    .reduce<string[]>((queries, query) => {
+      const normalized = query.trim();
+      const seen = new Set(queries.map((item) => item.toLowerCase()));
+      if (normalized && !seen.has(normalized.toLowerCase())) {
+        queries.push(normalized);
+      }
+      return queries;
+    }, [])
+    .join("\n");
+}
+
+function mockExpandQueries() {
+  return new Promise<string[]>((resolve) => {
+    window.setTimeout(() => {
+      resolve([...mockPaaQueries, ...mockAiExpansionQueries]);
+    }, 250);
+  });
+}
+
+type EstimateValues = {
+  enableSourceIntelligence?: boolean;
+  maxQueries?: unknown;
+  providers?: string[];
+  scdlLevel?: "L1" | "L2";
+  seedQueries?: string;
+};
+
+function estimateAuditTokens(values: EstimateValues) {
+  const queryCount = parseSeedQueries(values.seedQueries).length;
+  const parsedMaxQueries =
+    typeof values.maxQueries === "number"
+      ? values.maxQueries
+      : typeof values.maxQueries === "string" && values.maxQueries.trim()
+        ? Number(values.maxQueries)
+        : null;
+  const maxQueries =
+    typeof parsedMaxQueries === "number" && Number.isFinite(parsedMaxQueries)
+      ? parsedMaxQueries
+      : null;
+  const effectiveQueries = maxQueries ? Math.min(queryCount, maxQueries) : queryCount;
+  const selectedProviders = values.providers?.length ?? 0;
+  const base = effectiveQueries * selectedProviders * 10;
+  const scdlMultiplier = values.scdlLevel === "L2" ? 1.5 : 1;
+  const sourceIntelligenceAddon = values.enableSourceIntelligence
+    ? effectiveQueries * selectedProviders * 5
+    : 0;
+
+  return Math.round(base * scdlMultiplier + sourceIntelligenceAddon);
+}
+
 function buildPayload(values: CreateAuditFormValues): AuditCreateRequest {
   const seedQueries = parseSeedQueries(values.seedQueries);
   return {
@@ -69,22 +156,23 @@ function buildPayload(values: CreateAuditFormValues): AuditCreateRequest {
     brand_domain: optionalText(values.brandDomain),
     brand_description: optionalText(values.brandDescription),
     providers: values.providers,
-    runs_per_query: values.runsPerQuery,
+    runs_per_query: 1,
     seed_queries: seedQueries.length > 0 ? seedQueries : null,
     language: optionalText(values.language),
     country: optionalText(values.country),
-    locale: optionalText(values.locale),
+    locale: localeFrom(values.language, values.country),
     max_queries:
       values.maxQueries === "" || values.maxQueries === undefined ? null : values.maxQueries,
-    enable_query_expansion: values.enableQueryExpansion,
+    enable_query_expansion: false,
     enable_source_intelligence: values.enableSourceIntelligence,
-    follow_up_depth: values.followUpDepth,
+    follow_up_depth: 0,
     scdl_level: values.scdlLevel as SCDLLevel,
   };
 }
 
 export function CreateAuditPage() {
   const navigate = useNavigate();
+  const [isExpandingQueries, setIsExpandingQueries] = useState(false);
   const createAuditMutation = useMutation({
     mutationFn: createAudit,
     onSuccess: (response) => {
@@ -93,8 +181,11 @@ export function CreateAuditPage() {
   });
   const {
     formState: { errors },
+    control,
+    getValues,
     handleSubmit,
     register,
+    setValue,
   } = useForm<CreateAuditFormInput, unknown, CreateAuditFormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
@@ -103,21 +194,39 @@ export function CreateAuditPage() {
       brandDescription: "",
       seedQueries: "",
       providers: ["mock"],
-      runsPerQuery: 1,
-      language: "",
-      country: "",
-      locale: "",
+      language: "en",
+      country: "US",
       maxQueries: "",
-      enableQueryExpansion: false,
       enableSourceIntelligence: false,
-      followUpDepth: 0,
       scdlLevel: "L1",
     },
   });
 
+  const watchedValues = useWatch({ control });
+  const seedQueryCount = parseSeedQueries(watchedValues.seedQueries).length;
+  const estimatedTokens = estimateAuditTokens(watchedValues);
+  const canExpandQueries = seedQueryCount > 0 && !isExpandingQueries;
+
   const onSubmit = handleSubmit((values) => {
     createAuditMutation.mutate(buildPayload(values));
   });
+
+  const expandQueries = async () => {
+    if (!canExpandQueries) {
+      return;
+    }
+
+    setIsExpandingQueries(true);
+    try {
+      const expandedQueries = await mockExpandQueries();
+      setValue("seedQueries", mergeSeedQueries(getValues("seedQueries"), expandedQueries), {
+        shouldDirty: true,
+        shouldValidate: true,
+      });
+    } finally {
+      setIsExpandingQueries(false);
+    }
+  };
 
   return (
     <section className="rounded-md border border-border bg-surface shadow-panel">
@@ -156,16 +265,33 @@ export function CreateAuditPage() {
           />
         </Field>
 
-        <Field htmlFor="seed-queries" label="Seed queries" error={errors.seedQueries?.message}>
-          <textarea
-            id="seed-queries"
-            className="min-h-28 w-full rounded-md border border-border bg-white px-3 py-2 text-sm text-ink outline-none transition-colors placeholder:text-slate-400 focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-            placeholder={"best ai visibility tools\nbrand monitoring platforms"}
-            {...register("seedQueries")}
-          />
-        </Field>
+        <div className="space-y-3">
+          <Field htmlFor="seed-queries" label="Seed queries" error={errors.seedQueries?.message}>
+            <textarea
+              id="seed-queries"
+              className="min-h-28 w-full rounded-md border border-border bg-white px-3 py-2 text-sm text-ink outline-none transition-colors placeholder:text-slate-400 focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+              placeholder={"best ai visibility tools\nbrand monitoring platforms"}
+              {...register("seedQueries")}
+            />
+          </Field>
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={!canExpandQueries}
+            onClick={expandQueries}
+          >
+            {isExpandingQueries ? (
+              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+            ) : (
+              <Sparkles className="size-4" aria-hidden="true" />
+            )}
+            {isExpandingQueries
+              ? "Expanding queries..."
+              : `Query expansion · ${queryExpansionTokenCost} tokens`}
+          </Button>
+        </div>
 
-        <div className="grid gap-4 md:grid-cols-[1.4fr_0.8fr_0.8fr]">
+        <div className="grid gap-4 md:grid-cols-[1.4fr_0.8fr]">
           <div>
             <p className="text-sm font-medium text-ink">Providers</p>
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
@@ -189,14 +315,6 @@ export function CreateAuditPage() {
             ) : null}
           </div>
 
-          <Field
-            htmlFor="runs-per-query"
-            label="Runs per query"
-            error={errors.runsPerQuery?.message}
-          >
-            <Input id="runs-per-query" type="number" min={1} max={5} {...register("runsPerQuery")} />
-          </Field>
-
           <Field htmlFor="scdl-level" label="SCDL level" error={errors.scdlLevel?.message}>
             <select
               id="scdl-level"
@@ -209,30 +327,39 @@ export function CreateAuditPage() {
           </Field>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-3">
           <Field htmlFor="language" label="Language" error={errors.language?.message}>
-            <Input id="language" placeholder="en" {...register("language")} />
+            <select
+              id="language"
+              className="h-10 w-full rounded-md border border-border bg-white px-3 text-sm text-ink outline-none transition-colors focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+              {...register("language")}
+            >
+              {languageOptions.map((language) => (
+                <option key={language.value} value={language.value}>
+                  {language.label}
+                </option>
+              ))}
+            </select>
           </Field>
           <Field htmlFor="country" label="Country" error={errors.country?.message}>
-            <Input id="country" placeholder="US" {...register("country")} />
-          </Field>
-          <Field htmlFor="locale" label="Locale" error={errors.locale?.message}>
-            <Input id="locale" placeholder="en-US" {...register("locale")} />
+            <select
+              id="country"
+              className="h-10 w-full rounded-md border border-border bg-white px-3 text-sm text-ink outline-none transition-colors focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+              {...register("country")}
+            >
+              {countryOptions.map((country) => (
+                <option key={country.value} value={country.value}>
+                  {country.label}
+                </option>
+              ))}
+            </select>
           </Field>
           <Field htmlFor="max-queries" label="Max queries" error={errors.maxQueries?.message}>
             <Input id="max-queries" type="number" min={1} {...register("maxQueries")} />
           </Field>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-3">
-          <label className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-ink">
-            <input
-              className="size-4 accent-brand-600"
-              type="checkbox"
-              {...register("enableQueryExpansion")}
-            />
-            Query expansion
-          </label>
+        <div className="grid gap-3 md:grid-cols-2">
           <label className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-ink">
             <input
               className="size-4 accent-brand-600"
@@ -241,20 +368,6 @@ export function CreateAuditPage() {
             />
             Source intelligence
           </label>
-          <Field
-            htmlFor="follow-up-depth"
-            label="Follow-up depth"
-            error={errors.followUpDepth?.message}
-          >
-            <select
-              id="follow-up-depth"
-              className="h-10 w-full rounded-md border border-border bg-white px-3 text-sm text-ink outline-none transition-colors focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-              {...register("followUpDepth")}
-            >
-              <option value={0}>0</option>
-              <option value={1}>1</option>
-            </select>
-          </Field>
         </div>
 
         {createAuditMutation.error ? (
@@ -265,7 +378,10 @@ export function CreateAuditPage() {
           </p>
         ) : null}
 
-        <div className="flex justify-end">
+        <div className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm font-medium text-ink">
+            Estimated audit cost: <span className="text-brand-700">{estimatedTokens} tokens</span>
+          </p>
           <Button type="submit" disabled={createAuditMutation.isPending}>
             <Plus className="size-4" aria-hidden="true" />
             {createAuditMutation.isPending ? "Creating..." : "Create audit"}
