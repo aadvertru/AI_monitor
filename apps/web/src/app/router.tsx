@@ -4,7 +4,7 @@ import { AppShell } from "../components/layout/AppShell";
 import { AuditDetailPage } from "../features/audits/AuditDetailPage";
 import { AuditResultsPage } from "../features/audits/AuditResultsPage";
 import { AuditSourcesPage } from "../features/audits/AuditSourcesPage";
-import { AuditSummaryPage } from "../features/audits/AuditSummaryPage";
+import { AuditSummaryRedirect } from "../features/audits/AuditSummaryRedirect";
 import { AuditsDashboardPage } from "../features/audits/AuditsDashboardPage";
 import { CreateAuditPage } from "../features/audits/CreateAuditPage";
 import { GuestRoute, ProtectedRoute } from "../features/auth/routeGuards";
@@ -32,7 +32,7 @@ export function routes() {
           children: [
             { path: "/audits", element: <AuditsDashboardPage /> },
             { path: "/audits/new", element: <CreateAuditPage /> },
-            { path: "/audits/:auditId/summary", element: <AuditSummaryPage /> },
+            { path: "/audits/:auditId/summary", element: <AuditSummaryRedirect /> },
             { path: "/audits/:auditId/results", element: <AuditResultsPage /> },
             { path: "/audits/:auditId/sources", element: <AuditSourcesPage /> },
             {

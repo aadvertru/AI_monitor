@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   auditDetailFixture,
-  auditStatusFixture,
+  auditSummaryFixture,
   currentUserFixture,
 } from "../../test/fixtures";
 import { mockFetchSequence } from "../../test/mockFetch";
@@ -16,7 +16,7 @@ function renderDetail(status: AuditStatus = "created") {
   mockFetchSequence([
     { body: currentUserFixture },
     { body: { ...auditDetailFixture, status } },
-    { body: { ...auditStatusFixture, status } },
+    { body: { ...auditSummaryFixture, status } },
   ]);
   renderRoute("/audits/42");
 }
@@ -30,17 +30,19 @@ describe("audit detail page", () => {
     expect(screen.getByRole("navigation", { name: "Breadcrumb" })).toHaveTextContent(
       "AuditsAudit #1",
     );
-    expect(screen.getByText("AI visibility monitoring platform.")).toBeInTheDocument();
-    expect(screen.getByText("mock")).toBeInTheDocument();
-    expect(screen.getByText("25%")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Summary" })).toHaveAttribute(
-      "href",
-      "/audits/42/summary",
-    );
+    expect(screen.getByRole("link", { name: "Summary" })).toHaveAttribute("href", "/audits/42");
+    expect(screen.getByRole("link", { name: "Summary" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "Results" })).toHaveAttribute(
       "href",
       "/audits/42/results",
     );
+    expect(screen.getByRole("link", { name: "Sources" })).toHaveAttribute(
+      "href",
+      "/audits/42/sources",
+    );
+    expect(screen.getByText("Provider summary")).toBeInTheDocument();
+    expect(screen.getByText("Critical queries")).toBeInTheDocument();
+    expect(screen.getByText("Competitor visibility")).toBeInTheDocument();
   });
 
   it.each(["created", "running", "completed", "failed"] as const)(
@@ -80,7 +82,7 @@ describe("audit detail page", () => {
     mockFetchSequence([
       { body: currentUserFixture },
       { body: { detail: "Audit was not found." }, status: 404 },
-      { body: { detail: "Audit was not found." }, status: 404 },
+      { body: { detail: "Audit summary was not found." }, status: 404 },
     ]);
 
     renderRoute("/audits/42");
@@ -96,9 +98,9 @@ describe("audit detail page", () => {
     const fetchMock = mockFetchSequence([
       { body: currentUserFixture },
       { body: auditDetailFixture },
-      { body: auditStatusFixture },
+      { body: auditSummaryFixture },
       { body: { ...auditDetailFixture, brand_name: "Acme Refreshed" } },
-      { body: { ...auditStatusFixture, status: "completed", completion_ratio: 1 } },
+      { body: { ...auditSummaryFixture, status: "completed", completion_ratio: 1 } },
     ]);
     const user = userEvent.setup();
 
@@ -116,7 +118,7 @@ describe("audit detail page", () => {
     const fetchMock = mockFetchSequence([
       { body: currentUserFixture },
       { body: auditDetailFixture },
-      { body: auditStatusFixture },
+      { body: auditSummaryFixture },
       {
         body: {
           audit_id: 42,
@@ -126,6 +128,7 @@ describe("audit detail page", () => {
           total_jobs: 4,
         },
       },
+      { body: { ...auditSummaryFixture, status: "running", total_runs: 4 } },
     ]);
     const user = userEvent.setup();
 

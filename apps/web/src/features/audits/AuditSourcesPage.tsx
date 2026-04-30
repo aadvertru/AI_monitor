@@ -7,6 +7,7 @@ import { Button } from "../../components/ui/Button";
 import { getAuditSummary } from "../../lib/api/client";
 import type { SourceSummaryItem } from "../../lib/api/types";
 import { AuditBreadcrumbs } from "./AuditBreadcrumbs";
+import { AuditViewTabs } from "./AuditViewTabs";
 
 type SortMode = "citations" | "provider" | "source_type";
 
@@ -92,6 +93,8 @@ export function AuditSourcesPage() {
           </Link>
         </Button>
       </div>
+
+      <AuditViewTabs auditId={auditId} active="sources" />
 
       {summary.data.sources.length > 0 ? (
         <div className="border-b border-border px-5 py-3">

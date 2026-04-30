@@ -7,7 +7,6 @@ import {
   auditDetailFixture,
   auditResultsFixture,
   auditRunTriggerFixture,
-  auditStatusFixture,
   auditSummaryFixture,
   currentUserFixture,
   unauthenticatedAuthErrorFixture,
@@ -61,9 +60,9 @@ describe("authenticated SCDL smoke flow", () => {
       { path: "/audits", body: [] },
       { path: "/audits", method: "POST", body: auditCreateResponseFixture },
       { path: "/audits/42", body: auditDetailFixture },
-      { path: "/audits/42/status", body: auditStatusFixture },
-      { path: "/audits/42/run", method: "POST", body: auditRunTriggerFixture },
       { path: "/audits/42/summary", body: auditSummaryFixture },
+      { path: "/audits/42/run", method: "POST", body: auditRunTriggerFixture },
+      { path: "/audits/42/summary", body: { ...auditSummaryFixture, status: "running" } },
       { path: "/audits/42/results", body: auditResultsFixture },
     ]);
     const user = userEvent.setup();
@@ -91,8 +90,7 @@ describe("authenticated SCDL smoke flow", () => {
     await user.click(screen.getByRole("button", { name: "Start audit" }));
     expect((await screen.findAllByText("Running")).length).toBeGreaterThan(0);
 
-    await user.click(screen.getByRole("link", { name: "Summary" }));
-    expect(await screen.findByRole("heading", { name: "Audit summary" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Summary" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByText("Contoso Monitor")).toBeInTheDocument();
     expect(screen.getByText("best ai visibility tools")).toBeInTheDocument();
 

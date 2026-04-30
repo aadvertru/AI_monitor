@@ -7,6 +7,7 @@ import { Button } from "../../components/ui/Button";
 import { getAuditResults } from "../../lib/api/client";
 import type { AuditResultRow, RunStatus } from "../../lib/api/types";
 import { AuditBreadcrumbs } from "./AuditBreadcrumbs";
+import { AuditViewTabs } from "./AuditViewTabs";
 import { RunStatusBadge } from "./RunStatusBadge";
 
 type VisibilityFilter = "all" | "visible" | "not_visible" | "unknown";
@@ -133,6 +134,8 @@ export function AuditResultsPage() {
           </Link>
         </Button>
       </div>
+
+      <AuditViewTabs auditId={auditId} active="results" />
 
       {results.data.rows.length > 0 ? (
         <div className="grid gap-3 border-b border-border px-5 py-3 md:grid-cols-3">

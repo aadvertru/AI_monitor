@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   auditDetailFixture,
   auditListFixture,
-  auditStatusFixture,
+  auditSummaryFixture,
   currentUserFixture,
 } from "../../test/fixtures";
 import { mockFetchSequence } from "../../test/mockFetch";
@@ -70,7 +70,7 @@ describe("audits dashboard page", () => {
       { body: currentUserFixture },
       { body: auditListFixture },
       { body: auditDetailFixture },
-      { body: auditStatusFixture },
+      { body: auditSummaryFixture },
     ]);
     const user = userEvent.setup();
 

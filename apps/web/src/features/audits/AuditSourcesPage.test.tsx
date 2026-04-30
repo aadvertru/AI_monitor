@@ -37,6 +37,15 @@ describe("audit sources page", () => {
     renderSources();
 
     expect(await screen.findByRole("heading", { name: "Source intelligence" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Sources" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Summary" })).toHaveAttribute(
+      "href",
+      "/audits/42",
+    );
+    expect(screen.getByRole("link", { name: "Results" })).toHaveAttribute(
+      "href",
+      "/audits/42/results",
+    );
     expect(screen.getByText("AI visibility benchmarks")).toBeInTheDocument();
     expect(screen.getByText("example.com")).toBeInTheDocument();
     expect(screen.getByText("openai")).toBeInTheDocument();

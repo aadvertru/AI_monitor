@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   auditDetailFixture,
-  auditStatusFixture,
+  auditSummaryFixture,
   currentUserFixture,
 } from "../../test/fixtures";
 import { mockFetchSequence } from "../../test/mockFetch";
@@ -102,7 +102,7 @@ describe("create audit page", () => {
       { body: currentUserFixture },
       { body: createAuditResponse },
       { body: { ...auditDetailFixture, audit_id: 88 } },
-      { body: { ...auditStatusFixture, audit_id: 88 } },
+      { body: { ...auditSummaryFixture, audit_id: 88 } },
     ]);
     const user = userEvent.setup();
 

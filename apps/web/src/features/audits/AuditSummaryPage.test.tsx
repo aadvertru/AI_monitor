@@ -2,6 +2,7 @@ import { screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  auditDetailFixture,
   auditSummaryFixture,
   currentUserFixture,
   emptyAuditSummaryFixture,
@@ -11,8 +12,8 @@ import { mockFetchSequence } from "../../test/mockFetch";
 import { renderRoute } from "../../test/render";
 
 function renderSummary(summary = auditSummaryFixture) {
-  mockFetchSequence([{ body: currentUserFixture }, { body: summary }]);
-  renderRoute("/audits/42/summary");
+  mockFetchSequence([{ body: currentUserFixture }, { body: auditDetailFixture }, { body: summary }]);
+  renderRoute("/audits/42");
 }
 
 describe("audit summary page", () => {
@@ -27,15 +28,19 @@ describe("audit summary page", () => {
     fetchMock.mockReturnValue(new Promise(() => undefined));
     vi.stubGlobal("fetch", fetchMock);
 
-    renderRoute("/audits/42/summary");
+    renderRoute("/audits/42");
 
-    expect(await screen.findByRole("status")).toHaveTextContent("Loading summary...");
+    expect(await screen.findByRole("status")).toHaveTextContent("Loading audit...");
   });
 
-  it("renders summary cards with completed audit data", async () => {
+  it("renders summary cards on the canonical audit detail route", async () => {
     renderSummary();
 
-    expect(await screen.findByRole("heading", { name: "Audit summary" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Acme AI" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Summary" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Summary" })).toHaveAttribute("href", "/audits/42");
+    expect(screen.getByRole("link", { name: "Results" })).toHaveAttribute("href", "/audits/42/results");
+    expect(screen.getByRole("link", { name: "Sources" })).toHaveAttribute("href", "/audits/42/sources");
     expect(screen.getByText("Completed")).toBeInTheDocument();
     expect(screen.getByText("Queries")).toBeInTheDocument();
     expect(screen.getAllByText("3").length).toBeGreaterThan(0);
@@ -141,23 +146,37 @@ describe("audit summary page", () => {
   it("shows an API error state", async () => {
     mockFetchSequence([
       { body: currentUserFixture },
+      { body: auditDetailFixture },
       { body: { detail: "Failed to load audit summary." }, status: 500 },
     ]);
 
-    renderRoute("/audits/42/summary");
+    renderRoute("/audits/42");
 
-    expect(await screen.findByText("Unable to load summary.")).toBeInTheDocument();
+    expect(await screen.findByText("Audit unavailable.")).toBeInTheDocument();
   });
 
   it("does not request raw results or scoring inputs", async () => {
-    const fetchMock = mockFetchSequence([{ body: currentUserFixture }, { body: auditSummaryFixture }]);
+    const fetchMock = mockFetchSequence([
+      { body: currentUserFixture },
+      { body: auditDetailFixture },
+      { body: auditSummaryFixture },
+    ]);
 
-    renderRoute("/audits/42/summary");
-    await screen.findByRole("heading", { name: "Audit summary" });
+    renderRoute("/audits/42");
+    await screen.findByRole("heading", { name: "Acme AI" });
 
     expect(fetchMock).not.toHaveBeenCalledWith(
       "http://localhost:8000/audits/42/results",
       expect.anything(),
     );
+  });
+
+  it("redirects the legacy summary URL to the canonical audit page", async () => {
+    mockFetchSequence([{ body: currentUserFixture }, { body: auditDetailFixture }, { body: auditSummaryFixture }]);
+
+    renderRoute("/audits/42/summary");
+
+    expect(await screen.findByRole("heading", { name: "Acme AI" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Summary" })).toHaveAttribute("href", "/audits/42");
   });
 });
