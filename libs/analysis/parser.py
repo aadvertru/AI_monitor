@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
 import os
+from dataclasses import asdict
 from typing import Any
 
 from libs.analysis.brand_detection import detect_brand
