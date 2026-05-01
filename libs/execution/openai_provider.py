@@ -1,20 +1,29 @@
-"""OpenAI provider adapter that maps API responses to ProviderResponse."""
+"""OpenAI Responses API provider adapter."""
 
 from __future__ import annotations
 
 import asyncio
-import os
 import time
 from typing import Any
 
+from libs.execution.openai_config import (
+    DEFAULT_OPENAI_L1_MODEL,
+    OpenAIConfigError,
+    OpenAIProviderConfig,
+    load_openai_provider_config,
+)
 from libs.execution.provider_adapter import BaseProviderAdapter, ProviderResponse
 
 try:
+    from openai import APIError as OpenAIAPIError
     from openai import APITimeoutError as OpenAIAPITimeoutError
     from openai import AsyncOpenAI
     from openai import RateLimitError as OpenAIRateLimitError
 except Exception:  # pragma: no cover - runtime fallback when SDK is unavailable.
     AsyncOpenAI = None
+
+    class OpenAIAPIError(Exception):
+        """Fallback API error class used when openai SDK is unavailable."""
 
     class OpenAIAPITimeoutError(Exception):
         """Fallback timeout class used when openai SDK is unavailable."""
@@ -23,7 +32,25 @@ except Exception:  # pragma: no cover - runtime fallback when SDK is unavailable
         """Fallback rate-limit class used when openai SDK is unavailable."""
 
 
-DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
+DEFAULT_OPENAI_MODEL = DEFAULT_OPENAI_L1_MODEL
+WEB_SEARCH_TOOL = {"type": "web_search"}
+
+
+class OpenAIResponsesClient:
+    """Small wrapper around the OpenAI SDK Responses API.
+
+    Tests mock this wrapper instead of the external SDK/network.
+    """
+
+    def __init__(self, *, api_key: str, timeout_seconds: float) -> None:
+        if AsyncOpenAI is None:
+            raise OpenAIConfigError(
+                "openai package is required for OpenAI Responses API execution."
+            )
+        self._client = AsyncOpenAI(api_key=api_key, timeout=timeout_seconds)
+
+    async def create_response(self, **payload: Any) -> Any:
+        return await self._client.responses.create(**payload)
 
 
 class OpenAIProviderAdapter(BaseProviderAdapter):
@@ -34,13 +61,17 @@ class OpenAIProviderAdapter(BaseProviderAdapter):
         model: str = DEFAULT_OPENAI_MODEL,
         api_key: str | None = None,
         timeout_seconds: float = 30.0,
+        config: OpenAIProviderConfig | None = None,
+        client: OpenAIResponsesClient | None = None,
     ) -> None:
-        self.model = model
-        self.api_key = api_key
-        self.timeout_seconds = timeout_seconds
+        self.config = config or load_openai_provider_config()
+        self.model = model or self.config.model_l1
+        self.api_key = api_key if api_key is not None else self.config.api_key
+        self.timeout_seconds = timeout_seconds or self.config.timeout_seconds
+        self.client = client
 
     async def query(self, query: str, **kwargs) -> ProviderResponse:
-        api_key = self.api_key or os.getenv("OPENAI_API_KEY")
+        api_key = self.api_key
         if not api_key:
             return ProviderResponse(
                 status="error",
@@ -54,7 +85,7 @@ class OpenAIProviderAdapter(BaseProviderAdapter):
                 provider_metadata={"provider": "openai"},
             )
 
-        if AsyncOpenAI is None:
+        if self.client is None and AsyncOpenAI is None:
             return ProviderResponse(
                 status="error",
                 raw_answer=None,
@@ -67,15 +98,34 @@ class OpenAIProviderAdapter(BaseProviderAdapter):
                 provider_metadata={"provider": "openai"},
             )
 
-        client = AsyncOpenAI(api_key=api_key, timeout=self.timeout_seconds)
-        model = kwargs.get("model", self.model)
+        scdl_level = kwargs.get("scdl_level", "L1")
+        if scdl_level not in {"L1", "L2"}:
+            return ProviderResponse(
+                status="error",
+                raw_answer=None,
+                citations=None,
+                response_time=None,
+                error={
+                    "code": "unsupported_scdl_level",
+                    "message": "OpenAI provider supports only SCDL L1 or L2.",
+                },
+                provider_metadata={"provider": "openai"},
+            )
+
+        model = kwargs.get("model") or self.config.model_for_scdl_level(scdl_level)
+        client = self.client or OpenAIResponsesClient(
+            api_key=api_key,
+            timeout_seconds=self.timeout_seconds,
+        )
+        payload = self._build_responses_payload(
+            query=query,
+            model=model,
+            scdl_level=scdl_level,
+        )
         start = time.perf_counter()
 
         try:
-            response = await client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": query}],
-            )
+            response = await client.create_response(**payload)
             elapsed = time.perf_counter() - start
 
             raw_answer = self._extract_raw_answer(response)
@@ -102,6 +152,24 @@ class OpenAIProviderAdapter(BaseProviderAdapter):
                 provider_metadata={"provider": "openai", "model": model},
             )
 
+    def _build_responses_payload(
+        self,
+        *,
+        query: str,
+        model: str,
+        scdl_level: str,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": model,
+            "input": query,
+            "max_output_tokens": self.config.max_output_tokens,
+        }
+        if scdl_level == "L2":
+            payload["tools"] = [WEB_SEARCH_TOOL]
+            payload["tool_choice"] = "auto"
+            payload["include"] = ["web_search_call.action.sources"]
+        return payload
+
     def _map_error_status(self, exc: Exception) -> str:
         if isinstance(exc, (asyncio.TimeoutError, OpenAIAPITimeoutError)):
             return "timeout"
@@ -117,12 +185,23 @@ class OpenAIProviderAdapter(BaseProviderAdapter):
 
     def _normalize_error(self, exc: Exception, status: str) -> dict[str, str]:
         if status == "timeout":
-            return {"code": "timeout", "message": str(exc) or "Request timed out."}
+            return {"code": "timeout", "message": "OpenAI request timed out."}
         if status == "rate_limited":
-            return {"code": "rate_limited", "message": str(exc) or "Rate limit exceeded."}
-        return {"code": "provider_error", "message": str(exc) or "OpenAI request failed."}
+            return {"code": "rate_limited", "message": "OpenAI rate limit exceeded."}
+        if isinstance(exc, OpenAIAPIError):
+            return {"code": "provider_error", "message": "OpenAI request failed."}
+        return {"code": "provider_error", "message": "OpenAI request failed."}
 
     def _extract_raw_answer(self, response: Any) -> str | None:
+        output_text = self._get_attr_or_key(response, "output_text")
+        if isinstance(output_text, str):
+            return output_text
+
+        for content_item in self._iter_message_content_items(response):
+            text = self._get_attr_or_key(content_item, "text")
+            if isinstance(text, str):
+                return text
+
         choice = self._first_choice(response)
         if choice is None:
             return None
@@ -145,6 +224,23 @@ class OpenAIProviderAdapter(BaseProviderAdapter):
 
     def _extract_citations(self, response: Any) -> list[dict]:
         candidates: list[Any] = []
+        for content_item in self._iter_message_content_items(response):
+            annotations = self._get_attr_or_key(content_item, "annotations")
+            if isinstance(annotations, list):
+                candidates.extend(annotations)
+
+        response_sources = self._get_attr_or_key(response, "sources")
+        if isinstance(response_sources, list):
+            candidates.extend(response_sources)
+
+        output = self._get_attr_or_key(response, "output")
+        if isinstance(output, list):
+            for item in output:
+                action = self._get_attr_or_key(item, "action")
+                sources = self._get_attr_or_key(action, "sources")
+                if isinstance(sources, list):
+                    candidates.extend(sources)
+
         choice = self._first_choice(response)
         message = self._get_attr_or_key(choice, "message")
 
@@ -199,6 +295,21 @@ class OpenAIProviderAdapter(BaseProviderAdapter):
         if usage is not None:
             metadata["usage"] = usage
         return metadata
+
+    def _iter_message_content_items(self, response: Any) -> list[Any]:
+        output = self._get_attr_or_key(response, "output")
+        if not isinstance(output, list):
+            return []
+
+        content_items: list[Any] = []
+        for item in output:
+            item_type = self._get_attr_or_key(item, "type")
+            if item_type != "message":
+                continue
+            content = self._get_attr_or_key(item, "content")
+            if isinstance(content, list):
+                content_items.extend(content)
+        return content_items
 
     def _first_choice(self, response: Any) -> Any | None:
         choices = self._get_attr_or_key(response, "choices")

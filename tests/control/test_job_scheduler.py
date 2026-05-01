@@ -34,7 +34,7 @@ class JobSchedulerTests(unittest.TestCase):
         query_texts: list[str],
         max_queries: int | None = None,
     ) -> Audit:
-        brand = Brand(name="Acme AI")
+        brand = Brand(name=f"Acme AI {len(self.session.identity_map)}")
         audit = Audit(
             brand=brand,
             providers=providers,
@@ -127,4 +127,3 @@ class JobSchedulerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

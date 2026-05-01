@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from libs.execution.provider_adapter import BaseProviderAdapter, ProviderResponse
-from libs.storage.models import Job, JobStatus, Query, RawResponse, Run, RunStatus
+from libs.storage.models import Audit, Job, JobStatus, Query, RawResponse, Run, RunStatus
 
 
 def _map_provider_status_to_run_status(provider_status: str) -> RunStatus:
@@ -36,6 +36,13 @@ async def execute_job(
         if query_text is None:
             raise ValueError(f"Query with id={job.query_id} was not found.")
 
+        scdl_level = (
+            await session.execute(select(Audit.scdl_level).where(Audit.id == job.audit_id))
+        ).scalar_one_or_none()
+        if scdl_level is None:
+            raise ValueError(f"Audit with id={job.audit_id} was not found.")
+        scdl_level_value = scdl_level.value if hasattr(scdl_level, "value") else str(scdl_level)
+
         job.status = JobStatus.RUNNING
         await session.flush()
 
@@ -58,14 +65,24 @@ async def execute_job(
             await session.flush()
 
         try:
-            response = await provider.query(query_text)
-        except Exception as exc:
+            response = await provider.query(
+                query_text,
+                scdl_level=scdl_level_value,
+                audit_id=job.audit_id,
+                query_id=job.query_id,
+                run_number=job.run_number,
+                provider=job.provider,
+            )
+        except Exception:
             response = ProviderResponse(
                 status="error",
                 raw_answer=None,
                 citations=None,
                 response_time=None,
-                error={"code": "provider_exception", "message": str(exc)},
+                error={
+                    "code": "provider_exception",
+                    "message": "Provider raised an unexpected exception.",
+                },
                 provider_metadata={"provider": job.provider},
             )
 

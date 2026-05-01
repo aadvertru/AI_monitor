@@ -13,6 +13,7 @@ from apps.api.main import (
     get_audit_results,
     get_audit_status,
     get_audit_summary,
+    get_raw_response_inspection,
     list_audits,
     run_audit,
 )
@@ -439,6 +440,39 @@ class AuditReadRunResultsAPITests(unittest.IsolatedAsyncioTestCase):
         assert saved_audit is not None
         self.assertEqual(saved_audit.status, AuditStatus.RUNNING)
 
+    async def test_run_trigger_policy_guard_runs_before_scheduling_jobs(self) -> None:
+        owner = await self._create_user()
+        audit = await self._create_audit(
+            owner,
+            providers=["openai"],
+            runs_per_query=1,
+            query_texts=["first query"],
+        )
+
+        async with self.session_factory() as session:
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        **AUTH_ENV,
+                        "PROVIDER_MODE": "openai",
+                        "REAL_PROVIDER_ENABLED": "false",
+                    },
+                    clear=True,
+                ),
+                patch("apps.api.main.schedule_jobs_for_audit") as schedule_mock,
+                self.assertRaises(HTTPException) as context,
+            ):
+                await run_audit(
+                    audit_id=audit.id,
+                    request=self._authenticated_request(owner),
+                    session=session,
+                )
+
+        self.assertEqual(context.exception.status_code, 400)
+        self.assertIn("Real provider execution is disabled", context.exception.detail)
+        schedule_mock.assert_not_called()
+
     async def test_run_trigger_rejects_duplicate_running_audit(self) -> None:
         owner = await self._create_user()
         audit = await self._create_audit(owner, status=AuditStatus.RUNNING)
@@ -836,6 +870,165 @@ class AuditReadRunResultsAPITests(unittest.IsolatedAsyncioTestCase):
         provider_mock.assert_not_called()
         parse_mock.assert_not_called()
         score_mock.assert_not_called()
+
+    async def test_admin_can_inspect_stored_successful_raw_response_with_redaction(
+        self,
+    ) -> None:
+        owner = await self._create_user("owner@example.com")
+        admin = await self._create_user("admin@example.com", role=UserRole.ADMIN)
+        audit = await self._create_audit(
+            owner,
+            query_texts=["raw query"],
+            providers=["openai"],
+            scdl_level=SCDLLevel.L2,
+        )
+        run_id = await self._add_raw_response(
+            audit,
+            provider_status="success",
+            raw_answer="Full raw answer for inspection.",
+            provider_metadata={
+                "provider": "openai",
+                "api_key": "sk-secret",
+                "nested": {"authorization": "Bearer sk-secret"},
+            },
+            error_object=None,
+        )
+
+        async with self.session_factory() as session:
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                result = await get_raw_response_inspection(
+                    audit_id=audit.id,
+                    run_id=run_id,
+                    request=self._authenticated_request(admin),
+                    session=session,
+                )
+
+        self.assertEqual(result.audit_id, audit.id)
+        self.assertEqual(result.query, "raw query")
+        self.assertEqual(result.provider, "openai")
+        self.assertEqual(result.scdl_level, "L2")
+        self.assertEqual(result.raw_answer, "Full raw answer for inspection.")
+        self.assertEqual(result.provider_metadata["api_key"], "***")
+        self.assertEqual(result.provider_metadata["nested"]["authorization"], "***")
+        self.assertNotIn("sk-secret", str(result.model_dump()))
+
+    async def test_admin_can_inspect_error_raw_response_with_redacted_error_object(
+        self,
+    ) -> None:
+        owner = await self._create_user("owner@example.com")
+        admin = await self._create_user("admin@example.com", role=UserRole.ADMIN)
+        audit = await self._create_audit(owner, providers=["openai"])
+        run_id = await self._add_raw_response(
+            audit,
+            run_status=RunStatus.ERROR,
+            provider_status="error",
+            raw_answer=None,
+            provider_metadata={"provider": "openai"},
+            error_object={"code": "provider_error", "token": "secret-token"},
+        )
+
+        async with self.session_factory() as session:
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                result = await get_raw_response_inspection(
+                    audit_id=audit.id,
+                    run_id=run_id,
+                    request=self._authenticated_request(admin),
+                    session=session,
+                )
+
+        self.assertEqual(result.run_status, "error")
+        self.assertEqual(result.error_object["token"], "***")
+        self.assertNotIn("secret-token", str(result.model_dump()))
+
+    async def test_raw_response_inspection_requires_admin_and_existing_raw_response(
+        self,
+    ) -> None:
+        owner = await self._create_user("owner@example.com")
+        audit = await self._create_audit(owner)
+
+        async with self.session_factory() as session:
+            query = (
+                await session.execute(select(Query).where(Query.audit_id == audit.id))
+            ).scalars().first()
+            assert query is not None
+            run = Run(
+                audit_id=audit.id,
+                query_id=query.id,
+                provider="mock",
+                run_number=1,
+                status=RunStatus.SUCCESS,
+            )
+            session.add(run)
+            await session.commit()
+            await session.refresh(run)
+            run_id = run.id
+
+        async with self.session_factory() as session:
+            with (
+                patch.dict("os.environ", AUTH_ENV, clear=True),
+                self.assertRaises(HTTPException) as forbidden_context,
+            ):
+                await get_raw_response_inspection(
+                    audit_id=audit.id,
+                    run_id=run_id,
+                    request=self._authenticated_request(owner),
+                    session=session,
+                )
+
+        admin = await self._create_user("admin@example.com", role=UserRole.ADMIN)
+        async with self.session_factory() as session:
+            with (
+                patch.dict("os.environ", AUTH_ENV, clear=True),
+                self.assertRaises(HTTPException) as missing_context,
+            ):
+                await get_raw_response_inspection(
+                    audit_id=audit.id,
+                    run_id=run_id,
+                    request=self._authenticated_request(admin),
+                    session=session,
+                )
+
+        self.assertEqual(forbidden_context.exception.status_code, 403)
+        self.assertEqual(missing_context.exception.status_code, 404)
+
+    async def _add_raw_response(
+        self,
+        audit: Audit,
+        *,
+        run_status: RunStatus = RunStatus.SUCCESS,
+        provider_status: str,
+        raw_answer: str | None,
+        provider_metadata: dict,
+        error_object: dict | None,
+    ) -> int:
+        async with self.session_factory() as session:
+            query = (
+                await session.execute(select(Query).where(Query.audit_id == audit.id))
+            ).scalars().first()
+            assert query is not None
+            run = Run(
+                audit_id=audit.id,
+                query_id=query.id,
+                provider=(audit.providers or ["mock"])[0],
+                run_number=1,
+                status=run_status,
+            )
+            session.add(run)
+            await session.flush()
+            session.add(
+                RawResponse(
+                    run_id=run.id,
+                    request_snapshot={"query": query.text},
+                    raw_answer=raw_answer,
+                    citations=[{"url": "https://example.test", "title": "Example"}],
+                    provider_metadata=provider_metadata,
+                    provider_status=provider_status,
+                    response_time=0.2,
+                    error_object=error_object,
+                )
+            )
+            await session.commit()
+            return run.id
 
 
 if __name__ == "__main__":

@@ -60,6 +60,14 @@ class _UnserializableMetadataProvider(BaseProviderAdapter):
         )
 
 
+class _RaisingProvider(BaseProviderAdapter):
+    def __init__(self, exc: Exception) -> None:
+        self.exc = exc
+
+    async def query(self, query: str, **kwargs) -> ProviderResponse:
+        raise self.exc
+
+
 class WorkerExecutionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
@@ -146,6 +154,26 @@ class WorkerExecutionTests(unittest.IsolatedAsyncioTestCase):
             raw_response.error_object,
             {"code": "mock_error", "message": "Provider failed."},
         )
+
+    async def test_provider_exception_fallback_does_not_persist_raw_exception_message(
+        self,
+    ) -> None:
+        job = await self._create_job(provider_code="mock")
+        secret = "sk-test-secret"
+
+        run = await execute_job(
+            self.session,
+            job.id,
+            _RaisingProvider(RuntimeError(f"boom {secret}")),
+        )
+
+        raw_response = (
+            await self.session.execute(select(RawResponse).where(RawResponse.run_id == run.id))
+        ).scalar_one_or_none()
+        assert raw_response is not None
+        self.assertEqual(raw_response.provider_status, "error")
+        self.assertEqual(raw_response.error_object["code"], "provider_exception")
+        self.assertNotIn(secret, raw_response.error_object["message"])
 
     async def test_worker_does_not_parse_or_score(self) -> None:
         job = await self._create_job(provider_code="mock")

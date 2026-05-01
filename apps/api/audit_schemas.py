@@ -159,3 +159,19 @@ class AuditSummaryResponse(FrontendAuditSchema):
     critical_queries: list[CriticalQueryItemResponse] = Field(default_factory=list)
     competitors: list[CompetitorSummaryItemResponse] = Field(default_factory=list)
     sources: list[SourceSummaryItemResponse] = Field(default_factory=list)
+
+
+class RawResponseInspectionResponse(FrontendAuditSchema):
+    audit_id: int
+    query: str
+    provider: str
+    scdl_level: SCDLLevelValue = "L1"
+    run_id: int
+    run_number: int
+    run_status: RunStatusValue
+    raw_answer: str | None = None
+    citations: list[dict] | None = None
+    provider_metadata: dict | None = None
+    error_object: dict | None = None
+    response_time: float | None = None
+    created_at: datetime

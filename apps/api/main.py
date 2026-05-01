@@ -24,6 +24,7 @@ from apps.api.audit_schemas import (
     CompetitorSummaryItemResponse,
     ComponentScoresResponse,
     CriticalQueryItemResponse,
+    RawResponseInspectionResponse,
     SourceSummaryItemResponse,
 )
 from apps.api.database import get_db_session, init_models, should_auto_create_schema
@@ -43,6 +44,11 @@ from libs.control.job_scheduler import schedule_jobs_for_audit
 from libs.control.query_capping import cap_queries
 from libs.control.query_deduplication import deduplicate_queries
 from libs.control.query_normalization import normalize_seed_queries
+from libs.execution.pilot_config import (
+    PilotConfigError,
+    PilotPolicyError,
+    validate_audit_against_pilot_config,
+)
 from libs.storage.models import (
     Audit,
     AuditStatus,
@@ -68,6 +74,23 @@ AUDIT_NOT_FOUND_DETAIL = "Audit was not found."
 AUDIT_RUNNING_DETAIL = "Audit is already running."
 AUDIT_NOT_TRIGGERABLE_DETAIL = "Audit can only be triggered from the created state."
 AUDIT_NOT_RUNNABLE_DETAIL = "Audit has no runnable query/provider combinations."
+RAW_RESPONSE_NOT_FOUND_DETAIL = "Raw response was not found."
+RAW_RESPONSE_FORBIDDEN_DETAIL = "Raw response inspection requires admin access."
+SENSITIVE_RAW_RESPONSE_KEYS = frozenset(
+    {
+        "api_key",
+        "apikey",
+        "authorization",
+        "bearer",
+        "cookie",
+        "headers",
+        "jwt",
+        "openai_api_key",
+        "password",
+        "secret",
+        "token",
+    }
+)
 
 
 def normalize_email(value: str) -> str:
@@ -424,6 +447,21 @@ def _scdl_level_value(level: object) -> str:
     return level.value if hasattr(level, "value") else str(level)
 
 
+def _redact_sensitive_value(value: object) -> object:
+    if isinstance(value, dict):
+        redacted: dict[str, object] = {}
+        for key, child in value.items():
+            normalized_key = str(key).strip().lower()
+            if normalized_key in SENSITIVE_RAW_RESPONSE_KEYS or normalized_key.endswith("_key"):
+                redacted[str(key)] = "***"
+            else:
+                redacted[str(key)] = _redact_sensitive_value(child)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_sensitive_value(item) for item in value]
+    return value
+
+
 async def get_relative_audit_number(session: AsyncSession, audit: Audit) -> int:
     owner_filter = (
         Audit.user_id.is_(None) if audit.user_id is None else Audit.user_id == audit.user_id
@@ -532,11 +570,16 @@ async def list_audit_records(
 
 
 async def get_expected_run_count(session: AsyncSession, audit: Audit) -> int:
+    query_count = await get_effective_query_count(session, audit)
+    return query_count * len(audit.providers or []) * audit.runs_per_query
+
+
+async def get_effective_query_count(session: AsyncSession, audit: Audit) -> int:
     query_stmt = select(Query.id).where(Query.audit_id == audit.id).order_by(Query.id)
     query_ids = list((await session.execute(query_stmt)).scalars().all())
     if audit.max_queries is not None:
         query_ids = query_ids[: audit.max_queries]
-    return len(query_ids) * len(audit.providers or []) * audit.runs_per_query
+    return len(query_ids)
 
 
 async def build_audit_status_response(
@@ -590,6 +633,16 @@ async def trigger_audit_run_record(
     expected_runs = await get_expected_run_count(session, audit)
     if expected_runs == 0:
         raise HTTPException(status_code=400, detail=AUDIT_NOT_RUNNABLE_DETAIL)
+
+    try:
+        validate_audit_against_pilot_config(
+            providers=audit.providers or [],
+            query_count=await get_effective_query_count(session, audit),
+            runs_per_query=audit.runs_per_query,
+            scdl_level=_scdl_level_value(audit.scdl_level),
+        )
+    except (PilotConfigError, PilotPolicyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     scheduled_jobs = await session.run_sync(
         lambda sync_session: len(
@@ -870,6 +923,42 @@ async def build_audit_summary_response(
     )
 
 
+async def build_raw_response_inspection_response(
+    session: AsyncSession,
+    audit: Audit,
+    run_id: int,
+) -> RawResponseInspectionResponse:
+    stmt = (
+        select(Run, Query, RawResponse)
+        .join(Query, Run.query_id == Query.id)
+        .outerjoin(RawResponse, RawResponse.run_id == Run.id)
+        .where(Run.audit_id == audit.id, Run.id == run_id)
+    )
+    row = (await session.execute(stmt)).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail=RAW_RESPONSE_NOT_FOUND_DETAIL)
+
+    run, query, raw_response = row
+    if raw_response is None:
+        raise HTTPException(status_code=404, detail=RAW_RESPONSE_NOT_FOUND_DETAIL)
+
+    return RawResponseInspectionResponse(
+        audit_id=audit.id,
+        query=query.text,
+        provider=run.provider,
+        scdl_level=_scdl_level_value(audit.scdl_level),
+        run_id=run.id,
+        run_number=run.run_number,
+        run_status=_run_status_value(run.status),
+        raw_answer=raw_response.raw_answer,
+        citations=raw_response.citations,
+        provider_metadata=_redact_sensitive_value(raw_response.provider_metadata),
+        error_object=_redact_sensitive_value(raw_response.error_object),
+        response_time=raw_response.response_time,
+        created_at=raw_response.created_at,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if should_auto_create_schema():
@@ -1058,4 +1147,29 @@ async def get_audit_summary(
         raise
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=500, detail="Failed to load audit summary.") from exc
+
+
+@app.get(
+    "/audits/{audit_id}/runs/{run_id}/raw",
+    response_model=RawResponseInspectionResponse,
+)
+async def get_raw_response_inspection(
+    audit_id: int,
+    run_id: int,
+    request: Request,
+    session: AsyncSession = DB_SESSION_DEPENDENCY,
+) -> RawResponseInspectionResponse:
+    try:
+        current_user = await get_authenticated_user_from_request(session, request)
+        if not _is_admin(current_user):
+            raise HTTPException(status_code=403, detail=RAW_RESPONSE_FORBIDDEN_DETAIL)
+        audit, _brand = await load_accessible_audit(session, audit_id, current_user)
+        return await build_raw_response_inspection_response(session, audit, run_id)
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to inspect raw response.",
+        ) from exc
 

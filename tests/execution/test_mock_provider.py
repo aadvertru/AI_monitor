@@ -25,7 +25,10 @@ class MockProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, "error")
         self.assertIsNone(response.raw_answer)
         self.assertIsNone(response.citations)
-        self.assertEqual(response.error, {"code": "mock_error", "message": "Deterministic mock error."})
+        self.assertEqual(
+            response.error,
+            {"code": "mock_error", "message": "Deterministic mock error."},
+        )
 
     async def test_repeated_calls_with_same_input_are_identical(self) -> None:
         adapter = MockProviderAdapter(mode="success")
