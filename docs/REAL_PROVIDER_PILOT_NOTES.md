@@ -30,6 +30,23 @@ scores with:
 .\venv\Scripts\python.exe scripts\process_audit_results.py --audit-id <id>
 ```
 
+The full local backend pipeline can be run end-to-end with:
+
+```powershell
+.\venv\Scripts\python.exe scripts\run_audit_pipeline.py --audit-id <id>
+```
+
+For controlled API-layer validation, admins can run the same full pipeline with:
+
+```text
+POST /dev/audits/{audit_id}/run-pipeline
+```
+
+This endpoint is intentionally dev/admin-only. It requires authentication,
+rejects non-admin users, applies the existing audit access checks, and returns
+only the safe pipeline summary. It is not a public production execution
+contract.
+
 For this validation pass, temporary SQLite databases under `testtmp/` were used
 and a dummy non-secret key was set only to reach the adapter capability check.
 The OpenAI SDK is not installed in the current environment, so no real OpenAI

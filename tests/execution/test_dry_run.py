@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from libs.execution.audit_execution import execute_audit_jobs
 from libs.execution.dry_run import execute_real_provider_dry_run
 from libs.execution.pilot_config import PilotPolicyError, RealProviderPilotConfig
 from libs.execution.provider_adapter import BaseProviderAdapter, ProviderResponse
@@ -157,6 +159,24 @@ class RealProviderDryRunTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.executed_jobs, 2)
         self.assertEqual(result.success_count, 2)
         self.assertEqual(len(raw_responses), 2)
+
+    async def test_dry_run_reuses_audit_job_execution_service(self) -> None:
+        audit = await self._create_audit()
+        provider = _RecordingProvider()
+
+        with patch(
+            "libs.execution.dry_run.execute_audit_jobs",
+            wraps=execute_audit_jobs,
+        ) as execution_service:
+            result = await execute_real_provider_dry_run(
+                self.session,
+                audit.id,
+                pilot_config=_enabled_openai_config(),
+                provider_factory=lambda _provider_code: provider,
+            )
+
+        self.assertEqual(result.audit_status, "completed")
+        execution_service.assert_called_once()
 
     async def test_safe_metadata_does_not_expose_api_key(self) -> None:
         audit = await self._create_audit()

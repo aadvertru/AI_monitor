@@ -1,250 +1,393 @@
-# Phase F2 — Real Response Post-Processing and Analysis Tasks
+# Phase F3 — Backend Audit Pipeline Orchestration Tasks
 
-This file contains tasks for closing the post-processing gap after the first real OpenAI provider execution.
+This file contains tasks for turning the current manual real-provider flow into a reusable backend pipeline.
 
 Current state:
-- OpenAI real provider execution can save `RawResponse`.
-- Parser/scoring/aggregation are not yet automatically applied to stored real raw responses.
-- The next goal is to process stored responses, verify UI, test L2 source mapping, and analyze Russian-language parser/scoring quality.
+- `POST /audits/{id}/run` schedules jobs / marks audit running.
+- Provider execution and post-processing may still require separate CLI/manual steps.
+- The next goal is to create a reusable backend flow:
+  - schedule jobs
+  - execute pending jobs
+  - save raw responses
+  - post-process raw responses
+  - expose updated summary/results/sources
+  - set final audit status
 
-Implementation note:
-- TASK-135 must start by inspecting existing parser/scoring function signatures.
-- The post-processing service should adapt storage records into the existing DTO/input shape expected by parser/scoring.
-- Do not change parser/scoring contracts during this phase unless a task explicitly escalates and is approved.
+Do not start frontend integration until this backend pipeline is stable.
 
 ---
 
-## TASK-135 — Add audit result post-processing service
+## TASK-140 — Extract reusable audit job execution service
 
 ### Status
 Ready
 
 ### Goal
-Add a backend service that processes stored successful raw audit responses into parsed results, scores, and refreshed audit aggregation.
+Extract audit job execution into a reusable backend service that can execute pending jobs for one audit without depending on dry-run CLI logic.
 
 ### Why
-Real OpenAI provider execution currently stores `RawResponse`, but the audit remains incomplete until existing parser, scoring, and aggregation logic are applied to those stored responses.
+The current real-provider flow is split across manual steps, and job execution logic is partly tied to real-provider dry-run behavior. A reusable execution service is needed before building a full backend audit pipeline that can be called by CLI, admin/debug endpoints, or future workers.
 
 ### Context
-The real OpenAI pilot can now execute provider calls and save raw answers. This task closes the `raw → parsed → scored → aggregated` gap without calling OpenAI again. The service must be reusable by CLI, admin/debug tools, and future background execution paths.
-
-Expected flow:
+Current flow is approximately:
 
 ```text
-successful runs without ParsedResult
-→ load stored RawResponse
-→ run existing parser
-→ run existing scoring
-→ save ParsedResult
-→ save Score
-→ refresh aggregation/summary/status
+POST /audits/{id}/run
+→ create/schedule jobs
+→ manually run dry-run execution
+→ manually run post-processing CLI
+→ refresh UI
 ```
 
+The desired backend foundation is:
+
+```text
+schedule jobs
+→ execute pending jobs for one audit
+→ save raw responses
+→ later post-process results
+```
+
+This task only extracts and stabilizes the job execution service. It must not add the full pipeline orchestration yet.
+
 ### Scope
-- Add a reusable backend service/function for post-processing one audit by `audit_id`.
-- Find successful runs for the audit that have stored raw responses but do not yet have parsed results and/or scores.
-- Load `raw_responses.raw_answer` and related provider response data from storage.
-- Run the existing parser on stored raw response data.
-- Run the existing scoring logic on the parsed result.
-- Persist `ParsedResult` records using existing storage patterns.
-- Persist `Score` records using existing storage patterns.
-- Ensure existing summary/results endpoints reflect newly saved `ParsedResult` and `Score` records.
-- Update audit status using explicit post-processing rules:
-  - `completed` only when all expected runs are terminal and successful/error accounting is complete.
-  - `partial` when terminal provider/parser/scoring errors exist or some expected runs cannot be processed.
-  - do not mark the audit as `failed` only because the provider run succeeded but the parser did not find the brand.
-- Reconstruct or adapt the stored raw response into the existing parser input contract without changing parser signatures, for example:
-  - stored `raw_answer`
-  - stored citations/sources where available
-  - provider metadata where available
-  - brand/audit/query context required by the parser
-- Keep the transformation boundary explicit:
-  - storage data → existing parser/scoring DTO/input shape → parser → scoring → storage
-- Make the service idempotent:
-  - already processed runs must not create duplicate parsed results or duplicate scores
-  - re-running the service should be safe
-- Return a structured processing summary, including:
+- Add a reusable backend service/function for executing pending jobs for one audit, for example:
+  - `execute_audit_jobs(session, audit_id, provider_factory=...)`
+  - or a project-equivalent name/signature.
+- Execute only jobs belonging to the requested audit.
+- Execute only pending/runnable jobs according to existing job/run state rules.
+- Use existing provider adapter/provider factory patterns where available.
+- Preserve existing mock-provider execution behavior.
+- Preserve existing OpenAI real-provider guardrails from the real-provider pilot.
+- Save raw responses through the existing raw response storage path.
+- Normalize provider errors using existing provider/run error handling.
+- Return a structured execution summary, including:
   - audit id
-  - total runs inspected
-  - runs processed
-  - runs skipped because already processed
-  - runs skipped because raw response is missing
-  - runs skipped because run status is not successful
-  - per-run processing errors, reported without failing the whole service where possible
-  - fatal service errors, such as missing audit or database failure
+  - total jobs inspected
+  - jobs executed
+  - jobs skipped
+  - successful runs
+  - failed/error/timeout/rate-limited runs
+  - per-job errors
+  - fatal service error, if any
+- Refactor existing dry-run CLI/service code to call this reusable execution service where practical.
 - Add tests for service behavior.
 
 ### Out of scope
-- Do not add the CLI command in this task.
-- Do not call the real OpenAI API.
-- Do not re-run provider execution.
-- Do not change parser logic.
-- Do not change scoring formulas.
-- Do not change provider adapter behavior.
-- Do not change raw response storage contract.
-- Do not add frontend UI.
-- Do not expose raw answers in normal user-facing UI.
-- Do not implement background workers or scheduling.
-- Do not process all audits globally unless explicitly needed for tests; this task is audit-id scoped.
+- Do not implement full audit pipeline orchestration.
+- Do not run post-processing from this service.
+- Do not call parser or scoring.
+- Do not add new frontend UI.
+- Do not add public user-facing endpoint.
+- Do not introduce background worker/queue infrastructure.
+- Do not change parser, scoring, aggregation, raw response, or provider contracts.
+- Do not change OpenAI adapter behavior except where required to call it through the service.
+- Do not increase real-provider pilot caps.
+- Do not call real OpenAI API in automated tests.
 
 ### Acceptance criteria
-- A stored successful raw response can be parsed, scored, and saved.
-- A run without raw response is skipped safely and reported.
-- A non-successful run is skipped safely and reported.
-- A run that already has parsed/scored output is skipped or updated according to the existing storage convention without duplication.
-- Re-running the service for the same audit is safe and does not create duplicate records.
-- Existing summary/results endpoints reflect newly saved parsed/scored data after processing.
-- Audit status follows the explicit post-processing rules from this task.
-- Parser input is built by adapting stored response data into the existing parser contract without changing parser signatures.
-- The service returns a structured processing summary with separate per-run errors and fatal service errors.
-- Existing mock-provider pipeline behavior remains unchanged.
-- Existing parser/scoring tests still pass.
-- No real external provider API calls happen in automated tests.
+- Pending jobs for a single audit can be executed through the reusable service.
+- Jobs from other audits are not executed.
+- Already terminal jobs are skipped safely.
+- Successful provider responses create or update raw response records using existing storage behavior.
+- Provider errors are recorded as controlled run/job errors.
+- Mock-provider execution still works through the new service.
+- OpenAI execution still respects real-provider enablement, provider mode, and caps.
+- Existing dry-run path uses the reusable service or remains clearly equivalent without duplicated execution logic.
+- Service returns a structured execution summary.
+- Existing backend tests still pass.
+- Automated tests do not call real OpenAI API.
 
 ### Test requirements
-- Add service-level test for processing one successful stored raw response.
-- Add test confirming `ParsedResult` is saved.
-- Add test confirming `Score` is saved.
-- Add test confirming existing summary/results endpoint data reflects newly saved parsed/scored records.
-- Add test confirming audit status behavior for completed processing.
-- Add test confirming audit status behavior for partial processing with terminal errors or skipped runs.
-- Add test confirming parser miss / brand-not-found does not automatically mark audit as failed.
-- Add test confirming stored raw response data is adapted into the existing parser input contract.
-- Add test for missing raw response skip behavior.
-- Add test for non-successful run skip behavior.
-- Add idempotency test confirming re-running does not duplicate parsed results or scores.
-- Add test confirming parser/scoring are run from stored raw response data, not from a provider call.
-- Add assertion or mock guard confirming no real OpenAI API call is made.
+- Add service-level test for executing pending mock-provider jobs for one audit.
+- Add test confirming jobs from another audit are not executed.
+- Add test confirming terminal jobs are skipped.
+- Add test confirming successful execution stores raw response.
+- Add test confirming provider error is recorded safely.
+- Add test confirming execution summary includes inspected/executed/skipped/success/error counts.
+- Add test confirming OpenAI real-provider execution remains blocked when disabled.
+- Add test confirming real-provider caps are still enforced.
+- Add regression test for dry-run path if it is refactored to call the new service.
+- Add assertion or mock guard confirming no real OpenAI API call is made in automated tests.
 
 ### Files likely affected
 Optional hint, not a hard boundary.
-- `apps/api/...post_processing...`
+- `apps/api/...execution...`
 - `apps/api/...services...`
-- `apps/api/...aggregation...`
-- `apps/api/...repositories...`
-- `libs/...parser...`
-- `libs/...scoring...`
-- `tests/...post_processing...`
-- `tests/...aggregation...`
+- `apps/api/...providers...`
+- `apps/api/...orchestrator...`
+- `apps/api/...dry_run...`
+- `tests/...execution...`
+- `tests/...providers...`
+- `tests/...dry_run...`
 
 ### Commands
 Use project commands from `/AGENTS.md`.
 
 At minimum, run:
-- backend post-processing service tests
-- backend parser/scoring tests
-- backend aggregation tests affected by this service
-- backend audit API tests if audit status/summary behavior is affected
+- backend execution service tests
+- backend provider tests
+- backend dry-run tests if refactored
+- backend audit API tests affected by run/job behavior
 - backend lint/typecheck commands if available
 
 ### Dependencies
+- TASK-128 — Define real provider pilot constraints
 - TASK-130 — Implement OpenAI real provider adapter for L1 and L2
 - TASK-131 — Add real-provider dry-run mode
-- TASK-132 — Add raw response inspection screen/log
+- TASK-135 — Add audit result post-processing service
 
 ### Escalate if
-- Existing storage model cannot link `Run`, `RawResponse`, `ParsedResult`, and `Score` unambiguously.
-- Existing parser requires provider-specific input that cannot be reconstructed from stored raw response data.
-- Existing scoring requires fields not produced by the parser.
-- Existing summary/results endpoints cannot reflect newly saved parsed/scored data without changing their contracts.
-- Parser/scoring signatures require a DTO/input shape that cannot be reconstructed from storage without contract changes.
-- Idempotent processing cannot be implemented without a schema or uniqueness decision.
-- Audit status rules are unclear after post-processing.
+- Existing job/run storage cannot identify pending jobs for one audit reliably.
+- Existing dry-run logic cannot be refactored without changing provider contracts.
+- Provider execution requires changing scheduler/orchestrator contracts.
+- Raw response storage path is ambiguous or duplicated.
+- Real-provider policy guard cannot be reused from this service.
+- Background worker/queue infrastructure becomes necessary to complete this task.
+- Implementing this task requires changing parser, scoring, aggregation, or raw response contracts.
+
+### Done means
+Inherits project defaults from `/AGENTS.md`.
+
+Additional completion requirements:
+- PR summary explains how the service is reused by dry-run or why dry-run remains separate.
+- PR summary confirms no parser/scoring/post-processing is run by this service.
+- PR summary confirms no real OpenAI API calls are made in automated tests.
+
+---
+
+## TASK-141 — Add full audit pipeline service
+
+### Status
+Ready
+
+### Goal
+Add a reusable backend service that runs the full audit pipeline for one audit: schedule jobs, execute jobs, post-process stored raw responses, and return a structured pipeline summary.
+
+### Why
+The system needs one backend-level flow that can complete an audit from scheduled execution to parsed/scored/aggregated results without requiring separate manual dry-run and post-processing commands.
+
+### Context
+TASK-140 extracted reusable job execution into a service. TASK-135 added post-processing for stored raw responses. This task composes existing pieces into one service-level pipeline.
+
+Desired flow:
+
+```text
+run_audit_pipeline(session, audit_id)
+→ schedule/create jobs if needed
+→ execute pending jobs
+→ store raw responses
+→ post-process raw responses
+→ ensure summary/results endpoints reflect parsed/scored data
+→ set final audit status
+→ return pipeline summary
+```
+
+This task should add orchestration only. It must not move business logic into routes or CLI scripts.
+
+### Scope
+- Add a reusable full pipeline service/function for one audit, for example:
+  - `run_audit_pipeline(session, audit_id, provider_factory=...)`
+  - or a project-equivalent name/signature.
+- Reuse existing scheduling/job creation behavior.
+- Reuse `execute_audit_jobs` from TASK-140.
+- Reuse post-processing service from TASK-135.
+- Ensure existing summary/results endpoints reflect newly saved parsed/scored data after the pipeline completes.
+- Apply explicit audit status rules:
+  - `running` while pipeline is executing.
+  - `completed` when all expected runs are terminal and successful/error accounting is complete, even if the brand was not found.
+  - `partial` when some terminal provider/parser/scoring errors exist but usable results exist.
+  - `failed` only when no usable data can be produced or a fatal pipeline error prevents completion.
+- Return a structured pipeline summary, including:
+  - audit id
+  - scheduling summary
+  - execution summary
+  - post-processing summary
+  - final audit status
+  - fatal error, if any
+- Make the service safe to re-run:
+  - do not duplicate jobs if already scheduled
+  - do not re-execute terminal jobs
+  - do not duplicate parsed results or scores
+- Add tests for pipeline orchestration behavior.
+
+### Out of scope
+- Do not add CLI command in this task.
+- Do not add frontend UI.
+- Do not add public user-facing endpoint.
+- Do not introduce background worker/queue infrastructure.
+- Do not change parser logic.
+- Do not change scoring formulas.
+- Do not change provider adapter behavior.
+- Do not change raw response storage contract.
+- Do not increase real-provider pilot caps.
+- Do not call real OpenAI API in automated tests.
+
+### Acceptance criteria
+- Full pipeline service can run one audit from scheduled jobs through post-processing.
+- Service reuses scheduling, job execution, and post-processing services instead of duplicating their logic.
+- Pipeline sets audit status to `running` while executing.
+- Pipeline ends with `completed`, `partial`, or `failed` according to explicit rules.
+- Provider success with brand not found results in completed/low-score output, not failed status.
+- Re-running the pipeline is safe and does not duplicate jobs, raw responses, parsed results, or scores.
+- Summary/results endpoints reflect processed data after pipeline completion.
+- Service returns a structured pipeline summary.
+- Existing mock-provider behavior remains unchanged.
+- Existing real-provider guardrails remain enforced.
+- Existing backend tests still pass.
+- Automated tests do not call real OpenAI API.
+
+### Test requirements
+- Add service-level test for full pipeline on a mock-provider audit.
+- Add test confirming scheduling is reused or not duplicated on re-run.
+- Add test confirming pending jobs are executed through `execute_audit_jobs`.
+- Add test confirming post-processing service is called after execution.
+- Add test confirming final `completed` status when all expected runs are terminal and usable.
+- Add test confirming brand-not-found does not mark audit as failed.
+- Add test confirming `partial` status when some runs/errors are terminal but usable results exist.
+- Add test confirming `failed` status only for fatal/no-usable-data cases.
+- Add idempotency test for re-running the full pipeline.
+- Add test confirming summary/results reflect parsed/scored data after pipeline run.
+- Add assertion or mock guard confirming no real OpenAI API call is made in automated tests.
+
+### Files likely affected
+Optional hint, not a hard boundary.
+- `apps/api/...pipeline...`
+- `apps/api/...services...`
+- `apps/api/...orchestrator...`
+- `apps/api/...execution...`
+- `apps/api/...post_processing...`
+- `tests/...pipeline...`
+- `tests/...execution...`
+- `tests/...post_processing...`
+
+### Commands
+Use project commands from `/AGENTS.md`.
+
+At minimum, run:
+- backend pipeline service tests
+- backend execution service tests
+- backend post-processing tests
+- backend audit API tests affected by audit status/summary behavior
+- backend lint/typecheck commands if available
+
+### Dependencies
+- TASK-135 — Add audit result post-processing service
+- TASK-140 — Extract reusable audit job execution service
+
+### Escalate if
+- Existing scheduling logic cannot be called idempotently.
+- Existing job model cannot distinguish scheduled/pending/terminal jobs reliably.
+- Pipeline status transitions conflict with existing audit state rules.
+- Summary/results endpoints cannot reflect processed data without contract changes.
+- Full pipeline orchestration requires a queue/background worker system.
+- Idempotency cannot be implemented without schema or uniqueness changes.
 - Implementing this task requires changing parser, scoring, provider, raw response, or aggregation contracts.
 
 ### Done means
 Inherits project defaults from `/AGENTS.md`.
 
 Additional completion requirements:
-- PR summary explains how the service is idempotent.
-- PR summary confirms no real provider calls are made.
-- PR summary includes the processing summary shape returned by the service.
+- PR summary explains the pipeline order: schedule → execute → post-process → final status.
+- PR summary explains idempotency behavior.
+- PR summary confirms no real OpenAI API calls are made in automated tests.
 
 ---
 
-## TASK-136 — Add CLI command to process stored audit results
+## TASK-142 — Add CLI command to run full audit pipeline
 
 ### Status
 Ready
 
 ### Goal
-Add a local CLI command that runs the audit result post-processing service for a specific stored audit.
+Add a local CLI command that runs the full backend audit pipeline for one audit by id.
 
 ### Why
-After real OpenAI provider execution saves raw responses, developers need a safe manual command to process stored raw results into parsed results, scores, and refreshed summary before inspecting the UI.
+Developers need a single safe command to complete an audit end-to-end from scheduled jobs through execution, post-processing, final status, and UI-ready results without manually running separate dry-run and post-processing commands.
 
 ### Context
-TASK-135 added a reusable post-processing service for one `audit_id`. This task must add only a thin CLI wrapper around that service. Business logic must remain in the service, not in the script.
+TASK-141 added a reusable full audit pipeline service. This task must add only a thin CLI wrapper around that service. Business logic must remain in the pipeline service, not in the CLI script.
 
 Expected local usage example:
 
 ```powershell
-.\venv\Scripts\python.exe scripts\process_audit_results.py --audit-id 8
+.\venv\Scripts\python.exe scripts\run_audit_pipeline.py --audit-id 8
+```
+
+Expected flow:
+
+```text
+parse audit id
+→ initialize config/database session
+→ call run_audit_pipeline(session, audit_id)
+→ print safe pipeline summary
+→ exit with correct code
 ```
 
 ### Scope
-- Add a CLI script or project-equivalent command for processing one audit by id.
+- Add a CLI script or project-equivalent command for running the full pipeline for one audit.
 - Accept required `--audit-id` argument.
 - Initialize backend config/database session using the existing project pattern.
-- Call the post-processing service from TASK-135.
+- Call the full pipeline service from TASK-141.
 - Print a safe structured summary to stdout, including:
   - audit id
-  - total runs inspected
-  - runs processed
-  - already processed skips
-  - missing raw response skips
-  - non-successful run skips
-  - errors, if any
-- Return successful process exit code when processing completes without fatal error.
-- Return non-zero process exit code for invalid arguments, missing audit, or fatal processing failure.
-- Ensure the CLI does not print raw answers, API keys, provider secrets, auth cookies, or sensitive config.
+  - scheduling summary
+  - execution summary
+  - post-processing summary
+  - final audit status
+  - fatal error, if any
+- Return successful process exit code when the pipeline completes without fatal error.
+- Return non-zero process exit code for invalid arguments, missing audit, or fatal pipeline failure.
+- Ensure CLI output does not print raw answers, prompts, API keys, provider secrets, auth cookies, or sensitive config.
 - Add tests for CLI behavior with mocked service/database where practical.
-- Document the command in pilot notes or the relevant developer docs.
+- Document the command in developer docs or pilot notes.
 
 ### Out of scope
-- Do not implement post-processing logic inside the CLI.
-- Do not call the real OpenAI API.
-- Do not trigger provider execution.
-- Do not process all audits globally.
+- Do not implement pipeline business logic inside the CLI.
+- Do not call parser/scoring directly from the CLI.
+- Do not call provider adapters directly from the CLI.
 - Do not add frontend UI.
-- Do not expose raw provider answers.
+- Do not add public user-facing endpoint.
+- Do not process all audits globally.
+- Do not introduce background worker/queue infrastructure.
 - Do not change parser logic.
 - Do not change scoring formulas.
-- Do not change aggregation logic.
-- Do not change storage contracts.
-- Do not add background workers or scheduler integration.
+- Do not change provider adapter behavior.
+- Do not change raw response storage contract.
+- Do not increase real-provider pilot caps.
+- Do not call real OpenAI API in automated tests.
 
 ### Acceptance criteria
 - CLI can be run with `--audit-id`.
 - CLI can be executed from the repository root on Windows PowerShell, for example:
-  - `.\venv\Scripts\python.exe scripts\process_audit_results.py --audit-id 8`
-- CLI calls the post-processing service from TASK-135.
-- CLI prints safe processing summary.
+  - `.\venv\Scripts\python.exe scripts\run_audit_pipeline.py --audit-id 8`
+- CLI calls the full pipeline service from TASK-141.
+- CLI prints a safe structured pipeline summary.
 - CLI exits non-zero for missing or invalid `--audit-id`.
-- CLI exits non-zero for missing audit or fatal service error.
-- CLI output does not include raw answers or secrets.
+- CLI exits non-zero for missing audit or fatal pipeline failure.
+- CLI output does not include raw answers, prompts, API keys, provider secrets, auth cookies, or sensitive config.
 - CLI command is documented.
 - Existing backend tests still pass.
-- No real external provider API calls happen in automated tests.
+- Automated tests do not call real OpenAI API.
 
 ### Test requirements
 - Add test for CLI argument parsing with valid `--audit-id`.
 - Add test or smoke check confirming the script import path works when executed from the repository root.
-- Add test confirming CLI calls the post-processing service.
+- Add test confirming CLI calls the full pipeline service.
 - Add test for missing `--audit-id`.
 - Add test for invalid `--audit-id`.
 - Add test for service success summary output.
-- Add test for service fatal error producing non-zero exit code.
-- Add test or assertion confirming CLI output does not include raw answers or secrets.
-- Add assertion or mock guard confirming no real OpenAI API call is made.
+- Add test for fatal service error producing non-zero exit code.
+- Add test or assertion confirming CLI output does not include raw answers, prompts, API keys, provider secrets, or auth cookies.
+- Add assertion or mock guard confirming no real OpenAI API call is made in automated tests.
 
 ### Files likely affected
 Optional hint, not a hard boundary.
-- `scripts/process_audit_results.py`
-- `apps/api/...post_processing...`
+- `scripts/run_audit_pipeline.py`
+- `apps/api/...pipeline...`
 - `apps/api/...database...`
 - `tests/...cli...`
-- `tests/...post_processing...`
+- `tests/...pipeline...`
 - `docs/...`
 - `docs/REAL_PROVIDER_PILOT_NOTES.md`
 
@@ -253,20 +396,20 @@ Use project commands from `/AGENTS.md`.
 
 At minimum, run:
 - backend CLI tests
-- backend post-processing service tests
-- backend parser/scoring tests if touched
+- backend pipeline service tests
+- backend execution/post-processing tests if touched
 - backend lint/typecheck commands if available
 
 ### Dependencies
-- TASK-135 — Add audit result post-processing service
+- TASK-141 — Add full audit pipeline service
 
 ### Escalate if
 - The project has no clear way to initialize config/database sessions from scripts.
 - The CLI cannot be executed from the repository root without import path hacks.
-- CLI execution would require duplicating service logic.
-- The post-processing service cannot distinguish fatal errors from per-run processing errors.
+- CLI execution would require duplicating pipeline service logic.
+- The pipeline service cannot distinguish fatal errors from recoverable per-run errors.
 - Missing audit behavior is unclear.
-- Running the CLI would require real OpenAI API calls.
+- Running CLI tests would require real OpenAI API calls.
 - Safe output cannot be guaranteed without exposing raw response content.
 
 ### Done means
@@ -274,97 +417,230 @@ Inherits project defaults from `/AGENTS.md`.
 
 Additional completion requirements:
 - Document the exact command for Windows PowerShell local usage.
-- PR summary confirms the CLI is a thin wrapper around the service.
-- PR summary confirms no raw answers or secrets are printed.
+- PR summary confirms the CLI is a thin wrapper around the full pipeline service.
+- PR summary confirms no raw answers, prompts, or secrets are printed.
 
 ---
 
-## TASK-137 — Process current real audit and verify UI
+## TASK-143 — Stabilize audit status transitions
 
 ### Status
 Ready
 
 ### Goal
-Process the current stored real OpenAI audit and manually verify that parsed results, scores, summary, and UI views update correctly.
+Stabilize and document audit status transitions for scheduled, running, completed, partial, and failed audits across scheduling, execution, post-processing, and full pipeline runs.
 
 ### Why
-The real OpenAI pilot has already produced stored raw responses, but the product value is only visible after post-processing converts raw responses into parsed results, scores, aggregation, and frontend display.
+The backend pipeline now has multiple stages that can succeed, partially fail, or fail fatally. Audit status must be predictable so the UI, CLI, and future workers can correctly represent audit progress and final results.
 
 ### Context
-TASK-135 added the post-processing service. TASK-136 added the CLI command for processing one stored audit by `audit_id`.
+TASK-140 added reusable job execution. TASK-141 added full audit pipeline orchestration. TASK-142 added a CLI wrapper for the full pipeline. Earlier tasks established that provider success with brand not found is a valid completed audit result, not a failed audit.
 
-The immediate target is the current real audit created during testing, for example audit `#8`, unless another audit id is specified at execution time. If audit `#8` is unavailable, use the latest OpenAI-only audit with a successful stored `RawResponse`.
-
-Expected manual flow:
+Expected audit status meaning:
 
 ```text
-dry-run provider already saved RawResponse
-→ run process_audit_results CLI
-→ refresh UI
-→ inspect results page
-→ inspect summary page
-→ verify raw answer is not exposed in normal UI
+created   — audit exists, jobs not yet running
+running   — scheduling/execution/post-processing is in progress
+completed — all expected runs are terminal and processed/accounted for; brand may or may not be found
+partial   — some usable results exist, but some runs or processing steps failed/skipped
+failed    — no usable data can be produced, or a fatal pipeline error prevents completion
 ```
 
 ### Scope
-- Select the current real OpenAI audit to process.
-- If the default example audit id is unavailable, select the latest OpenAI-only audit with a successful stored `RawResponse`.
-- Run the CLI from TASK-136 for that audit.
-- Confirm the CLI reports processed/skipped/error counts clearly.
-- Confirm successful raw responses produce `ParsedResult` records.
-- Confirm successful parsed results produce `Score` records.
-- Confirm audit summary/aggregation is refreshed.
-- Refresh frontend UI and manually verify:
-  - audit detail/status page
-  - results page
-  - summary page
-  - competitors section, if parser extracts competitors
-  - sources section, if sources are available
-- Confirm summary is no longer only default zero values when successful parsed/scored data exists.
-- Confirm raw answer is not exposed in normal user-facing UI.
-- Record observations and issues in `docs/REAL_PROVIDER_PILOT_NOTES.md` or a project-equivalent notes document.
-- Record any discovered bugs as follow-up bug/task entries.
+- Review current audit status transitions across:
+  - audit creation
+  - job scheduling
+  - job execution
+  - post-processing
+  - full pipeline service
+  - CLI pipeline command
+- Centralize or document status transition rules in one backend helper/service if the project structure supports it.
+- Ensure status behavior follows these rules:
+  - audit starts as `created` or the existing equivalent after creation
+  - audit becomes `running` when pipeline execution starts
+  - audit becomes `completed` when all expected runs are terminal and processed/accounted for
+  - audit becomes `partial` when usable results exist but some runs or processing steps failed/skipped
+  - audit becomes `failed` only for fatal/no-usable-data cases
+  - parser brand-not-found result does not make audit `failed`
+- Ensure summary/results endpoints remain inspectable for `partial` and `failed` audits where data exists.
+- Add or update tests covering status transitions.
+- Document the status rules in backend docs or code comments.
 
 ### Out of scope
-- Do not implement new parser logic in this task.
-- Do not change scoring formulas in this task.
-- Do not change aggregation definitions in this task.
-- Do not change OpenAI adapter behavior unless a tiny blocking pilot fix is explicitly required and documented.
+- Do not add new audit statuses.
+- Do not redesign the audit state machine.
+- Do not add frontend UI changes.
+- Do not add background workers or queue infrastructure.
+- Do not change parser logic.
+- Do not change scoring formulas.
+- Do not change provider adapter behavior.
+- Do not change raw response storage contract.
+- Do not call real OpenAI API in automated tests.
+
+### Acceptance criteria
+- Status transitions are implemented or documented in one clear backend location.
+- Audit creation starts with `created` or the project-approved equivalent.
+- Pipeline execution sets status to `running`.
+- Successful full pipeline sets status to `completed`.
+- Brand-not-found parsed result can still produce `completed`.
+- Mixed success/error with usable results produces `partial`.
+- Fatal/no-usable-data case produces `failed`.
+- `partial` audits remain inspectable through results/summary endpoints where data exists.
+- Existing mock-provider behavior remains compatible.
+- Existing OpenAI real-provider guardrails remain compatible.
+- Existing backend tests still pass.
+- Automated tests do not call real OpenAI API.
+
+### Test requirements
+- Add test for created audit initial status.
+- Add test for status becoming `running` when pipeline starts.
+- Add test for `completed` after all expected runs are terminal and processed.
+- Add test confirming brand-not-found does not mark audit as `failed`.
+- Add test for `partial` when one or more runs/processes fail but usable results exist.
+- Add test for `failed` when no usable data can be produced or a fatal pipeline error occurs.
+- Add test confirming `partial` audit data remains inspectable through results/summary where available.
+- Add regression test confirming full pipeline status summary matches persisted audit status.
+- Add assertion or mock guard confirming no real OpenAI API call is made in automated tests.
+
+### Files likely affected
+Optional hint, not a hard boundary.
+- `apps/api/...pipeline...`
+- `apps/api/...status...`
+- `apps/api/...models/audit...`
+- `apps/api/...routes/audits...`
+- `apps/api/...post_processing...`
+- `tests/...pipeline...`
+- `tests/...audits...`
+- `tests/...status...`
+- `docs/...`
+
+### Commands
+Use project commands from `/AGENTS.md`.
+
+At minimum, run:
+- backend pipeline tests
+- backend audit API tests
+- backend post-processing tests
+- backend status transition tests
+- backend lint/typecheck commands if available
+
+### Dependencies
+- TASK-135 — Add audit result post-processing service
+- TASK-140 — Extract reusable audit job execution service
+- TASK-141 — Add full audit pipeline service
+- TASK-142 — Add CLI command to run full audit pipeline
+
+### Escalate if
+- Existing persisted statuses differ from the documented status model.
+- Existing frontend depends on different status meanings.
+- Status transition rules require adding new statuses.
+- Results/summary endpoints cannot safely display partial/failed audits.
+- Fatal versus recoverable error classification is ambiguous.
+- Implementing this task requires changing parser, scoring, provider, raw response, or aggregation contracts.
+
+### Done means
+Inherits project defaults from `/AGENTS.md`.
+
+Additional completion requirements:
+- PR summary describes the final status transition rules.
+- PR summary confirms brand-not-found is not treated as audit failure.
+- PR summary confirms no real OpenAI API calls are made in automated tests.
+
+---
+
+## TASK-144 — Verify full backend pipeline on mock and OpenAI audits
+
+### Status
+Ready
+
+### Goal
+Verify that the full backend audit pipeline works end-to-end for both mock-provider audits and small OpenAI real-provider pilot audits.
+
+### Why
+After extracting execution, adding full pipeline orchestration, adding CLI support, and stabilizing statuses, the project needs a controlled verification pass proving that the backend pipeline can complete audits without manual intermediate steps.
+
+### Context
+TASK-140 added reusable audit job execution. TASK-141 added full pipeline orchestration. TASK-142 added a CLI command for running the full pipeline. TASK-143 stabilized audit status transitions.
+
+Expected backend flow:
+
+```text
+create audit
+→ schedule jobs
+→ execute jobs
+→ store raw responses
+→ post-process raw responses
+→ save parsed results and scores
+→ expose updated summary/results/sources
+→ final audit status is completed/partial/failed
+```
+
+This task verifies the flow first with mock data, then with a small OpenAI pilot audit if real provider config is available.
+
+### Scope
+- Run the full pipeline CLI or service for at least one mock-provider audit.
+- Verify mock audit reaches expected final status.
+- Verify mock audit produces raw responses where applicable.
+- Verify mock audit produces parsed results.
+- Verify mock audit produces scores.
+- Verify mock audit summary/results endpoints reflect processed data.
+- Run the full pipeline CLI or service for one small OpenAI `L1` audit if real provider config is available.
+- Run the full pipeline CLI or service for one small OpenAI `L2` audit if real provider config is available and L2 web search is supported.
+- Keep OpenAI audits within pilot caps:
+  - OpenAI only
+  - max 3–5 queries
+  - max 1 run per query unless explicitly approved
+- Verify OpenAI audit raw responses are stored.
+- Verify OpenAI audit parsed results and scores are created.
+- Verify OpenAI audit summary/results endpoints reflect processed data.
+- Verify source/citation behavior for L2 where available.
+- Verify frontend can refresh and display completed/partial pipeline output without needing manual post-processing.
+- Record findings in `docs/REAL_PROVIDER_PILOT_NOTES.md` or a project-equivalent verification document.
+- Record any issues as follow-up bugs/tasks.
+
+### Out of scope
+- Do not add new pipeline features in this task.
+- Do not change parser logic.
+- Do not change scoring formulas.
+- Do not change provider adapter behavior.
+- Do not redesign frontend UI.
+- Do not increase real-provider caps.
 - Do not run large real-provider audits.
-- Do not increase pilot caps.
-- Do not expose raw answers in normal user-facing UI.
-- Do not add new UI features beyond minimal fixes required to verify the current pilot audit.
+- Do not add providers other than OpenAI.
+- Do not add production worker/queue infrastructure.
 - Do not commit API keys, secrets, raw sensitive data, or local `.env` files.
 
 ### Acceptance criteria
-- Current selected real audit is processed through the CLI.
-- Selected audit id is documented in pilot notes.
-- CLI output is captured or summarized in pilot notes.
-- At least one successful stored raw response is converted into parsed result data if available.
-- At least one parsed result is converted into score data if available.
-- Audit summary/aggregation is refreshed after processing.
-- Results page displays processed row data or a controlled empty/error state.
-- Summary page displays refreshed metrics or a controlled empty/error state.
-- Competitors and sources are either displayed when available or explicitly documented as absent.
-- Raw answer is not visible in normal user-facing UI.
-- Follow-up bugs/tasks are recorded for any observed issues.
+- Full pipeline completes for a mock-provider audit.
+- Mock-provider audit final status is correct according to TASK-143 rules.
+- Mock-provider audit results and summary reflect parsed/scored data.
+- Full pipeline completes or fails with a controlled documented provider/config error for OpenAI `L1`.
+- OpenAI `L1` audit respects real-provider caps.
+- OpenAI `L1` audit raw responses, parsed results, scores, summary, and results are verified when execution succeeds.
+- OpenAI `L2` audit is verified when supported by current config/API.
+- OpenAI `L2` source/citation behavior is documented.
+- UI can display refreshed summary/results after full pipeline execution without a separate post-processing command.
+- Any discovered issues are recorded as follow-up bugs/tasks.
 - No secrets or API keys are committed.
 
 ### Test requirements
 - No automated test is required to call the real OpenAI API.
-- Run the post-processing CLI manually for the selected audit.
-- Manually verify CLI output.
-- Manually verify parsed result persistence.
-- Manually verify score persistence.
-- Manually verify summary refresh.
-- Manually verify frontend results display.
-- Manually verify frontend summary display.
-- Manually verify raw answer is not exposed in normal UI.
-- If any code changes are made, run the relevant backend/frontend tests affected by those changes.
+- Run existing backend pipeline service tests.
+- Run existing backend execution service tests.
+- Run existing backend post-processing tests.
+- Run existing audit status tests.
+- Manually run full pipeline CLI for mock audit.
+- Manually verify mock audit results/summary/status.
+- Manually run full pipeline CLI for OpenAI L1 audit if config is available.
+- Manually run full pipeline CLI for OpenAI L2 audit if config is available and supported.
+- Manually verify OpenAI raw response storage, parsed results, scores, summary, and results.
+- Manually verify no API keys or secrets appear in logs, UI, notes, or committed files.
+- If code changes are made, run affected backend/frontend tests.
 
 ### Files likely affected
 Optional hint, not a hard boundary.
 - `docs/REAL_PROVIDER_PILOT_NOTES.md`
+- `docs/PIPELINE_VERIFICATION.md`
 - local `.env` file, not committed
 - small backend/frontend fix files only if required to complete verification
 
@@ -374,359 +650,186 @@ Use project commands from `/AGENTS.md`.
 Expected local command example:
 
 ```powershell
-.\venv\Scripts\python.exe scripts\process_audit_results.py --audit-id 8
+.\venv\Scripts\python.exe scripts\run_audit_pipeline.py --audit-id <AUDIT_ID>
 ```
 
-If audit id differs, replace `8` with the selected stored real audit id.
-
 If code changes are made, run:
+- relevant backend pipeline tests
+- relevant backend execution tests
 - relevant backend post-processing tests
-- relevant backend parser/scoring/aggregation tests
+- relevant backend audit API/status tests
 - relevant frontend tests/build if UI was touched
 
 ### Dependencies
-- TASK-135 — Add audit result post-processing service
-- TASK-136 — Add CLI command to process stored audit results
+- TASK-140 — Extract reusable audit job execution service
+- TASK-141 — Add full audit pipeline service
+- TASK-142 — Add CLI command to run full audit pipeline
+- TASK-143 — Stabilize audit status transitions
 
 ### Escalate if
-- The selected audit has no stored successful raw responses.
-- CLI cannot connect to the expected local database.
-- Post-processing creates duplicate parsed results or duplicate scores.
-- Parser/scoring cannot process stored raw responses without contract changes.
-- Summary cannot be refreshed without changing aggregation contracts.
-- Frontend display requires raw answer exposure to work.
+- Full pipeline cannot run without manually invoking hidden intermediate commands.
+- Mock pipeline does not produce parsed/scored data.
+- OpenAI real-provider execution requires increasing pilot caps.
+- OpenAI L2 web search is unsupported or cannot be verified.
+- Results/summary endpoints do not reflect processed data after full pipeline completion.
+- UI requires raw answer exposure to show results.
 - Any secret or API key appears in logs, UI, notes, or committed files.
-- Completing verification requires changing parser, scoring, aggregation, provider, raw response, or audit state contracts.
+- Verification requires changing parser, scoring, provider, raw response, or aggregation contracts.
 
 ### Done means
 Inherits project defaults from `/AGENTS.md`.
 
 Additional completion requirements:
-- `docs/REAL_PROVIDER_PILOT_NOTES.md` includes:
-  - audit id processed
-  - CLI command used
-  - processing summary
+- Verification notes include:
+  - mock audit id and result
+  - OpenAI L1 audit id and result, if run
+  - OpenAI L2 audit id and result, if run
+  - final statuses
   - whether parsed results were created
   - whether scores were created
-  - whether summary refreshed
+  - whether summary/results endpoints updated
   - UI verification result
   - follow-up bugs/tasks
 - PR summary confirms no secrets or API keys were committed.
 
 ---
 
-## TASK-138 — Test OpenAI L2 web-search response and source mapping
+## TASK-145 — Add dev/admin endpoint to run full audit pipeline
 
 ### Status
-Ready
+Planned
 
 ### Goal
-Run and verify a controlled OpenAI `L2` web-search audit path, including source/citation mapping from raw provider response to backend storage, aggregation, and UI display.
+Add a safe dev/admin-only backend endpoint that can run the full audit pipeline for one audit from the API layer.
 
 ### Why
-`L2` is the SCDL mode where web search is enabled, so it must be validated separately from `L1` to confirm that web-search payloads, returned sources/citations, parser behavior, and source intelligence UI work on real OpenAI responses.
+After the full backend pipeline is stable through services and CLI, the next step toward UI integration is an API-accessible execution path. This allows controlled testing from the app without putting pipeline business logic into frontend code or exposing unsafe public execution behavior.
 
 ### Context
-TASK-130 implemented the OpenAI adapter with `L1` and `L2` support. TASK-131 added dry-run mode. TASK-132 added raw response inspection. TASK-135 and TASK-136 added post-processing service and CLI. TASK-137 processed the current real audit and verified basic UI behavior.
+TASK-141 added the reusable full audit pipeline service. TASK-142 added a CLI wrapper. TASK-144 verified the full backend pipeline on mock and OpenAI audits. This task adds an API endpoint only after the service and CLI path are stable.
 
-This task focuses specifically on the OpenAI `L2` path.
+This endpoint is not intended as the final public production execution API unless explicitly approved later.
 
-Expected L2 flow:
+Expected flow:
 
 ```text
-create or select L2 audit
-→ execute OpenAI with web search enabled
-→ store RawResponse
-→ inspect raw response
-→ process stored results
-→ verify sources/citations in backend and UI
+POST /dev/audits/{id}/run-pipeline
+or project-equivalent admin/dev route
+→ auth/admin/dev guard
+→ call run_audit_pipeline(session, audit_id)
+→ return safe pipeline summary
 ```
 
 ### Scope
-- Create or select a small OpenAI-only audit with `scdl_level=L2`.
-- Use safe pilot limits:
-  - OpenAI only
-  - max 3–5 queries
-  - max 1 run per query unless explicitly approved
-- Confirm the OpenAI request path enables web search for `L2`.
-- Verify L2 evidence using stored request snapshot, provider metadata, adapter test evidence, or another documented proof path.
-- If current stored request snapshot only includes query/provider/run number and cannot prove web-search enablement, document this gap and create a follow-up task to store safe execution-mode/request-shape metadata.
-- Confirm `L1` no-web behavior is not accidentally used for the selected audit.
-- Execute the `L2` dry-run or real-provider pilot path.
-- Confirm raw responses are stored.
-- Inspect raw responses using the TASK-132 inspection path.
-- Check whether OpenAI returned citations/sources or web-search metadata.
-- Confirm citations/sources are mapped into the existing provider response/raw response shape where available.
-- Run post-processing CLI for the `L2` audit.
-- Confirm parsed results and scores are created where successful raw responses exist.
-- Confirm aggregation/summary refreshes.
-- Verify frontend source intelligence view:
-  - sources render when source data exists
-  - empty source state renders when OpenAI returns no usable sources
-  - malformed/partial source data does not crash the UI
-- Document findings in `docs/REAL_PROVIDER_PILOT_NOTES.md` or a project-equivalent notes document.
-- Record follow-up bugs/tasks for citation mapping, parser, aggregation, or UI issues.
-
-### Out of scope
-- Do not run large real-provider audits.
-- Do not increase real-provider caps.
-- Do not add providers other than OpenAI.
-- Do not change parser logic in this task.
-- Do not change scoring formulas in this task.
-- Do not change aggregation definitions in this task.
-- Do not redesign source intelligence UI.
-- Do not expose full raw provider answers in normal user-facing UI.
-- Do not commit API keys, secrets, raw sensitive data, or local `.env` files.
-- Do not treat “OpenAI returned no citations” as a code bug unless the raw response proves citations were present but not mapped.
-
-### Acceptance criteria
-- A controlled OpenAI `L2` audit is executed or fails with a controlled documented provider error.
-- `L2` request path is verified to include web-search configuration/tooling using stored request snapshot, provider metadata, adapter test evidence, or another documented proof path.
-- If request snapshot/provider metadata cannot prove L2 web-search enablement, the gap is documented and a follow-up task is created.
-- Pilot caps are respected.
-- Raw responses are stored for executed runs.
-- Raw responses are inspectable without exposing secrets.
-- OpenAI source/citation behavior is documented, including whether sources were returned.
-- If sources/citations are returned, backend mapping preserves them in the existing source/citation shape.
-- Post-processing creates parsed results and scores for successful stored responses where possible.
-- Aggregation/summary refreshes after post-processing.
-- Source intelligence UI displays populated, empty, or error states safely.
-- Follow-up bugs/tasks are recorded for any source/citation mapping issues.
-- No secrets or API keys are committed.
-
-### Test requirements
-- No automated test is required to call the real OpenAI API.
-- Manually verify the selected audit uses `scdl_level=L2`.
-- Manually verify or inspect that the OpenAI request path enables web search.
-- Verify `scdl_level=L2` and web-search-enabled evidence from stored request snapshot, provider metadata, adapter test evidence, or another documented proof path.
-- Manually verify raw response storage.
-- Manually verify raw response inspection.
-- Manually verify whether citations/sources are present in raw response.
-- Manually verify post-processing CLI result for the `L2` audit.
-- Manually verify source intelligence UI behavior.
-- If any code changes are made, run relevant backend provider/post-processing tests.
-- If citation/source mapping code is changed, add or update mocked unit/contract tests using redacted fixture data.
-- If UI code is changed, run relevant frontend tests/build.
-- Manually verify no API keys or secrets appear in logs, UI, notes, or committed files.
-
-### Files likely affected
-Optional hint, not a hard boundary.
-- `docs/REAL_PROVIDER_PILOT_NOTES.md`
-- `docs/REAL_RESPONSE_ANALYSIS.md`
-- redacted OpenAI L2 fixture files only if explicitly needed
-- small backend/frontend fix files only if required to complete verification
-
-### Commands
-Use project commands from `/AGENTS.md`.
-
-Expected local processing command example:
-
-```powershell
-.\venv\Scripts\python.exe scripts\process_audit_results.py --audit-id <L2_AUDIT_ID>
-```
-
-If code changes are made, run:
-- relevant backend provider tests
-- relevant backend post-processing tests
-- relevant backend parser/scoring/aggregation tests if affected
-- relevant frontend tests/build if UI was touched
-
-### Dependencies
-- TASK-130 — Implement OpenAI real provider adapter for L1 and L2
-- TASK-131 — Add real-provider dry-run mode
-- TASK-132 — Add raw response inspection screen/log
-- TASK-135 — Add audit result post-processing service
-- TASK-136 — Add CLI command to process stored audit results
-- TASK-137 — Process current real audit and verify UI
-
-### Escalate if
-- OpenAI `L2` web search is unsupported by the configured model/API.
-- The raw OpenAI response contains citations/sources that cannot be represented by the existing provider/raw response contract.
-- Web-search execution requires increasing pilot caps.
-- L2 source mapping requires changing parser, scoring, aggregation, provider, or raw response contracts.
-- There is no reliable way to prove L2 web-search enablement from stored metadata, logs, or tests.
-- Source intelligence UI requires exposing full raw provider answers.
-- Any secret or API key appears in logs, UI, notes, or committed files.
-- The implementation requires a new provider, new billing logic, or product decision outside this task.
-
-### Done means
-Inherits project defaults from `/AGENTS.md`.
-
-Additional completion requirements:
-- `docs/REAL_PROVIDER_PILOT_NOTES.md` includes:
-  - L2 audit id
-  - query count and runs per query
-  - OpenAI model used
-  - confirmation of web-search request path
-  - proof source for web-search enablement, such as request snapshot, provider metadata, or adapter test evidence
-  - any gap in current request snapshot/provider metadata
-  - whether raw responses were stored
-  - whether citations/sources were returned
-  - whether citations/sources mapped correctly
+- Add a dev/admin-only endpoint or project-equivalent protected API route for running the full pipeline for one audit.
+- Require authentication.
+- Require admin role or explicit local/dev mode guard.
+- Reuse the full pipeline service from TASK-141.
+- Return a safe structured pipeline summary:
+  - audit id
+  - scheduling summary
+  - execution summary
   - post-processing summary
-  - source intelligence UI result
-  - follow-up bugs/tasks
-- PR summary confirms no secrets or API keys were committed.
-
----
-
-## TASK-139 — Analyze real Russian-language parser/scoring quality
-
-### Status
-Ready
-
-### Goal
-Evaluate how the existing parser, scoring, aggregation, and UI handle real Russian-language OpenAI `L1` and `L2` audit responses.
-
-### Why
-The current parser/scoring logic was mostly validated on mock data, but real Russian-language AI answers may expose issues in brand detection, competitor extraction, sentiment detection, recommendation detection, source handling, and score quality.
-
-### Context
-TASK-137 verified that stored real responses can be post-processed into parsed results, scores, summary, and UI views. TASK-138 specifically verified the OpenAI `L2` web-search path and source/citation behavior.
-
-This task is an analysis and follow-up planning task. It should identify quality gaps and propose concrete follow-up fixes, not immediately rewrite parser or scoring logic.
-
-Target example brand from testing:
-
-```text
-Окна Лабрадор
-```
-
-### Scope
-- Select a small set of real Russian-language `L1` and/or `L2` audit responses.
-- Use non-sensitive test queries only.
-- Review stored raw answers through the approved raw response inspection path.
-- Compare raw answers against parsed results.
-- Compare parsed results against saved scores.
-- Compare per-run scores against summary/aggregation output.
-- Compare backend data against frontend display.
-- Evaluate brand detection quality for Russian text:
-  - exact brand mentions
-  - inflected/variant mentions if present
-  - quoted brand mentions
-  - domain mentions if present
-  - false positives
-  - false negatives
-- Evaluate competitor extraction quality:
-  - competitors listed near the brand
-  - competitors listed instead of the brand
-  - missed competitors
-  - false competitors
-- Evaluate sentiment/recommendation extraction quality:
-  - positive/negative/neutral classification
-  - “recommended”, “best”, “top”, “порекомендовать”, “лучшие” style wording
-  - weak or indirect recommendations
-- Evaluate scoring quality:
-  - visibility score
-  - prominence/position behavior
-  - recommendation score
-  - source quality score
-  - final score
-  - visibility cap behavior
-- Evaluate `L1` versus `L2` differences:
-  - source/citation availability
-  - brand visibility changes
-  - competitor differences
-  - score differences
-- Evaluate UI quality for real Russian text:
-  - Cyrillic rendering
-  - long query/answer fragments
-  - competitor/source display
-  - empty states
-  - score readability
-- Document findings in `docs/REAL_RESPONSE_ANALYSIS.md` or `docs/REAL_PROVIDER_PILOT_NOTES.md`.
-- Convert observed issues into concrete follow-up bug/task proposals.
+  - final audit status
+  - fatal error, if any
+- Enforce existing audit ownership/admin access rules.
+- Enforce real-provider guardrails and pilot caps.
+- Ensure endpoint does not return raw answers, prompts, API keys, provider secrets, auth cookies, or sensitive config.
+- Add tests for access control and endpoint behavior with mocked pipeline service/provider execution.
+- Document that this endpoint is dev/admin-only and not a public production execution contract.
 
 ### Out of scope
-- Do not change parser logic in this task.
-- Do not change scoring formulas in this task.
-- Do not change aggregation logic in this task.
-- Do not change OpenAI adapter behavior in this task.
-- Do not add new provider integrations.
-- Do not run large real-provider audits.
-- Do not increase pilot caps.
-- Do not add frontend redesign work.
-- Do not add AI-generated recommendations.
-- Do not commit raw sensitive response data, API keys, or secrets.
-- Do not make product decisions silently.
+- Do not add frontend UI.
+- Do not replace the existing public `POST /audits/{id}/run` behavior unless explicitly approved.
+- Do not expose this endpoint to regular users.
+- Do not add background workers or queue infrastructure.
+- Do not add billing, quotas, or production execution policy.
+- Do not call real OpenAI API in automated tests.
+- Do not change parser logic.
+- Do not change scoring formulas.
+- Do not change provider adapter behavior.
+- Do not change raw response storage contract.
+- Do not expose raw provider answers in the endpoint response.
 
 ### Acceptance criteria
-- At least one real Russian-language raw response is compared raw → parsed → scored → displayed.
-- Brand detection issues are classified as acceptable behavior, false positive, false negative, or missing variant handling.
-- Competitor extraction issues are classified as acceptable behavior, missed competitor, false competitor, or unsupported extraction pattern.
-- Sentiment/recommendation issues are classified as acceptable behavior, misclassification, unsupported Russian keyword/pattern, or ambiguous language.
-- Scoring issues are classified as acceptable behavior, formula issue, component issue, visibility issue, source issue, or aggregation issue.
-- `L1`/`L2` differences are documented if both modes have usable pilot data.
-- UI issues caused by Cyrillic or real Russian response shapes are documented separately from backend parser/scoring issues.
-- Follow-up fixes are written as concrete task proposals or bug entries.
-- No parser/scoring/provider/aggregation contract changes are made in this task.
-- No secrets or API keys are included in committed notes.
+- Endpoint exists under a clearly dev/admin-only route or project-equivalent protected route.
+- Unauthenticated requests are rejected.
+- Non-admin/non-dev unauthorized requests are rejected.
+- Cross-user access is rejected unless simple admin access is explicitly used.
+- Endpoint calls the full pipeline service from TASK-141.
+- Endpoint returns safe pipeline summary.
+- Endpoint does not expose raw answers or secrets.
+- Mock-provider audit can be executed through the endpoint in tests using mocked provider/pipeline behavior.
+- Real-provider guardrails remain enforced.
+- Existing CLI path remains available.
+- Existing backend tests still pass.
+- Automated tests do not call real OpenAI API.
 
 ### Test requirements
-- No new automated tests are required if this task only documents analysis.
-- Manually verify that inspected examples exist in stored raw response inspection or pilot notes.
-- Manually verify that parsed results and scores correspond to the selected raw responses.
-- Manually verify frontend display for selected Russian-language audit data.
-- Manually verify that no API keys, secrets, auth cookies, or sensitive raw data are included in committed documentation.
-- Verify the task file and analysis documents are saved as UTF-8 and Russian text such as `Окна Лабрадор` is not corrupted.
-- If redacted fixtures are added from real responses, ensure sensitive data is removed and document what was redacted.
-- If any code changes are made, run the relevant backend/frontend tests affected by those changes.
+- Add API test for unauthenticated rejection.
+- Add API test for non-admin/non-dev rejection.
+- Add API test for authorized dev/admin success path with mocked pipeline service.
+- Add API test confirming endpoint calls full pipeline service.
+- Add API test for missing audit behavior.
+- Add API test for cross-user access behavior if ownership applies.
+- Add test confirming response does not include raw answers, prompts, API keys, provider secrets, or auth cookies.
+- Add test confirming real-provider disabled/guardrail behavior is respected if endpoint can trigger real provider mode.
+- Add assertion or mock guard confirming no real OpenAI API call is made in automated tests.
 
 ### Files likely affected
 Optional hint, not a hard boundary.
-- `docs/REAL_RESPONSE_ANALYSIS.md`
-- `docs/REAL_PROVIDER_PILOT_NOTES.md`
-- `docs/TASKS.md` or follow-up task backlog
-- redacted fixture files only if explicitly needed
+- `apps/api/...routes/dev...`
+- `apps/api/...routes/admin...`
+- `apps/api/...routes/audits...`
+- `apps/api/...pipeline...`
+- `apps/api/...dependencies...`
+- `tests/...api...`
+- `tests/...pipeline...`
+- `docs/...`
 
 ### Commands
 Use project commands from `/AGENTS.md`.
 
-If this is documentation-only, no full test run is required unless project policy requires it.
-
-If fixtures or code are changed, run the relevant backend/frontend tests affected by those changes.
+At minimum, run:
+- backend API tests for the new endpoint
+- backend auth/access-control tests
+- backend pipeline tests affected by endpoint integration
+- backend lint/typecheck commands if available
 
 ### Dependencies
-- TASK-137 — Process current real audit and verify UI
-- TASK-138 — Test OpenAI L2 web-search response and source mapping
+- TASK-141 — Add full audit pipeline service
+- TASK-142 — Add CLI command to run full audit pipeline
+- TASK-143 — Stabilize audit status transitions
+- TASK-144 — Verify full backend pipeline on mock and OpenAI audits
 
 ### Escalate if
-- No usable Russian-language real responses are available.
-- Stored raw responses cannot be inspected safely.
-- Real response data contains sensitive information that cannot be committed or safely redacted.
-- Parser/scoring fixes are required before analysis can be completed.
-- L1 or L2 behavior is too ambiguous to evaluate without a product decision.
-- The analysis reveals that current parser/scoring contracts cannot represent real Russian-language behavior.
+- The project has no admin/dev route convention.
+- The project has no safe way to restrict endpoint to admin/dev usage.
+- Product requires this to be a public user-facing endpoint.
+- Endpoint execution would block request/response too long and require background workers.
+- Running the endpoint would require bypassing real-provider guardrails.
+- Returning a useful response would require exposing raw provider answers or secrets.
+- Implementing this task requires changing parser, scoring, provider, raw response, or aggregation contracts.
 
 ### Done means
 Inherits project defaults from `/AGENTS.md`.
 
 Additional completion requirements:
-- Analysis document clearly separates:
-  - provider adapter issues
-  - Russian brand detection issues
-  - Russian competitor extraction issues
-  - Russian sentiment/recommendation issues
-  - scoring issues
-  - aggregation issues
-  - UI issues
-  - product/query-design issues
-- Follow-up work is listed as concrete bugs or tasks.
-- PR summary confirms no secrets, API keys, auth cookies, or sensitive raw data were committed.
-- PR summary confirms UTF-8 encoding was preserved for Russian-language examples.
+- PR summary explains why the endpoint is dev/admin-only.
+- PR summary confirms endpoint reuses the full pipeline service.
+- PR summary confirms no raw answers or secrets are returned.
+- PR summary confirms no real OpenAI API calls are made in automated tests.
 
 ---
 
-## Phase G — Post-pilot parser/scoring stabilization
+## Phase H — Frontend pipeline integration
 
-Tasks in this phase must be written only after TASK-137, TASK-138, and TASK-139 are complete.
+Tasks in this phase must be written only after TASK-144 and TASK-145 are complete.
 
 Potential areas:
-- post-processing idempotency fixes
-- Russian brand detection improvements
-- Russian competitor extraction improvements
-- sentiment/recommendation keyword expansion
-- OpenAI L2 source/citation mapping fixes
-- redacted real-response fixtures
-- scoring calibration
-- source intelligence UI fixes
+- connect Start Audit button to backend pipeline endpoint
+- add audit status polling
+- add progress/loading state
+- add user-facing execution limits
+- add background worker/queue if request-time execution is too slow
+- improve error display for completed/partial/failed audits

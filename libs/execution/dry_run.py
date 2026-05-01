@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from libs.control.job_scheduler import schedule_jobs_for_audit
+from libs.execution.audit_execution import execute_audit_jobs
 from libs.execution.pilot_config import (
     PilotPolicyError,
     RealProviderPilotConfig,
@@ -17,8 +18,7 @@ from libs.execution.pilot_config import (
 )
 from libs.execution.provider_adapter import BaseProviderAdapter
 from libs.execution.provider_factory import build_provider_adapter
-from libs.execution.worker import execute_job
-from libs.storage.models import Audit, AuditStatus, Job, JobStatus, Query, RunStatus
+from libs.storage.models import Audit, AuditStatus, Job, Query, RunStatus
 
 ProviderFactory = Callable[[str], BaseProviderAdapter]
 
@@ -102,23 +102,20 @@ async def execute_real_provider_dry_run(
             pilot_config=config,
         )
     )
-    pending_jobs = (
-        await session.execute(
-            select(Job)
-            .where(Job.audit_id == audit_id, Job.status == JobStatus.PENDING)
-            .order_by(Job.id)
-        )
-    ).scalars().all()
-
-    for job in pending_jobs:
-        adapter = factory(job.provider)
-        await execute_job(session, job.id, adapter)
+    execution_summary = await execute_audit_jobs(
+        session,
+        audit_id,
+        pilot_config=config,
+        provider_factory=factory,
+    )
+    if execution_summary.fatal_error is not None:
+        raise PilotPolicyError(execution_summary.fatal_error)
 
     run_counts = await _run_status_counts(session, audit_id)
     total_jobs = (
         await session.execute(select(func.count()).select_from(Job).where(Job.audit_id == audit_id))
     ).scalar_one()
-    executed_jobs = sum(run_counts.values())
+    executed_jobs = execution_summary.jobs_executed
     success_count = run_counts.get(RunStatus.SUCCESS, 0)
     non_success_count = executed_jobs - success_count
 

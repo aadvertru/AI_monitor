@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.audit_schemas import (
     AuditDetailResponse,
     AuditListItemResponse,
+    AuditPipelineRunResponse,
     AuditResultRowResponse,
     AuditResultsResponse,
     AuditRunTriggerResponse,
@@ -49,6 +50,7 @@ from libs.execution.pilot_config import (
     PilotPolicyError,
     validate_audit_against_pilot_config,
 )
+from libs.execution.pipeline import run_audit_pipeline
 from libs.storage.models import (
     Audit,
     AuditStatus,
@@ -76,6 +78,7 @@ AUDIT_NOT_TRIGGERABLE_DETAIL = "Audit can only be triggered from the created sta
 AUDIT_NOT_RUNNABLE_DETAIL = "Audit has no runnable query/provider combinations."
 RAW_RESPONSE_NOT_FOUND_DETAIL = "Raw response was not found."
 RAW_RESPONSE_FORBIDDEN_DETAIL = "Raw response inspection requires admin access."
+DEV_PIPELINE_FORBIDDEN_DETAIL = "Pipeline execution requires admin access."
 SENSITIVE_RAW_RESPONSE_KEYS = frozenset(
     {
         "api_key",
@@ -89,6 +92,14 @@ SENSITIVE_RAW_RESPONSE_KEYS = frozenset(
         "password",
         "secret",
         "token",
+    }
+)
+SENSITIVE_PIPELINE_RESPONSE_KEYS = SENSITIVE_RAW_RESPONSE_KEYS | frozenset(
+    {
+        "prompt",
+        "prompts",
+        "raw_answer",
+        "request_snapshot",
     }
 )
 
@@ -460,6 +471,39 @@ def _redact_sensitive_value(value: object) -> object:
     if isinstance(value, list):
         return [_redact_sensitive_value(item) for item in value]
     return value
+
+
+def _redact_pipeline_summary_value(value: object, key: str | None = None) -> object:
+    if key is not None and _is_sensitive_pipeline_key(key):
+        return "***"
+    if isinstance(value, dict):
+        return {
+            str(item_key): _redact_pipeline_summary_value(item_value, str(item_key))
+            for item_key, item_value in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_pipeline_summary_value(item) for item in value]
+    if isinstance(value, str):
+        return _redact_sensitive_string(value)
+    return value
+
+
+def _is_sensitive_pipeline_key(key: str) -> bool:
+    normalized = key.strip().lower()
+    return normalized in SENSITIVE_PIPELINE_RESPONSE_KEYS or normalized.endswith("_key")
+
+
+def _redact_sensitive_string(value: str) -> str:
+    redacted = value
+    for marker in ("sk-", "Bearer "):
+        index = redacted.find(marker)
+        if index < 0:
+            continue
+        end = redacted.find(" ", index + len(marker))
+        if end < 0:
+            end = len(redacted)
+        redacted = f"{redacted[:index]}***{redacted[end:]}"
+    return redacted
 
 
 async def get_relative_audit_number(session: AsyncSession, audit: Audit) -> int:
@@ -1115,6 +1159,27 @@ async def run_audit(
     except SQLAlchemyError as exc:
         await session.rollback()
         raise HTTPException(status_code=500, detail="Failed to trigger audit run.") from exc
+
+
+@app.post("/dev/audits/{audit_id}/run-pipeline", response_model=AuditPipelineRunResponse)
+async def run_audit_pipeline_dev(
+    audit_id: int,
+    request: Request,
+    session: AsyncSession = DB_SESSION_DEPENDENCY,
+) -> AuditPipelineRunResponse:
+    try:
+        current_user = await get_authenticated_user_from_request(session, request)
+        if not _is_admin(current_user):
+            raise HTTPException(status_code=403, detail=DEV_PIPELINE_FORBIDDEN_DETAIL)
+        audit, _brand = await load_accessible_audit(session, audit_id, current_user)
+        summary = await run_audit_pipeline(session, audit.id)
+        safe_summary = _redact_pipeline_summary_value(summary.safe_log_dict())
+        return AuditPipelineRunResponse.model_validate(safe_summary)
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail="Failed to run audit pipeline.") from exc
 
 
 @app.get("/audits/{audit_id}/results", response_model=AuditResultsResponse)

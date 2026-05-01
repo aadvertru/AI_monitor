@@ -84,6 +84,59 @@ class AuditRunTriggerResponse(FrontendAuditSchema):
     total_jobs: int = 0
 
 
+class AuditPipelineSchedulingResponse(FrontendAuditSchema):
+    audit_id: int
+    scheduled_jobs: int = 0
+    total_jobs: int = 0
+    fatal_error: str | None = None
+
+
+class AuditPipelineExecutionErrorResponse(FrontendAuditSchema):
+    job_id: int
+    code: str
+    message: str
+
+
+class AuditPipelineExecutionResponse(FrontendAuditSchema):
+    audit_id: int
+    total_jobs_inspected: int = 0
+    jobs_executed: int = 0
+    jobs_skipped: int = 0
+    success_count: int = 0
+    error_count: int = 0
+    timeout_count: int = 0
+    rate_limited_count: int = 0
+    errors: list[AuditPipelineExecutionErrorResponse] = Field(default_factory=list)
+    fatal_error: str | None = None
+
+
+class AuditPipelinePostProcessingErrorResponse(FrontendAuditSchema):
+    run_id: int
+    code: str
+    message: str
+
+
+class AuditPipelinePostProcessingResponse(FrontendAuditSchema):
+    audit_id: int
+    total_runs_inspected: int = 0
+    runs_processed: int = 0
+    skipped_already_processed: int = 0
+    skipped_missing_raw_response: int = 0
+    skipped_non_successful_run: int = 0
+    audit_status: AuditStatusValue | None = None
+    errors: list[AuditPipelinePostProcessingErrorResponse] = Field(default_factory=list)
+    fatal_error: str | None = None
+
+
+class AuditPipelineRunResponse(FrontendAuditSchema):
+    audit_id: int
+    scheduling: AuditPipelineSchedulingResponse
+    execution: AuditPipelineExecutionResponse | None = None
+    post_processing: AuditPipelinePostProcessingResponse | None = None
+    final_audit_status: AuditStatusValue | None = None
+    fatal_error: str | None = None
+
+
 class ComponentScoresResponse(FrontendAuditSchema):
     visibility_score: float | None = None
     prominence_score: float | None = None
