@@ -5,8 +5,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   auditCreateResponseFixture,
   auditDetailFixture,
+  auditPipelineRunFixture,
   auditResultsFixture,
-  auditRunTriggerFixture,
   auditSummaryFixture,
   currentUserFixture,
   unauthenticatedAuthErrorFixture,
@@ -61,8 +61,9 @@ describe("authenticated SCDL smoke flow", () => {
       { path: "/audits", method: "POST", body: auditCreateResponseFixture },
       { path: "/audits/42", body: auditDetailFixture },
       { path: "/audits/42/summary", body: auditSummaryFixture },
-      { path: "/audits/42/run", method: "POST", body: auditRunTriggerFixture },
-      { path: "/audits/42/summary", body: { ...auditSummaryFixture, status: "running" } },
+      { path: "/audits/42/run-pipeline", method: "POST", body: auditPipelineRunFixture },
+      { path: "/audits/42", body: { ...auditDetailFixture, status: "completed" } },
+      { path: "/audits/42/summary", body: { ...auditSummaryFixture, status: "completed" } },
       { path: "/audits/42/results", body: auditResultsFixture },
     ]);
     const user = userEvent.setup();
@@ -89,7 +90,7 @@ describe("authenticated SCDL smoke flow", () => {
     expect(screen.getByText(/acme\.example/)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Start audit" }));
-    expect((await screen.findAllByText("Running")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("Completed")).length).toBeGreaterThan(0);
 
     expect(screen.getByRole("link", { name: "Summary" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByText("Contoso Monitor")).toBeInTheDocument();

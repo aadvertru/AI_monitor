@@ -94,6 +94,59 @@ export type AuditRunTriggerResponse = {
   total_jobs: number;
 };
 
+export type AuditPipelineSchedulingResponse = {
+  audit_id: number;
+  scheduled_jobs: number;
+  total_jobs: number;
+  fatal_error: string | null;
+};
+
+export type AuditPipelineExecutionError = {
+  job_id: number;
+  code: string;
+  message: string;
+};
+
+export type AuditPipelineExecutionResponse = {
+  audit_id: number;
+  total_jobs_inspected: number;
+  jobs_executed: number;
+  jobs_skipped: number;
+  success_count: number;
+  error_count: number;
+  timeout_count: number;
+  rate_limited_count: number;
+  errors: AuditPipelineExecutionError[];
+  fatal_error: string | null;
+};
+
+export type AuditPipelinePostProcessingError = {
+  run_id: number;
+  code: string;
+  message: string;
+};
+
+export type AuditPipelinePostProcessingResponse = {
+  audit_id: number;
+  total_runs_inspected: number;
+  runs_processed: number;
+  skipped_already_processed: number;
+  skipped_missing_raw_response: number;
+  skipped_non_successful_run: number;
+  audit_status: AuditStatus | null;
+  errors: AuditPipelinePostProcessingError[];
+  fatal_error: string | null;
+};
+
+export type AuditPipelineRunResponse = {
+  audit_id: number;
+  scheduling: AuditPipelineSchedulingResponse;
+  execution: AuditPipelineExecutionResponse | null;
+  post_processing: AuditPipelinePostProcessingResponse | null;
+  final_audit_status: AuditStatus | null;
+  fatal_error: string | null;
+};
+
 export type ComponentScores = {
   visibility_score: number | null;
   prominence_score: number | null;

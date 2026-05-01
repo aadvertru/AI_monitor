@@ -3,6 +3,7 @@ import type {
   AuditCreateResponse,
   AuditDetail,
   AuditListItem,
+  AuditPipelineRunResponse,
   AuditResultsResponse,
   AuditRunTriggerResponse,
   AuditStatusResponse,
@@ -144,6 +145,12 @@ export function getAuditSummary(auditId: number) {
 
 export function runAudit(auditId: number) {
   return apiFetch<AuditRunTriggerResponse>(`/audits/${auditId}/run`, {
+    method: "POST",
+  });
+}
+
+export function runAuditPipeline(auditId: number) {
+  return apiFetch<AuditPipelineRunResponse>(`/audits/${auditId}/run-pipeline`, {
     method: "POST",
   });
 }

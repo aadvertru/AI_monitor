@@ -2,6 +2,7 @@ import type {
   AuditCreateResponse,
   AuditDetail,
   AuditListItem,
+  AuditPipelineRunResponse,
   AuditResultsResponse,
   AuditRunTriggerResponse,
   AuditSummaryResponse,
@@ -83,6 +84,41 @@ export const auditRunTriggerFixture: AuditRunTriggerResponse = {
   status: "running",
   scheduled_jobs: 4,
   total_jobs: 4,
+};
+
+export const auditPipelineRunFixture: AuditPipelineRunResponse = {
+  audit_id: 42,
+  scheduling: {
+    audit_id: 42,
+    scheduled_jobs: 4,
+    total_jobs: 4,
+    fatal_error: null,
+  },
+  execution: {
+    audit_id: 42,
+    total_jobs_inspected: 4,
+    jobs_executed: 4,
+    jobs_skipped: 0,
+    success_count: 4,
+    error_count: 0,
+    timeout_count: 0,
+    rate_limited_count: 0,
+    errors: [],
+    fatal_error: null,
+  },
+  post_processing: {
+    audit_id: 42,
+    total_runs_inspected: 4,
+    runs_processed: 4,
+    skipped_already_processed: 0,
+    skipped_missing_raw_response: 0,
+    skipped_non_successful_run: 0,
+    audit_status: "completed",
+    errors: [],
+    fatal_error: null,
+  },
+  final_audit_status: "completed",
+  fatal_error: null,
 };
 
 export const criticalQueriesFixture: AuditSummaryResponse["critical_queries"] = [

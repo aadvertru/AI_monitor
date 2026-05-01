@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { AuditStatus, RunStatus, SCDLLevel } from "../lib/api/types";
 import {
   auditListFixture,
+  auditPipelineRunFixture,
   auditResultsFixture,
   auditSummaryFixture,
   currentUserFixture,
@@ -54,6 +55,8 @@ describe("frontend-backend contract fixtures", () => {
     expect(partialAuditSummaryFixture.status).toBe("partial");
     expect(failedAuditSummaryFixture.status).toBe("failed");
     expect(emptyAuditResultsFixture.rows).toHaveLength(0);
+    expect(auditPipelineRunFixture.final_audit_status).toBe("completed");
+    expect(auditPipelineRunFixture.execution?.success_count).toBeGreaterThan(0);
   });
 
   it("covers results, competitors, critical queries, and source citations", () => {

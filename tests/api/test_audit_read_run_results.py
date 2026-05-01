@@ -17,6 +17,7 @@ from apps.api.main import (
     list_audits,
     run_audit,
     run_audit_pipeline_dev,
+    run_audit_pipeline_owner,
 )
 from apps.api.security import create_access_token, load_auth_config
 from libs.execution.audit_execution import AuditJobExecutionSummary
@@ -707,6 +708,253 @@ class AuditReadRunResultsAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.final_audit_status, "failed")
         self.assertIn("Real provider execution is disabled", result.fatal_error)
         factory_mock.assert_not_called()
+
+    async def test_owner_pipeline_endpoint_rejects_unauthenticated_request(self) -> None:
+        owner = await self._create_user()
+        audit = await self._create_audit(owner)
+
+        async with self.session_factory() as session:
+            with (
+                patch.dict("os.environ", AUTH_ENV, clear=True),
+                patch("apps.api.main.run_audit_pipeline", new_callable=AsyncMock) as pipeline_mock,
+                self.assertRaises(HTTPException) as context,
+            ):
+                await run_audit_pipeline_owner(
+                    audit_id=audit.id,
+                    request=self._anonymous_request(),
+                    session=session,
+                )
+
+        self.assertEqual(context.exception.status_code, 401)
+        pipeline_mock.assert_not_called()
+
+    async def test_owner_pipeline_endpoint_owner_can_run_full_pipeline_service(
+        self,
+    ) -> None:
+        owner = await self._create_user("owner@example.com")
+        audit = await self._create_audit(owner)
+        pipeline_summary = AuditPipelineSummary(
+            audit_id=audit.id,
+            scheduling=AuditSchedulingSummary(
+                audit_id=audit.id,
+                scheduled_jobs=1,
+                total_jobs=1,
+            ),
+            execution=AuditJobExecutionSummary(
+                audit_id=audit.id,
+                total_jobs_inspected=1,
+                jobs_executed=1,
+                success_count=1,
+            ),
+            post_processing=AuditPostProcessingSummary(
+                audit_id=audit.id,
+                total_runs_inspected=1,
+                runs_processed=1,
+                audit_status="completed",
+            ),
+            final_audit_status="completed",
+        )
+
+        async with self.session_factory() as session:
+            with (
+                patch.dict("os.environ", AUTH_ENV, clear=True),
+                patch(
+                    "apps.api.main.run_audit_pipeline",
+                    new=AsyncMock(return_value=pipeline_summary),
+                ) as pipeline_mock,
+            ):
+                result = await run_audit_pipeline_owner(
+                    audit_id=audit.id,
+                    request=self._authenticated_request(owner),
+                    session=session,
+                )
+
+        self.assertEqual(result.audit_id, audit.id)
+        self.assertEqual(result.final_audit_status, "completed")
+        self.assertEqual(result.scheduling.scheduled_jobs, 1)
+        self.assertEqual(result.execution.jobs_executed, 1)
+        self.assertEqual(result.post_processing.runs_processed, 1)
+        pipeline_mock.assert_awaited_once()
+        self.assertEqual(pipeline_mock.await_args.args[1], audit.id)
+
+    async def test_owner_pipeline_endpoint_admin_can_run_another_users_audit(
+        self,
+    ) -> None:
+        owner = await self._create_user("owner@example.com")
+        admin = await self._create_user("admin@example.com", role=UserRole.ADMIN)
+        audit = await self._create_audit(owner)
+        pipeline_summary = AuditPipelineSummary(
+            audit_id=audit.id,
+            scheduling=AuditSchedulingSummary(audit_id=audit.id),
+            final_audit_status="completed",
+        )
+
+        async with self.session_factory() as session:
+            with (
+                patch.dict("os.environ", AUTH_ENV, clear=True),
+                patch(
+                    "apps.api.main.run_audit_pipeline",
+                    new=AsyncMock(return_value=pipeline_summary),
+                ) as pipeline_mock,
+            ):
+                result = await run_audit_pipeline_owner(
+                    audit_id=audit.id,
+                    request=self._authenticated_request(admin),
+                    session=session,
+                )
+
+        self.assertEqual(result.audit_id, audit.id)
+        pipeline_mock.assert_awaited_once()
+
+    async def test_owner_pipeline_endpoint_cross_user_is_hidden(self) -> None:
+        owner = await self._create_user("owner@example.com")
+        other = await self._create_user("other@example.com")
+        audit = await self._create_audit(owner)
+
+        async with self.session_factory() as session:
+            with (
+                patch.dict("os.environ", AUTH_ENV, clear=True),
+                patch("apps.api.main.run_audit_pipeline", new_callable=AsyncMock) as pipeline_mock,
+                self.assertRaises(HTTPException) as context,
+            ):
+                await run_audit_pipeline_owner(
+                    audit_id=audit.id,
+                    request=self._authenticated_request(other),
+                    session=session,
+                )
+
+        self.assertEqual(context.exception.status_code, 404)
+        pipeline_mock.assert_not_called()
+
+    async def test_owner_pipeline_endpoint_missing_audit_is_hidden(self) -> None:
+        owner = await self._create_user("owner@example.com")
+
+        async with self.session_factory() as session:
+            with (
+                patch.dict("os.environ", AUTH_ENV, clear=True),
+                patch("apps.api.main.run_audit_pipeline", new_callable=AsyncMock) as pipeline_mock,
+                self.assertRaises(HTTPException) as context,
+            ):
+                await run_audit_pipeline_owner(
+                    audit_id=999,
+                    request=self._authenticated_request(owner),
+                    session=session,
+                )
+
+        self.assertEqual(context.exception.status_code, 404)
+        pipeline_mock.assert_not_called()
+
+    async def test_owner_pipeline_endpoint_rejects_already_running_audit(self) -> None:
+        owner = await self._create_user("owner@example.com")
+        audit = await self._create_audit(owner, status=AuditStatus.RUNNING)
+
+        async with self.session_factory() as session:
+            with (
+                patch.dict("os.environ", AUTH_ENV, clear=True),
+                patch("apps.api.main.run_audit_pipeline", new_callable=AsyncMock) as pipeline_mock,
+                self.assertRaises(HTTPException) as context,
+            ):
+                await run_audit_pipeline_owner(
+                    audit_id=audit.id,
+                    request=self._authenticated_request(owner),
+                    session=session,
+                )
+
+        self.assertEqual(context.exception.status_code, 409)
+        self.assertEqual(context.exception.detail, "Audit is already running.")
+        pipeline_mock.assert_not_called()
+
+    async def test_owner_pipeline_endpoint_rejects_completed_audit_retrigger(self) -> None:
+        owner = await self._create_user("owner@example.com")
+        audit = await self._create_audit(owner, status=AuditStatus.COMPLETED)
+
+        async with self.session_factory() as session:
+            with (
+                patch.dict("os.environ", AUTH_ENV, clear=True),
+                patch("apps.api.main.run_audit_pipeline", new_callable=AsyncMock) as pipeline_mock,
+                self.assertRaises(HTTPException) as context,
+            ):
+                await run_audit_pipeline_owner(
+                    audit_id=audit.id,
+                    request=self._authenticated_request(owner),
+                    session=session,
+                )
+
+        self.assertEqual(context.exception.status_code, 409)
+        self.assertEqual(
+            context.exception.detail,
+            "Audit can only be triggered from the created state.",
+        )
+        pipeline_mock.assert_not_called()
+
+    async def test_owner_pipeline_endpoint_rejects_guardrail_before_provider_call(
+        self,
+    ) -> None:
+        owner = await self._create_user("owner@example.com")
+        audit = await self._create_audit(owner, providers=["openai"])
+
+        async with self.session_factory() as session:
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        **AUTH_ENV,
+                        "PROVIDER_MODE": "openai",
+                        "REAL_PROVIDER_ENABLED": "0",
+                    },
+                    clear=True,
+                ),
+                patch("apps.api.main.run_audit_pipeline", new_callable=AsyncMock) as pipeline_mock,
+                patch("libs.execution.audit_execution.build_provider_adapter") as factory_mock,
+                self.assertRaises(HTTPException) as context,
+            ):
+                await run_audit_pipeline_owner(
+                    audit_id=audit.id,
+                    request=self._authenticated_request(owner),
+                    session=session,
+                )
+
+        self.assertEqual(context.exception.status_code, 400)
+        self.assertIn("Real provider execution is disabled", context.exception.detail)
+        pipeline_mock.assert_not_called()
+        factory_mock.assert_not_called()
+
+    async def test_owner_pipeline_endpoint_response_does_not_expose_sensitive_fields(
+        self,
+    ) -> None:
+        owner = await self._create_user("owner@example.com")
+        audit = await self._create_audit(owner)
+        pipeline_summary = AuditPipelineSummary(
+            audit_id=audit.id,
+            scheduling=AuditSchedulingSummary(audit_id=audit.id),
+            execution=AuditJobExecutionSummary(
+                audit_id=audit.id,
+                fatal_error="Provider failed with key sk-secret-token",
+            ),
+            post_processing=AuditPostProcessingSummary(audit_id=audit.id),
+            final_audit_status="failed",
+            fatal_error="Bearer secret-cookie should not leak",
+        )
+
+        async with self.session_factory() as session:
+            with (
+                patch.dict("os.environ", AUTH_ENV, clear=True),
+                patch(
+                    "apps.api.main.run_audit_pipeline",
+                    new=AsyncMock(return_value=pipeline_summary),
+                ),
+            ):
+                result = await run_audit_pipeline_owner(
+                    audit_id=audit.id,
+                    request=self._authenticated_request(owner),
+                    session=session,
+                )
+
+        dumped = str(result.model_dump())
+        self.assertNotIn("sk-secret-token", dumped)
+        self.assertNotIn("secret-cookie", dumped)
+        self.assertNotIn("raw_answer", dumped)
+        self.assertNotIn("request_snapshot", dumped)
 
     async def test_results_endpoint_returns_success_and_failed_rows(self) -> None:
         owner = await self._create_user()

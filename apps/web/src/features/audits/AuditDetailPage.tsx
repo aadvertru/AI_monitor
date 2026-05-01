@@ -1,10 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ArrowLeft, Play, RefreshCw } from "lucide-react";
+import { useEffect } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { Button } from "../../components/ui/Button";
-import { getAuditDetail, getAuditSummary, runAudit } from "../../lib/api/client";
-import type { AuditRunTriggerResponse, AuditSummaryResponse } from "../../lib/api/types";
+import {
+  getAuditDetail,
+  getAuditStatus,
+  getAuditSummary,
+  runAuditPipeline,
+} from "../../lib/api/client";
+import type {
+  AuditDetail,
+  AuditStatus,
+  AuditPipelineRunResponse,
+  AuditSummaryResponse,
+} from "../../lib/api/types";
 import { AuditBreadcrumbs } from "./AuditBreadcrumbs";
 import { AuditStatusBadge } from "./AuditStatusBadge";
 import { AuditSummaryContent } from "./AuditSummaryContent";
@@ -16,6 +27,21 @@ function detailQueryKey(auditId: number) {
 
 function summaryQueryKey(auditId: number) {
   return ["audit", auditId, "summary"] as const;
+}
+
+function statusQueryKey(auditId: number) {
+  return ["audit", auditId, "status"] as const;
+}
+
+const auditTerminalStatuses = new Set<AuditStatus>(["completed", "partial", "failed"]);
+const auditStatusPollingIntervalMs = 2000;
+
+function pipelineStatus(response: AuditPipelineRunResponse) {
+  return response.final_audit_status ?? response.post_processing?.audit_status ?? null;
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "Unable to start audit.";
 }
 
 export function AuditDetailPage() {
@@ -36,28 +62,60 @@ export function AuditDetailPage() {
     enabled: isValidAuditId,
     retry: false,
   });
+  const baseStatus = summary.data?.status ?? detail.data?.status;
+  const shouldPollStatus = isValidAuditId && baseStatus === "running";
+  const status = useQuery({
+    queryKey: statusQueryKey(auditId),
+    queryFn: () => getAuditStatus(auditId),
+    enabled: shouldPollStatus,
+    retry: false,
+    refetchInterval: (query) =>
+      query.state.data?.status === "running" ? auditStatusPollingIntervalMs : false,
+  });
   const runAuditMutation = useMutation({
-    mutationFn: () => runAudit(auditId),
-    onSuccess: (response: AuditRunTriggerResponse) => {
+    mutationFn: () => runAuditPipeline(auditId),
+    onSuccess: (response) => {
+      const status = pipelineStatus(response);
+      if (status) {
+        queryClient.setQueryData<AuditDetail | undefined>(detailQueryKey(auditId), (current) =>
+          current ? { ...current, status } : current,
+        );
+      }
       queryClient.setQueryData<AuditSummaryResponse | undefined>(
         summaryQueryKey(auditId),
         (current) =>
           current
             ? {
                 ...current,
-                status: response.status,
-                total_runs: response.total_jobs,
-                completion_ratio: response.total_jobs === 0 ? 0 : current.completion_ratio,
+                status: status ?? current.status,
+                total_runs: Math.max(current.total_runs, response.scheduling.total_jobs),
               }
             : current,
       );
-      void queryClient.invalidateQueries({ queryKey: summaryQueryKey(auditId) });
+      void queryClient.invalidateQueries({ queryKey: ["audit", auditId] });
+      void queryClient.invalidateQueries({ queryKey: ["audits"] });
     },
   });
+  const polledStatus = status.data?.status;
+  useEffect(() => {
+    if (!polledStatus || !auditTerminalStatuses.has(polledStatus)) {
+      return;
+    }
+
+    queryClient.setQueryData<AuditDetail | undefined>(detailQueryKey(auditId), (current) =>
+      current ? { ...current, status: polledStatus } : current,
+    );
+    queryClient.setQueryData<AuditSummaryResponse | undefined>(
+      summaryQueryKey(auditId),
+      (current) => (current ? { ...current, status: polledStatus } : current),
+    );
+    void queryClient.invalidateQueries({ queryKey: ["audit", auditId] });
+    void queryClient.invalidateQueries({ queryKey: ["audits"] });
+  }, [auditId, polledStatus, queryClient]);
 
   const isLoading = detail.isLoading || summary.isLoading;
   const hasError = detail.isError || summary.isError || !isValidAuditId;
-  const currentStatus = summary.data?.status ?? detail.data?.status;
+  const currentStatus = status.data?.status ?? baseStatus;
   const isRunning = currentStatus === "running";
 
   const refresh = () => {
@@ -118,7 +176,7 @@ export function AuditDetailPage() {
             onClick={() => runAuditMutation.mutate()}
           >
             <Play className="size-4" aria-hidden="true" />
-            {isRunning ? "Running" : "Start audit"}
+            {runAuditMutation.isPending ? "Starting" : isRunning ? "Running" : "Start audit"}
           </Button>
         </div>
       </div>
@@ -126,7 +184,9 @@ export function AuditDetailPage() {
       <AuditViewTabs auditId={auditId} active="summary" />
 
       {runAuditMutation.error ? (
-        <p className="border-b border-border px-5 py-3 text-sm text-red-700">Unable to start audit.</p>
+        <p className="border-b border-border px-5 py-3 text-sm text-red-700">
+          {errorMessage(runAuditMutation.error)}
+        </p>
       ) : null}
       <AuditSummaryContent auditId={auditId} summary={summary.data} />
     </section>

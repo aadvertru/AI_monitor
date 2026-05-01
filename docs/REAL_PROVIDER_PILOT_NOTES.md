@@ -47,6 +47,18 @@ rejects non-admin users, applies the existing audit access checks, and returns
 only the safe pipeline summary. It is not a public production execution
 contract.
 
+For the user-facing MVP flow, authenticated audit owners use the separate owner
+endpoint:
+
+```text
+POST /audits/{audit_id}/run-pipeline
+```
+
+This endpoint enforces the existing ownership/admin access model, accepts only
+audits in the `created` state, applies the same real-provider pilot guardrails,
+and returns the same safe pipeline summary. Normal frontend code should use this
+owner endpoint and must not call the `/dev/...` route.
+
 For this validation pass, temporary SQLite databases under `testtmp/` were used
 and a dummy non-secret key was set only to reach the adapter capability check.
 The OpenAI SDK is not installed in the current environment, so no real OpenAI

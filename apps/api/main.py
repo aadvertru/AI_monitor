@@ -669,24 +669,7 @@ async def trigger_audit_run_record(
     audit: Audit,
 ) -> AuditRunTriggerResponse:
     audit_number = await get_relative_audit_number(session, audit)
-    if audit.status == AuditStatus.RUNNING:
-        raise HTTPException(status_code=409, detail=AUDIT_RUNNING_DETAIL)
-    if audit.status != AuditStatus.CREATED:
-        raise HTTPException(status_code=409, detail=AUDIT_NOT_TRIGGERABLE_DETAIL)
-
-    expected_runs = await get_expected_run_count(session, audit)
-    if expected_runs == 0:
-        raise HTTPException(status_code=400, detail=AUDIT_NOT_RUNNABLE_DETAIL)
-
-    try:
-        validate_audit_against_pilot_config(
-            providers=audit.providers or [],
-            query_count=await get_effective_query_count(session, audit),
-            runs_per_query=audit.runs_per_query,
-            scdl_level=_scdl_level_value(audit.scdl_level),
-        )
-    except (PilotConfigError, PilotPolicyError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await validate_audit_pipeline_triggerable(session, audit)
 
     scheduled_jobs = await session.run_sync(
         lambda sync_session: len(
@@ -708,6 +691,35 @@ async def trigger_audit_run_record(
         scheduled_jobs=scheduled_jobs,
         total_jobs=total_jobs,
     )
+
+
+async def validate_audit_pipeline_triggerable(
+    session: AsyncSession,
+    audit: Audit,
+) -> None:
+    if audit.status == AuditStatus.RUNNING:
+        raise HTTPException(status_code=409, detail=AUDIT_RUNNING_DETAIL)
+    if audit.status != AuditStatus.CREATED:
+        raise HTTPException(status_code=409, detail=AUDIT_NOT_TRIGGERABLE_DETAIL)
+
+    expected_runs = await get_expected_run_count(session, audit)
+    if expected_runs == 0:
+        raise HTTPException(status_code=400, detail=AUDIT_NOT_RUNNABLE_DETAIL)
+
+    try:
+        validate_audit_against_pilot_config(
+            providers=audit.providers or [],
+            query_count=await get_effective_query_count(session, audit),
+            runs_per_query=audit.runs_per_query,
+            scdl_level=_scdl_level_value(audit.scdl_level),
+        )
+    except (PilotConfigError, PilotPolicyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def build_pipeline_run_response(summary: object) -> AuditPipelineRunResponse:
+    safe_summary = _redact_pipeline_summary_value(summary.safe_log_dict())
+    return AuditPipelineRunResponse.model_validate(safe_summary)
 
 
 def _source_item_from_value(
@@ -1173,8 +1185,26 @@ async def run_audit_pipeline_dev(
             raise HTTPException(status_code=403, detail=DEV_PIPELINE_FORBIDDEN_DETAIL)
         audit, _brand = await load_accessible_audit(session, audit_id, current_user)
         summary = await run_audit_pipeline(session, audit.id)
-        safe_summary = _redact_pipeline_summary_value(summary.safe_log_dict())
-        return AuditPipelineRunResponse.model_validate(safe_summary)
+        return build_pipeline_run_response(summary)
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail="Failed to run audit pipeline.") from exc
+
+
+@app.post("/audits/{audit_id}/run-pipeline", response_model=AuditPipelineRunResponse)
+async def run_audit_pipeline_owner(
+    audit_id: int,
+    request: Request,
+    session: AsyncSession = DB_SESSION_DEPENDENCY,
+) -> AuditPipelineRunResponse:
+    try:
+        current_user = await get_authenticated_user_from_request(session, request)
+        audit, _brand = await load_accessible_audit(session, audit_id, current_user)
+        await validate_audit_pipeline_triggerable(session, audit)
+        summary = await run_audit_pipeline(session, audit.id)
+        return build_pipeline_run_response(summary)
     except HTTPException:
         raise
     except SQLAlchemyError as exc:
