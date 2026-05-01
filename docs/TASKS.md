@@ -1,849 +1,683 @@
-# Phase F — Real Provider Pilot Tasks
+# Phase F2 — Real Response Post-Processing and Analysis Tasks
 
-This file contains the revised tasks for the OpenAI real-provider pilot after review feedback.
+This file contains tasks for closing the post-processing gap after the first real OpenAI provider execution.
 
-The pilot uses **OpenAI only** and supports two SCDL modes:
+Current state:
+- OpenAI real provider execution can save `RawResponse`.
+- Parser/scoring/aggregation are not yet automatically applied to stored real raw responses.
+- The next goal is to process stored responses, verify UI, test L2 source mapping, and analyze Russian-language parser/scoring quality.
 
-- `L1` = OpenAI answer without web search
-- `L2` = OpenAI answer with web search enabled
-
-The OpenAI pilot must use the **OpenAI Responses API**. Chat Completions must not be used unless Responses API is unavailable and the task escalates first.
+Implementation note:
+- TASK-135 must start by inspecting existing parser/scoring function signatures.
+- The post-processing service should adapt storage records into the existing DTO/input shape expected by parser/scoring.
+- Do not change parser/scoring contracts during this phase unless a task explicitly escalates and is approved.
 
 ---
 
-## TASK-128 — Define real provider pilot constraints
+## TASK-135 — Add audit result post-processing service
 
 ### Status
 Ready
 
 ### Goal
-Define safe constraints for running the first real OpenAI provider pilot in L1 and L2 modes.
+Add a backend service that processes stored successful raw audit responses into parsed results, scores, and refreshed audit aggregation.
 
 ### Why
-Real provider calls introduce cost, rate-limit, security, and data-quality risks, so the project needs explicit guardrails before OpenAI API execution is enabled.
+Real OpenAI provider execution currently stores `RawResponse`, but the audit remains incomplete until existing parser, scoring, and aggregation logic are applied to those stored responses.
 
 ### Context
-The current MVP works on mock data. This phase introduces one real provider only: OpenAI. The pilot must support two SCDL execution modes:
+The real OpenAI pilot can now execute provider calls and save raw answers. This task closes the `raw → parsed → scored → aggregated` gap without calling OpenAI again. The service must be reusable by CLI, admin/debug tools, and future background execution paths.
 
-- `L1` = OpenAI answer without web search
-- `L2` = OpenAI answer with web search enabled
+Expected flow:
 
-The OpenAI pilot uses the OpenAI Responses API.
-
-This task defines constraints and configuration only. It must not implement the OpenAI adapter or call the real OpenAI API.
+```text
+successful runs without ParsedResult
+→ load stored RawResponse
+→ run existing parser
+→ run existing scoring
+→ save ParsedResult
+→ save Score
+→ refresh aggregation/summary/status
+```
 
 ### Scope
-- Add configuration flags for real-provider execution.
-- Keep mock provider mode as the default behavior.
-- Add or define provider mode setting:
-  - `PROVIDER_MODE=mock`
-  - `PROVIDER_MODE=openai`
-- Add explicit real-provider enable flag:
-  - `REAL_PROVIDER_ENABLED=false`
-- Define the OpenAI pilot API family:
-  - OpenAI Responses API
-- Add a real-provider policy guard that runs before scheduling/execution and before provider adapter selection.
-- Define provider mode rules:
-  - `PROVIDER_MODE=mock` allows mock execution only.
-  - `PROVIDER_MODE=openai` allows OpenAI execution only.
-  - mixed provider lists are rejected during the pilot.
-- Add default pilot caps:
-  - `REAL_PROVIDER_ENABLED=false`
-  - `PROVIDER_MODE=mock`
-  - `REAL_PROVIDER_MAX_PROVIDERS=1`
-  - `REAL_PROVIDER_MAX_QUERIES=5`
-  - `REAL_PROVIDER_MAX_RUNS_PER_QUERY=1`
-  - `REAL_PROVIDER_MAX_TOTAL_RUNS=5`
-- Add separate constraints for local/dev real-provider testing if needed.
-- Define how SCDL level maps to OpenAI execution mode at the policy level:
-  - `L1` must not use web search.
-  - `L2` may use web search.
-- Add safe failure behavior when real provider mode is requested but disabled.
-- Add safe failure behavior when a real audit exceeds configured caps.
-- Add tests for configuration and cap enforcement where the project structure supports it.
-- Document the pilot limits in the relevant docs or config comments.
+- Add a reusable backend service/function for post-processing one audit by `audit_id`.
+- Find successful runs for the audit that have stored raw responses but do not yet have parsed results and/or scores.
+- Load `raw_responses.raw_answer` and related provider response data from storage.
+- Run the existing parser on stored raw response data.
+- Run the existing scoring logic on the parsed result.
+- Persist `ParsedResult` records using existing storage patterns.
+- Persist `Score` records using existing storage patterns.
+- Ensure existing summary/results endpoints reflect newly saved `ParsedResult` and `Score` records.
+- Update audit status using explicit post-processing rules:
+  - `completed` only when all expected runs are terminal and successful/error accounting is complete.
+  - `partial` when terminal provider/parser/scoring errors exist or some expected runs cannot be processed.
+  - do not mark the audit as `failed` only because the provider run succeeded but the parser did not find the brand.
+- Reconstruct or adapt the stored raw response into the existing parser input contract without changing parser signatures, for example:
+  - stored `raw_answer`
+  - stored citations/sources where available
+  - provider metadata where available
+  - brand/audit/query context required by the parser
+- Keep the transformation boundary explicit:
+  - storage data → existing parser/scoring DTO/input shape → parser → scoring → storage
+- Make the service idempotent:
+  - already processed runs must not create duplicate parsed results or duplicate scores
+  - re-running the service should be safe
+- Return a structured processing summary, including:
+  - audit id
+  - total runs inspected
+  - runs processed
+  - runs skipped because already processed
+  - runs skipped because raw response is missing
+  - runs skipped because run status is not successful
+  - per-run processing errors, reported without failing the whole service where possible
+  - fatal service errors, such as missing audit or database failure
+- Add tests for service behavior.
 
 ### Out of scope
-- Do not implement the OpenAI API adapter.
-- Do not add OpenAI API key handling beyond naming required config fields if needed.
+- Do not add the CLI command in this task.
 - Do not call the real OpenAI API.
-- Do not implement web search execution.
-- Do not change parser, scoring, aggregation, raw response, or provider contracts.
-- Do not add support for providers other than OpenAI.
-- Do not add billing or user-facing cost estimates.
-- Do not change frontend UI unless a minimal config label is already required by existing code.
-- Do not increase default audit limits for mock mode.
-
-### Acceptance criteria
-- Mock provider mode remains the default.
-- Real provider calls are impossible unless explicitly enabled.
-- OpenAI is the only real provider allowed by the pilot constraints.
-- The OpenAI pilot API family is documented as Responses API.
-- Real-provider policy guard is called before scheduling/execution.
-- Real-provider audits are blocked if they exceed configured query/run/provider caps.
-- `PROVIDER_MODE=mock` rejects OpenAI real execution.
-- `PROVIDER_MODE=openai` rejects mock-only and mixed-provider execution.
-- Mixed provider lists are rejected in real-provider pilot mode.
-- `L1` and `L2` policy meanings are documented for OpenAI pilot usage.
-- Attempting real provider execution while disabled returns a controlled error.
-- Attempting unsupported provider execution returns a controlled error.
-- Existing mock-provider tests still pass.
-- No real external API calls happen in automated tests.
-
-### Test requirements
-- Add a test confirming mock provider mode is the default.
-- Add a test confirming real provider execution is blocked when `REAL_PROVIDER_ENABLED=false`.
-- Add a test confirming only OpenAI is allowed as real provider in pilot mode.
-- Add a test confirming mixed provider lists are rejected in real-provider pilot mode.
-- Add a test confirming the policy guard runs before scheduling/execution.
-- Add a test confirming max providers per real audit is enforced.
-- Add a test confirming max queries per real audit is enforced.
-- Add a test confirming max runs per query is enforced.
-- Add a test confirming max total real runs per audit is enforced.
-- Add a test confirming unsupported real provider mode returns a controlled error.
-- Add a test or assertion confirming no real OpenAI API call is made by this task.
-
-### Files likely affected
-Optional hint, not a hard boundary.
-- `apps/api/...config...`
-- `apps/api/...providers...`
-- `apps/api/...orchestrator...`
-- `apps/api/...scheduler...`
-- `apps/api/...settings...`
-- `tests/...config...`
-- `tests/...providers...`
-- `tests/...orchestrator...`
-- `docs/...`
-
-### Commands
-Use project commands from `/AGENTS.md`.
-
-At minimum, run:
-- backend config/provider tests
-- backend audit/provider tests affected by provider mode
-- backend lint/typecheck commands if available
-
-### Dependencies
-- None
-
-### Escalate if
-- The project has no clear config/environment pattern.
-- Existing provider selection does not support a clean mock/openai split.
-- SCDL `L1`/`L2` is not available in audit settings.
-- Enforcing caps requires changing provider, parser, scoring, raw response, or aggregation contracts.
-- Real-provider enablement cannot be blocked before adapter execution.
-- Existing scheduling/execution flow cannot support a pre-scheduling policy guard.
-- Existing tests expect unrestricted provider execution.
-
-### Done means
-Inherits project defaults from `/AGENTS.md`.
-
-Additional completion requirements:
-- Document the pilot configuration names and default values.
-- Document that OpenAI Responses API is the selected API family for the pilot.
-- Confirm in the PR summary that no real OpenAI API call is made by this task.
-
----
-
-## TASK-129 — Add OpenAI secrets and provider config handling
-
-### Status
-Ready
-
-### Goal
-Add secure backend configuration for OpenAI provider credentials, model defaults, API family, and pilot request settings without hardcoding secrets.
-
-### Why
-The real-provider pilot needs OpenAI API access, but provider credentials and model/cost choices must be configured safely before the adapter is implemented.
-
-### Context
-TASK-128 defined the real-provider pilot constraints. This task adds the secure configuration layer for OpenAI only. It prepares the project for the OpenAI adapter but must not implement real API calls yet.
-
-The pilot provider is OpenAI only:
-- `L1` = OpenAI answer without web search
-- `L2` = OpenAI answer with web search enabled
-
-The pilot uses the OpenAI Responses API.
-
-### Scope
-- Add OpenAI provider config fields using the existing backend config/environment pattern.
-- Add config field for OpenAI API family and default it to Responses API.
-- Add support for OpenAI API key.
-- Add default OpenAI model config:
-  - `OPENAI_L1_MODEL=gpt-4.1-mini`
-  - `OPENAI_L2_MODEL=gpt-4.1-mini`
-- Add request settings:
-  - `OPENAI_REQUEST_TIMEOUT_SECONDS=30`
-  - `OPENAI_MAX_OUTPUT_TOKENS=1200`
-- Add `.env.example` placeholders or project-equivalent documentation for required OpenAI settings.
-- Ensure OpenAI API key is never hardcoded.
-- Ensure OpenAI API key is never returned by API responses.
-- Ensure OpenAI API key is never printed in logs or test output.
-- Add controlled error behavior when OpenAI provider mode is enabled but the API key is missing.
-- Add controlled error behavior when required OpenAI config values are invalid.
-- Add tests for config loading, missing config, default values, and secret-safety behavior.
-
-### Out of scope
-- Do not implement the OpenAI provider adapter.
-- Do not call the real OpenAI API.
-- Do not add support for providers other than OpenAI.
-- Do not implement web search execution.
-- Do not add frontend UI for entering API keys.
-- Do not store provider keys in the database.
-- Do not expose provider keys to users.
-- Do not add billing, quotas, or user-level API-key management.
-- Do not silently change default models if the configured model is unavailable.
-- Do not change parser, scoring, aggregation, raw response, or provider contracts.
-
-### Acceptance criteria
-- OpenAI API key is read only from environment/config.
-- OpenAI API family is configured as Responses API.
-- OpenAI L1 and L2 model settings are configurable.
-- Default L1 model is `gpt-4.1-mini`.
-- Default L2 model is `gpt-4.1-mini`.
-- OpenAI timeout and response limit settings are configurable.
-- `.env.example` or equivalent config documentation includes OpenAI placeholders without real secrets.
-- Missing OpenAI API key produces a controlled provider/config error when OpenAI mode is enabled.
-- Invalid required OpenAI config produces a controlled error.
-- Logs and API responses do not expose the API key.
-- Existing mock-provider behavior remains unchanged.
-- Existing backend tests still pass.
-- No real external API calls happen in automated tests.
-
-### Test requirements
-- Add a test confirming OpenAI API key can be loaded from environment/config.
-- Add a test confirming missing OpenAI API key fails safely when OpenAI mode is enabled.
-- Add a test confirming missing OpenAI API key does not affect mock provider mode.
-- Add a test confirming OpenAI API family defaults to Responses API.
-- Add a test confirming OpenAI L1 model config is loaded.
-- Add a test confirming OpenAI L2 model config is loaded.
-- Add a test confirming timeout config is loaded or defaults safely.
-- Add a test confirming max output tokens config is loaded or defaults safely.
-- Add a test or assertion confirming secrets are masked or absent from string representations/loggable config output.
-- Add a test or assertion confirming no real OpenAI API call is made by this task.
-
-### Files likely affected
-Optional hint, not a hard boundary.
-- `apps/api/...config...`
-- `apps/api/...settings...`
-- `apps/api/...providers...`
-- `.env.example`
-- `tests/...config...`
-- `tests/...providers...`
-- `docs/...`
-
-### Commands
-Use project commands from `/AGENTS.md`.
-
-At minimum, run:
-- backend config/provider tests
-- backend tests affected by provider mode
-- backend lint/typecheck commands if available
-
-### Dependencies
-- TASK-128 — Define real provider pilot constraints
-
-### Escalate if
-- The repository has no clear environment/config pattern.
-- Adding OpenAI config requires storing secrets in the database.
-- Existing config objects expose secrets in logs or API responses.
-- The configured default OpenAI model is unavailable in the project account.
-- The Responses API cannot be used for the intended L1/L2 implementation.
-- Missing-key behavior conflicts with the provider adapter contract.
-- Implementing this task requires making a real OpenAI API call.
-
-### Done means
-Inherits project defaults from `/AGENTS.md`.
-
-Additional completion requirements:
-- Document the OpenAI environment variable names and safe local setup.
-- Document the default OpenAI models and request settings.
-- Confirm in the PR summary that no real OpenAI API call is made by this task.
-
----
-
-## TASK-130 — Implement OpenAI real provider adapter for L1 and L2
-
-### Status
-Ready
-
-### Goal
-Implement the first real provider adapter for OpenAI Responses API that supports SCDL `L1` no-web answers and `L2` web-enabled answers through the existing provider contract.
-
-### Why
-The project needs one controlled real-provider implementation to verify that the SCDL audit pipeline works on real OpenAI responses while preserving the existing raw response, parser, scoring, and aggregation boundaries.
-
-### Context
-TASK-128 defined real-provider pilot constraints. TASK-129 added secure OpenAI config handling. This task adds the OpenAI adapter only. Automated tests must mock the internal OpenAI client wrapper and must not call the real OpenAI API.
-
-SCDL behavior:
-- `L1` = OpenAI answer without web search
-- `L2` = OpenAI answer with web search enabled
-
-The adapter must use OpenAI Responses API. Chat Completions must not be used unless Responses API is unavailable and the task escalates first.
-
-### Scope
-- Add a small internal OpenAI client wrapper/interface.
-- Implement the adapter against the OpenAI Responses API.
-- Ensure tests mock the internal OpenAI client wrapper, not the real network.
-- Add an OpenAI provider adapter using the existing provider adapter interface/contract.
-- Support `L1` execution without web search.
-- Support `L2` execution with web search enabled if the selected OpenAI model/tooling supports it.
-- For `L1`, ensure request payload does not include web search tools.
-- For `L2`, enable web search through Responses API tools where supported.
-- Map OpenAI text output into the existing `ProviderResponse` or project-equivalent normalized response.
-- Map OpenAI metadata safely into provider metadata.
-- Map OpenAI citations/sources into the existing citations/sources shape when available.
-- For `L1`, return empty citations/sources unless the API response provides safe source data.
-- Return controlled provider errors for:
-  - missing/invalid config
-  - OpenAI API error
-  - timeout
-  - rate limit
-  - malformed response
-  - unsupported SCDL level
-  - unsupported web-search mode
-- Ensure adapter never leaks the API key in errors, logs, metadata, or test output.
-- Add unit/contract tests with mocked internal OpenAI client responses.
-- Ensure existing mock provider tests still pass.
-
-### Out of scope
-- Do not call the real OpenAI API in automated tests.
-- Do not use Chat Completions unless Responses API is unavailable and the task escalates first.
-- Do not mock the external OpenAI SDK/network directly when the internal wrapper can be used.
-- Do not implement providers other than OpenAI.
+- Do not re-run provider execution.
 - Do not change parser logic.
 - Do not change scoring formulas.
-- Do not change aggregation logic.
+- Do not change provider adapter behavior.
 - Do not change raw response storage contract.
-- Do not change the provider contract unless the task escalates first.
 - Do not add frontend UI.
-- Do not add billing or cost tracking.
-- Do not add user-supplied API keys.
-- Do not implement retries beyond existing provider/execution policy unless already required by the provider contract.
+- Do not expose raw answers in normal user-facing UI.
+- Do not implement background workers or scheduling.
+- Do not process all audits globally unless explicitly needed for tests; this task is audit-id scoped.
 
 ### Acceptance criteria
-- OpenAI adapter can be selected only when real provider mode is enabled and provider constraints allow it.
-- Adapter uses the OpenAI Responses API.
-- Adapter depends on an internal OpenAI client wrapper/interface.
-- Tests prove the adapter uses the internal client wrapper.
-- `L1` request path does not enable web search.
-- `L1` request payload does not include web search tools.
-- `L2` request path enables web search or returns a controlled unsupported-mode error if web search is unavailable in the configured OpenAI setup.
-- `L2` request payload includes the configured web search tool when supported.
-- Successful mocked OpenAI response returns a valid normalized provider response.
-- Empty or malformed OpenAI response returns a controlled provider error or safe empty response according to existing provider contract.
-- Timeout/rate-limit/API errors are normalized into controlled provider errors.
-- API key is never included in normalized response, metadata, logs, or errors.
-- Existing mock provider behavior remains unchanged.
-- Existing parser/scoring/aggregation tests still pass.
-- No real external API calls happen in automated tests.
+- A stored successful raw response can be parsed, scored, and saved.
+- A run without raw response is skipped safely and reported.
+- A non-successful run is skipped safely and reported.
+- A run that already has parsed/scored output is skipped or updated according to the existing storage convention without duplication.
+- Re-running the service for the same audit is safe and does not create duplicate records.
+- Existing summary/results endpoints reflect newly saved parsed/scored data after processing.
+- Audit status follows the explicit post-processing rules from this task.
+- Parser input is built by adapting stored response data into the existing parser contract without changing parser signatures.
+- The service returns a structured processing summary with separate per-run errors and fatal service errors.
+- Existing mock-provider pipeline behavior remains unchanged.
+- Existing parser/scoring tests still pass.
+- No real external provider API calls happen in automated tests.
 
 ### Test requirements
-- Add contract test for successful mocked OpenAI `L1` response.
-- Add contract test confirming `L1` request does not include web-search configuration/tools.
-- Add contract test for successful mocked OpenAI `L2` response when web-search mode is supported by the adapter.
-- Add test confirming `L2` uses web-search configuration/tools or returns controlled unsupported-mode error.
-- Add test confirming adapter uses the internal OpenAI client wrapper.
-- Add test for mapping text output to normalized `raw_answer`.
-- Add test for mapping citations/sources when mocked response includes them.
-- Add test for empty/malformed mocked response.
-- Add test for timeout handling.
-- Add test for rate-limit/API error handling.
-- Add test confirming API key is not exposed in errors/metadata.
-- Add regression test confirming mock provider path is unchanged.
+- Add service-level test for processing one successful stored raw response.
+- Add test confirming `ParsedResult` is saved.
+- Add test confirming `Score` is saved.
+- Add test confirming existing summary/results endpoint data reflects newly saved parsed/scored records.
+- Add test confirming audit status behavior for completed processing.
+- Add test confirming audit status behavior for partial processing with terminal errors or skipped runs.
+- Add test confirming parser miss / brand-not-found does not automatically mark audit as failed.
+- Add test confirming stored raw response data is adapted into the existing parser input contract.
+- Add test for missing raw response skip behavior.
+- Add test for non-successful run skip behavior.
+- Add idempotency test confirming re-running does not duplicate parsed results or scores.
+- Add test confirming parser/scoring are run from stored raw response data, not from a provider call.
 - Add assertion or mock guard confirming no real OpenAI API call is made.
 
 ### Files likely affected
 Optional hint, not a hard boundary.
-- `apps/api/...providers/openai...`
-- `apps/api/...providers...`
-- `apps/api/...config...`
-- `tests/...providers...`
-- `tests/...execution...`
-- `tests/...fixtures...`
-
-### Commands
-Use project commands from `/AGENTS.md`.
-
-At minimum, run:
-- backend provider contract tests
-- backend execution tests affected by provider selection
-- backend parser/scoring regression tests if provider response shape changed
-- backend lint/typecheck commands if available
-
-### Dependencies
-- TASK-128 — Define real provider pilot constraints
-- TASK-129 — Add OpenAI secrets and provider config handling
-
-### Escalate if
-- Existing provider contract cannot represent OpenAI L2 web citations/sources.
-- The selected OpenAI API/model does not support web search in the intended way.
-- The Responses API cannot be used for the intended L1/L2 implementation.
-- Implementing L2 requires a different provider response shape.
-- Mapping OpenAI response requires changing parser, scoring, aggregation, or raw response storage contracts.
-- The adapter needs network calls in automated tests.
-- OpenAI SDK/version choice is unclear or conflicts with the project dependency policy.
-- Web-search usage requires product/cost/risk approval not present in the task.
-
-### Done means
-Inherits project defaults from `/AGENTS.md`.
-
-Additional completion requirements:
-- Document which OpenAI model/config is used for L1 and L2.
-- Document that the adapter uses OpenAI Responses API.
-- Document whether L2 web-search mode is implemented or returns a controlled unsupported-mode error.
-- Confirm in the PR summary that automated tests do not call the real OpenAI API.
-
----
-
-## TASK-131 — Add real-provider dry-run mode
-
-### Status
-Ready
-
-### Goal
-Add a controlled dry-run mode for executing a small OpenAI real-provider audit locally without changing production defaults or bypassing safety limits.
-
-### Why
-Before running larger real audits, the project needs a safe way to verify the OpenAI adapter, SCDL L1/L2 execution, raw response storage, parser, scoring, aggregation, and UI flow on a tiny real-data sample.
-
-### Context
-TASK-128 defined real-provider pilot constraints. TASK-129 added OpenAI config handling. TASK-130 implemented the OpenAI adapter for L1 and L2. This task adds a local/dev execution path for one small controlled real-provider audit. Mock mode must remain the default.
-
-### Scope
-- Add a dry-run execution mode for local/dev real-provider testing.
-- Require explicit enablement before any real OpenAI request can run.
-- Use the existing audit pipeline entry point where possible.
-- Dry-run must call the same real-provider policy guard used by run trigger.
-- Dry-run must reject mixed provider lists.
-- Enforce real-provider caps from TASK-128:
-  - allowed provider: OpenAI only
-  - limited query count
-  - limited runs per query
-  - limited total real runs per audit
-- Support dry-run execution for:
-  - SCDL `L1` without web search
-  - SCDL `L2` with web search if supported by TASK-130
-- Add a clear command, endpoint, admin/dev-only path, or documented local procedure for running one dry-run audit.
-- Log safe execution metadata:
-  - audit id
-  - provider mode
-  - provider
-  - configured caps
-  - SCDL level
-  - query count
-  - runs per query
-  - total run count
-  - success/error counts
-- Do not log prompts, full raw answers, API keys, or sensitive provider config unless the project already has an explicit safe debug mode.
-- Add tests proving dry-run safety behavior without calling the real OpenAI API.
-- Document how to run the dry-run locally.
-
-### Out of scope
-- Do not enable real provider mode by default.
-- Do not remove or weaken mock provider behavior.
-- Do not create a public user-facing “real provider” switch unless already part of the approved UI.
-- Do not add billing, cost accounting, user quotas, or paid plan enforcement.
-- Do not implement providers other than OpenAI.
-- Do not change parser, scoring, aggregation, provider contract, or raw response storage contracts.
-- Do not add broad E2E coverage for real provider calls.
-- Do not run real OpenAI calls in automated tests.
-- Do not expose raw provider answers publicly.
-
-### Acceptance criteria
-- Real-provider dry-run cannot run unless explicitly enabled.
-- Dry-run calls the same real-provider policy guard used by run trigger or the project-equivalent execution path.
-- Dry-run uses OpenAI only.
-- Dry-run rejects mixed provider lists.
-- Dry-run enforces configured real-provider caps.
-- Dry-run supports L1 and L2 according to the OpenAI adapter capabilities.
-- Dry-run returns or logs controlled status information for success and failure.
-- Dry-run stores raw responses through the existing raw response path when an actual local run is executed.
-- Dry-run does not expose API keys or secrets.
-- Mock provider mode remains the default and still works.
-- Automated tests do not call the real OpenAI API.
-- Local dry-run procedure is documented.
-
-### Test requirements
-- Add test confirming dry-run is blocked when real provider mode is disabled.
-- Add test confirming dry-run accepts OpenAI only.
-- Add test confirming dry-run rejects mixed provider lists.
-- Add test confirming query/run caps are enforced.
-- Add test confirming L1 dry-run path selects no-web mode.
-- Add test confirming L2 dry-run path selects web-enabled mode or controlled unsupported behavior.
-- Add test confirming dry-run uses the existing provider adapter interface with a mocked OpenAI adapter/client.
-- Add test confirming dry-run uses the real-provider policy guard.
-- Add test confirming safe metadata is returned/logged without API key exposure.
-- Add regression test confirming mock provider execution path is unchanged.
-- Add assertion or mock guard confirming no real OpenAI API call is made in automated tests.
-
-### Files likely affected
-Optional hint, not a hard boundary.
-- `apps/api/...providers...`
-- `apps/api/...orchestrator...`
-- `apps/api/...routes/audits...`
-- `apps/api/...commands...`
-- `apps/api/...config...`
-- `tests/...providers...`
-- `tests/...execution...`
-- `tests/...api...`
-- `docs/...`
-
-### Commands
-Use project commands from `/AGENTS.md`.
-
-At minimum, run:
-- backend provider tests
-- backend execution/orchestrator tests
-- backend audit API tests affected by run trigger or dry-run path
-- backend lint/typecheck commands if available
-
-### Dependencies
-- TASK-128 — Define real provider pilot constraints
-- TASK-129 — Add OpenAI secrets and provider config handling
-- TASK-130 — Implement OpenAI real provider adapter for L1 and L2
-
-### Escalate if
-- There is no safe existing pipeline entry point for dry-run execution.
-- Dry-run requires a new queue/background worker system.
-- The dry-run path would need to bypass raw response storage.
-- L2 web-search behavior is unsupported or ambiguous after TASK-130.
-- Safe logging requirements conflict with existing observability behavior.
-- The implementation would expose secrets, raw provider answers, or provider metadata unsafely.
-- Automated tests require real OpenAI network calls.
-
-### Done means
-Inherits project defaults from `/AGENTS.md`.
-
-Additional completion requirements:
-- Document the exact local dry-run command or procedure.
-- Document required environment variables.
-- Confirm in the PR summary that mock mode remains default.
-- Confirm in the PR summary that automated tests do not call OpenAI.
-
----
-
-## TASK-132 — Add raw response inspection screen/log
-
-### Status
-Ready
-
-### Goal
-Add a safe raw response inspection path for local/dev real-provider pilot analysis.
-
-### Why
-Real OpenAI responses must be inspectable during the pilot so parser, scoring, aggregation, citations, and UI behavior can be compared against the actual provider output without guessing where errors originate.
-
-### Context
-TASK-130 adds the OpenAI adapter. TASK-131 adds dry-run execution. The project already stores raw responses as a core audit invariant. This task adds a controlled way to inspect stored raw responses for pilot/debug purposes only. It must not expose secrets, provider keys, or unsafe raw data publicly.
-
-### Scope
-- Add one safe raw response inspection mechanism, such as:
-  - dev/admin-only backend endpoint
-  - local CLI/debug command
-  - backend log/report file generated during dry-run
-  - minimal internal UI panel if already consistent with the current frontend structure
-- Use existing stored `RawResponse` records or project-equivalent raw storage.
-- Allow inspection by audit id and/or run id.
-- Include useful debug fields where available:
-  - audit id
-  - query
-  - provider
-  - SCDL level
-  - run number
-  - run status
-  - raw answer preview or full raw answer only if access is restricted
-  - citations/sources
-  - provider metadata with secrets removed
-  - error object if present
-  - response time if available
-  - created timestamp
-- Redact or omit secrets and provider credentials.
-- Ensure inspection path is restricted to local/dev/admin usage.
-- Add tests for access control/redaction behavior where applicable.
-- Document how to use the inspection mechanism during the real-provider pilot.
-
-### Out of scope
-- Do not expose raw responses publicly to regular users unless an explicit product decision exists.
-- Do not add export to PDF/DOCX/Excel.
-- Do not add new parser logic.
-- Do not change scoring formulas.
-- Do not change provider adapter behavior.
-- Do not change raw response storage contract.
-- Do not call the real OpenAI API in tests.
-- Do not store extra copies of raw answers outside the approved raw response storage unless explicitly documented as a local-only debug artifact.
-- Do not expose API keys, request headers, auth cookies, or provider secrets.
-
-### Acceptance criteria
-- A developer/admin can inspect stored raw responses for a pilot audit.
-- Raw response inspection uses existing stored raw response data.
-- Inspection output includes enough context to compare raw → parsed → score behavior.
-- Secrets and provider credentials are not exposed.
-- Regular unauthorized users cannot access raw response inspection if implemented as an endpoint/UI.
-- Missing raw responses return a controlled not-found or empty result.
-- Error runs are inspectable.
-- Existing audit results/summary behavior remains unchanged.
-- Automated tests do not call the real OpenAI API.
-
-### Test requirements
-- Add test for inspecting a stored successful raw response.
-- Add test for inspecting an error raw response if raw error storage exists.
-- Add test for missing raw response behavior.
-- Add test or assertion confirming provider secrets/API keys are redacted or absent.
-- Add access-control test if implemented as an endpoint or UI.
-- Add regression test confirming existing results/summary endpoints are unchanged.
-- Add assertion or mock guard confirming no real OpenAI API call is made in automated tests.
-
-### Files likely affected
-Optional hint, not a hard boundary.
-- `apps/api/...routes/debug...`
-- `apps/api/...routes/audits...`
-- `apps/api/...raw_responses...`
+- `apps/api/...post_processing...`
+- `apps/api/...services...`
+- `apps/api/...aggregation...`
 - `apps/api/...repositories...`
-- `apps/web/src/...debug...` if a minimal UI is chosen
-- `tests/...raw_responses...`
-- `tests/...api...`
-- `docs/...`
+- `libs/...parser...`
+- `libs/...scoring...`
+- `tests/...post_processing...`
+- `tests/...aggregation...`
 
 ### Commands
 Use project commands from `/AGENTS.md`.
 
 At minimum, run:
-- backend raw response / audit API tests
-- backend auth/access-control tests if an endpoint is added
-- frontend tests if a UI panel is added
-- backend/frontend lint/typecheck commands affected by the chosen implementation
+- backend post-processing service tests
+- backend parser/scoring tests
+- backend aggregation tests affected by this service
+- backend audit API tests if audit status/summary behavior is affected
+- backend lint/typecheck commands if available
 
 ### Dependencies
-- TASK-130 — Implement OpenAI real provider adapter for L1 and L2
-- TASK-131 — Add real-provider dry-run mode
-
-### Escalate if
-- Raw response storage does not contain enough data for inspection.
-- Access-control requirements for raw answers are unclear.
-- Product requires regular users to see full raw provider answers.
-- Inspecting raw responses would expose sensitive provider metadata.
-- A UI screen is requested but no admin/dev-only route convention exists.
-- The implementation requires changing raw response storage or parser/scoring contracts.
-
-### Done means
-Inherits project defaults from `/AGENTS.md`.
-
-Additional completion requirements:
-- Document the inspection path and intended local/dev/admin use.
-- Document what fields are intentionally redacted or omitted.
-- Confirm in the PR summary that automated tests do not call OpenAI.
-
----
-
-## TASK-133 — Run first real OpenAI audit pilot
-
-### Status
-Ready
-
-### Goal
-Run the first controlled real OpenAI audit pilot using both SCDL `L1` and `L2` modes on a very small query set.
-
-### Why
-The project needs a real-data validation pass to confirm that the OpenAI adapter, dry-run mode, raw response storage, parser, scoring, aggregation, and UI can work together beyond mocked data.
-
-### Context
-TASK-128 defined real-provider pilot constraints. TASK-129 added OpenAI secrets/config handling. TASK-130 implemented the OpenAI adapter. TASK-131 added dry-run mode. TASK-132 added raw response inspection.
-
-This task is an execution and documentation task. It may include small bug fixes only when they are required to complete the pilot and remain within the pilot scope.
-
-### Scope
-- Configure local/dev environment for real OpenAI pilot execution.
-- Use OpenAI as the only real provider.
-- Run one small `L1` pilot audit with:
-  - max 1 provider
-  - max 3–5 queries
-  - max 1–2 runs per query, but prefer the configured pilot default of 1
-- Run one small `L2` pilot audit with:
-  - max 1 provider
-  - max 3–5 queries
-  - max 1–2 runs per query, but prefer the configured pilot default of 1
-- Use a controlled test brand and non-sensitive queries.
-- Confirm pilot caps are enforced before execution.
-- Confirm raw responses are stored.
-- Inspect raw responses using the TASK-132 inspection path.
-- Confirm parser produces parsed results.
-- Confirm scoring produces bounded scores.
-- Confirm aggregation produces summary/results.
-- Confirm frontend can display the pilot audit status, summary, results, competitors, and sources where available.
-- Record findings in a pilot notes document, for example `docs/REAL_PROVIDER_PILOT_NOTES.md`.
-- Record any bugs discovered as follow-up tasks or bug entries instead of expanding this task.
-
-### Out of scope
-- Do not run large audits.
-- Do not test multiple real providers.
-- Do not increase real-provider caps.
-- Do not add billing, quotas, or production usage logic.
-- Do not use real customer data.
-- Do not commit real API keys, raw secrets, or sensitive provider data.
-- Do not rewrite parser/scoring based on pilot findings in this task.
-- Do not change scoring formulas unless a blocking bug prevents pilot completion and escalation approves it.
-- Do not add new UI features beyond minimal fixes required to inspect pilot results.
-- Do not run real provider calls in automated tests.
-
-### Acceptance criteria
-- One small real OpenAI `L1` pilot audit is executed successfully or fails with a controlled documented provider error.
-- One small real OpenAI `L2` pilot audit is executed successfully or fails with a controlled documented provider error.
-- Pilot execution respects configured real-provider caps.
-- Raw responses are stored for executed runs.
-- Raw responses are inspectable without exposing secrets.
-- Parser/scoring/aggregation run on the stored real responses.
-- Final scores remain bounded to `[0,1]`.
-- Frontend can display the pilot audit data or a controlled empty/error state.
-- Pilot findings are documented.
-- Any discovered issues are recorded as follow-up bugs/tasks.
-- No secrets or real API keys are committed.
-
-### Test requirements
-- No automated test is required to call the real OpenAI API.
-- Run existing backend provider/execution tests before the pilot.
-- Run existing parser/scoring/aggregation tests before or after the pilot.
-- Run existing frontend build/tests if pilot-related UI fixes are made.
-- Manually verify the L1 pilot flow.
-- Manually verify the L2 pilot flow.
-- Manually verify raw response inspection.
-- Manually verify that no API key or secret appears in logs, UI, raw inspection output, or committed files.
-- Document the exact commands/manual steps used for the pilot.
-
-### Files likely affected
-Optional hint, not a hard boundary.
-- `docs/REAL_PROVIDER_PILOT_NOTES.md`
-- local `.env` file, not committed
-- `docs/...`
-- small backend/frontend fix files only if required to complete the pilot
-
-### Commands
-Use project commands from `/AGENTS.md`.
-
-At minimum, before or after pilot execution run:
-- backend provider/execution tests
-- backend parser/scoring/aggregation tests
-- frontend tests/build if UI was changed
-
-The real OpenAI pilot command/procedure must be documented in the pilot notes.
-
-### Dependencies
-- TASK-128 — Define real provider pilot constraints
-- TASK-129 — Add OpenAI secrets and provider config handling
 - TASK-130 — Implement OpenAI real provider adapter for L1 and L2
 - TASK-131 — Add real-provider dry-run mode
 - TASK-132 — Add raw response inspection screen/log
 
 ### Escalate if
-- L1 or L2 execution requires increasing pilot caps.
-- L2 web search is not supported by the configured OpenAI model/API.
-- Real responses cannot be represented by the existing provider contract.
-- Raw responses are not stored.
-- Parser/scoring cannot process real responses without contract changes.
-- Any secret appears in logs, UI, raw inspection output, tests, or committed files.
-- The pilot requires real customer data.
-- A bug fix would require changing parser, scoring, aggregation, provider, raw response, or audit state contracts.
+- Existing storage model cannot link `Run`, `RawResponse`, `ParsedResult`, and `Score` unambiguously.
+- Existing parser requires provider-specific input that cannot be reconstructed from stored raw response data.
+- Existing scoring requires fields not produced by the parser.
+- Existing summary/results endpoints cannot reflect newly saved parsed/scored data without changing their contracts.
+- Parser/scoring signatures require a DTO/input shape that cannot be reconstructed from storage without contract changes.
+- Idempotent processing cannot be implemented without a schema or uniqueness decision.
+- Audit status rules are unclear after post-processing.
+- Implementing this task requires changing parser, scoring, provider, raw response, or aggregation contracts.
+
+### Done means
+Inherits project defaults from `/AGENTS.md`.
+
+Additional completion requirements:
+- PR summary explains how the service is idempotent.
+- PR summary confirms no real provider calls are made.
+- PR summary includes the processing summary shape returned by the service.
+
+---
+
+## TASK-136 — Add CLI command to process stored audit results
+
+### Status
+Ready
+
+### Goal
+Add a local CLI command that runs the audit result post-processing service for a specific stored audit.
+
+### Why
+After real OpenAI provider execution saves raw responses, developers need a safe manual command to process stored raw results into parsed results, scores, and refreshed summary before inspecting the UI.
+
+### Context
+TASK-135 added a reusable post-processing service for one `audit_id`. This task must add only a thin CLI wrapper around that service. Business logic must remain in the service, not in the script.
+
+Expected local usage example:
+
+```powershell
+.\venv\Scripts\python.exe scripts\process_audit_results.py --audit-id 8
+```
+
+### Scope
+- Add a CLI script or project-equivalent command for processing one audit by id.
+- Accept required `--audit-id` argument.
+- Initialize backend config/database session using the existing project pattern.
+- Call the post-processing service from TASK-135.
+- Print a safe structured summary to stdout, including:
+  - audit id
+  - total runs inspected
+  - runs processed
+  - already processed skips
+  - missing raw response skips
+  - non-successful run skips
+  - errors, if any
+- Return successful process exit code when processing completes without fatal error.
+- Return non-zero process exit code for invalid arguments, missing audit, or fatal processing failure.
+- Ensure the CLI does not print raw answers, API keys, provider secrets, auth cookies, or sensitive config.
+- Add tests for CLI behavior with mocked service/database where practical.
+- Document the command in pilot notes or the relevant developer docs.
+
+### Out of scope
+- Do not implement post-processing logic inside the CLI.
+- Do not call the real OpenAI API.
+- Do not trigger provider execution.
+- Do not process all audits globally.
+- Do not add frontend UI.
+- Do not expose raw provider answers.
+- Do not change parser logic.
+- Do not change scoring formulas.
+- Do not change aggregation logic.
+- Do not change storage contracts.
+- Do not add background workers or scheduler integration.
+
+### Acceptance criteria
+- CLI can be run with `--audit-id`.
+- CLI can be executed from the repository root on Windows PowerShell, for example:
+  - `.\venv\Scripts\python.exe scripts\process_audit_results.py --audit-id 8`
+- CLI calls the post-processing service from TASK-135.
+- CLI prints safe processing summary.
+- CLI exits non-zero for missing or invalid `--audit-id`.
+- CLI exits non-zero for missing audit or fatal service error.
+- CLI output does not include raw answers or secrets.
+- CLI command is documented.
+- Existing backend tests still pass.
+- No real external provider API calls happen in automated tests.
+
+### Test requirements
+- Add test for CLI argument parsing with valid `--audit-id`.
+- Add test or smoke check confirming the script import path works when executed from the repository root.
+- Add test confirming CLI calls the post-processing service.
+- Add test for missing `--audit-id`.
+- Add test for invalid `--audit-id`.
+- Add test for service success summary output.
+- Add test for service fatal error producing non-zero exit code.
+- Add test or assertion confirming CLI output does not include raw answers or secrets.
+- Add assertion or mock guard confirming no real OpenAI API call is made.
+
+### Files likely affected
+Optional hint, not a hard boundary.
+- `scripts/process_audit_results.py`
+- `apps/api/...post_processing...`
+- `apps/api/...database...`
+- `tests/...cli...`
+- `tests/...post_processing...`
+- `docs/...`
+- `docs/REAL_PROVIDER_PILOT_NOTES.md`
+
+### Commands
+Use project commands from `/AGENTS.md`.
+
+At minimum, run:
+- backend CLI tests
+- backend post-processing service tests
+- backend parser/scoring tests if touched
+- backend lint/typecheck commands if available
+
+### Dependencies
+- TASK-135 — Add audit result post-processing service
+
+### Escalate if
+- The project has no clear way to initialize config/database sessions from scripts.
+- The CLI cannot be executed from the repository root without import path hacks.
+- CLI execution would require duplicating service logic.
+- The post-processing service cannot distinguish fatal errors from per-run processing errors.
+- Missing audit behavior is unclear.
+- Running the CLI would require real OpenAI API calls.
+- Safe output cannot be guaranteed without exposing raw response content.
+
+### Done means
+Inherits project defaults from `/AGENTS.md`.
+
+Additional completion requirements:
+- Document the exact command for Windows PowerShell local usage.
+- PR summary confirms the CLI is a thin wrapper around the service.
+- PR summary confirms no raw answers or secrets are printed.
+
+---
+
+## TASK-137 — Process current real audit and verify UI
+
+### Status
+Ready
+
+### Goal
+Process the current stored real OpenAI audit and manually verify that parsed results, scores, summary, and UI views update correctly.
+
+### Why
+The real OpenAI pilot has already produced stored raw responses, but the product value is only visible after post-processing converts raw responses into parsed results, scores, aggregation, and frontend display.
+
+### Context
+TASK-135 added the post-processing service. TASK-136 added the CLI command for processing one stored audit by `audit_id`.
+
+The immediate target is the current real audit created during testing, for example audit `#8`, unless another audit id is specified at execution time. If audit `#8` is unavailable, use the latest OpenAI-only audit with a successful stored `RawResponse`.
+
+Expected manual flow:
+
+```text
+dry-run provider already saved RawResponse
+→ run process_audit_results CLI
+→ refresh UI
+→ inspect results page
+→ inspect summary page
+→ verify raw answer is not exposed in normal UI
+```
+
+### Scope
+- Select the current real OpenAI audit to process.
+- If the default example audit id is unavailable, select the latest OpenAI-only audit with a successful stored `RawResponse`.
+- Run the CLI from TASK-136 for that audit.
+- Confirm the CLI reports processed/skipped/error counts clearly.
+- Confirm successful raw responses produce `ParsedResult` records.
+- Confirm successful parsed results produce `Score` records.
+- Confirm audit summary/aggregation is refreshed.
+- Refresh frontend UI and manually verify:
+  - audit detail/status page
+  - results page
+  - summary page
+  - competitors section, if parser extracts competitors
+  - sources section, if sources are available
+- Confirm summary is no longer only default zero values when successful parsed/scored data exists.
+- Confirm raw answer is not exposed in normal user-facing UI.
+- Record observations and issues in `docs/REAL_PROVIDER_PILOT_NOTES.md` or a project-equivalent notes document.
+- Record any discovered bugs as follow-up bug/task entries.
+
+### Out of scope
+- Do not implement new parser logic in this task.
+- Do not change scoring formulas in this task.
+- Do not change aggregation definitions in this task.
+- Do not change OpenAI adapter behavior unless a tiny blocking pilot fix is explicitly required and documented.
+- Do not run large real-provider audits.
+- Do not increase pilot caps.
+- Do not expose raw answers in normal user-facing UI.
+- Do not add new UI features beyond minimal fixes required to verify the current pilot audit.
+- Do not commit API keys, secrets, raw sensitive data, or local `.env` files.
+
+### Acceptance criteria
+- Current selected real audit is processed through the CLI.
+- Selected audit id is documented in pilot notes.
+- CLI output is captured or summarized in pilot notes.
+- At least one successful stored raw response is converted into parsed result data if available.
+- At least one parsed result is converted into score data if available.
+- Audit summary/aggregation is refreshed after processing.
+- Results page displays processed row data or a controlled empty/error state.
+- Summary page displays refreshed metrics or a controlled empty/error state.
+- Competitors and sources are either displayed when available or explicitly documented as absent.
+- Raw answer is not visible in normal user-facing UI.
+- Follow-up bugs/tasks are recorded for any observed issues.
+- No secrets or API keys are committed.
+
+### Test requirements
+- No automated test is required to call the real OpenAI API.
+- Run the post-processing CLI manually for the selected audit.
+- Manually verify CLI output.
+- Manually verify parsed result persistence.
+- Manually verify score persistence.
+- Manually verify summary refresh.
+- Manually verify frontend results display.
+- Manually verify frontend summary display.
+- Manually verify raw answer is not exposed in normal UI.
+- If any code changes are made, run the relevant backend/frontend tests affected by those changes.
+
+### Files likely affected
+Optional hint, not a hard boundary.
+- `docs/REAL_PROVIDER_PILOT_NOTES.md`
+- local `.env` file, not committed
+- small backend/frontend fix files only if required to complete verification
+
+### Commands
+Use project commands from `/AGENTS.md`.
+
+Expected local command example:
+
+```powershell
+.\venv\Scripts\python.exe scripts\process_audit_results.py --audit-id 8
+```
+
+If audit id differs, replace `8` with the selected stored real audit id.
+
+If code changes are made, run:
+- relevant backend post-processing tests
+- relevant backend parser/scoring/aggregation tests
+- relevant frontend tests/build if UI was touched
+
+### Dependencies
+- TASK-135 — Add audit result post-processing service
+- TASK-136 — Add CLI command to process stored audit results
+
+### Escalate if
+- The selected audit has no stored successful raw responses.
+- CLI cannot connect to the expected local database.
+- Post-processing creates duplicate parsed results or duplicate scores.
+- Parser/scoring cannot process stored raw responses without contract changes.
+- Summary cannot be refreshed without changing aggregation contracts.
+- Frontend display requires raw answer exposure to work.
+- Any secret or API key appears in logs, UI, notes, or committed files.
+- Completing verification requires changing parser, scoring, aggregation, provider, raw response, or audit state contracts.
 
 ### Done means
 Inherits project defaults from `/AGENTS.md`.
 
 Additional completion requirements:
 - `docs/REAL_PROVIDER_PILOT_NOTES.md` includes:
-  - environment mode used
-  - provider and model names
-  - OpenAI API family used
-  - SCDL levels tested
-  - query count and runs per query
-  - whether L1 succeeded
-  - whether L2 succeeded
-  - raw response inspection result
-  - parser/scoring/aggregation observations
-  - UI observations
+  - audit id processed
+  - CLI command used
+  - processing summary
+  - whether parsed results were created
+  - whether scores were created
+  - whether summary refreshed
+  - UI verification result
   - follow-up bugs/tasks
-- PR summary confirms no real API keys or secrets were committed.
+- PR summary confirms no secrets or API keys were committed.
 
 ---
 
-## TASK-134 — Compare parser and scoring behavior on real OpenAI responses
+## TASK-138 — Test OpenAI L2 web-search response and source mapping
 
 ### Status
 Ready
 
 ### Goal
-Evaluate how the existing parser, scoring, aggregation, and UI behave on real OpenAI `L1` and `L2` pilot responses.
+Run and verify a controlled OpenAI `L2` web-search audit path, including source/citation mapping from raw provider response to backend storage, aggregation, and UI display.
 
 ### Why
-Real provider output may differ from mock data, so the project needs a structured comparison before changing parser/scoring logic or expanding to more providers.
+`L2` is the SCDL mode where web search is enabled, so it must be validated separately from `L1` to confirm that web-search payloads, returned sources/citations, parser behavior, and source intelligence UI work on real OpenAI responses.
 
 ### Context
-TASK-133 executed the first controlled real OpenAI audit pilot and documented raw responses, parsed results, scores, summaries, and UI observations. This task is an analysis and follow-up planning task. It should identify gaps and propose next tasks, not immediately rewrite parser or scoring logic.
+TASK-130 implemented the OpenAI adapter with `L1` and `L2` support. TASK-131 added dry-run mode. TASK-132 added raw response inspection. TASK-135 and TASK-136 added post-processing service and CLI. TASK-137 processed the current real audit and verified basic UI behavior.
+
+This task focuses specifically on the OpenAI `L2` path.
+
+Expected L2 flow:
+
+```text
+create or select L2 audit
+→ execute OpenAI with web search enabled
+→ store RawResponse
+→ inspect raw response
+→ process stored results
+→ verify sources/citations in backend and UI
+```
 
 ### Scope
-- Review stored raw OpenAI `L1` and `L2` responses from the pilot.
-- Compare each raw response against its parsed result.
-- Compare each parsed result against its score.
-- Compare per-run scores against aggregate query/provider/audit summaries.
-- Compare backend results against frontend display.
-- Identify parser mismatches, such as:
-  - missed brand mentions
-  - false brand mentions
-  - missed competitors
-  - incorrect rank/position
-  - missed citations/sources
-  - malformed source handling
-  - sentiment/recommendation misclassification
-- Identify scoring mismatches, such as:
-  - unreasonable final score
-  - incorrect visibility cap behavior
-  - component score inconsistency
-  - score not matching parsed signals
-- Identify L1 versus L2 differences:
-  - web-enabled source availability
-  - citation quality
-  - brand visibility differences
-  - competitor differences
-  - parser behavior differences
-- Identify UI display issues caused by real response shapes.
-- Document findings in `docs/REAL_PROVIDER_PILOT_NOTES.md` or a follow-up analysis document.
-- Create concrete follow-up task proposals for any parser, scoring, aggregation, provider, or UI fixes.
+- Create or select a small OpenAI-only audit with `scdl_level=L2`.
+- Use safe pilot limits:
+  - OpenAI only
+  - max 3–5 queries
+  - max 1 run per query unless explicitly approved
+- Confirm the OpenAI request path enables web search for `L2`.
+- Verify L2 evidence using stored request snapshot, provider metadata, adapter test evidence, or another documented proof path.
+- If current stored request snapshot only includes query/provider/run number and cannot prove web-search enablement, document this gap and create a follow-up task to store safe execution-mode/request-shape metadata.
+- Confirm `L1` no-web behavior is not accidentally used for the selected audit.
+- Execute the `L2` dry-run or real-provider pilot path.
+- Confirm raw responses are stored.
+- Inspect raw responses using the TASK-132 inspection path.
+- Check whether OpenAI returned citations/sources or web-search metadata.
+- Confirm citations/sources are mapped into the existing provider response/raw response shape where available.
+- Run post-processing CLI for the `L2` audit.
+- Confirm parsed results and scores are created where successful raw responses exist.
+- Confirm aggregation/summary refreshes.
+- Verify frontend source intelligence view:
+  - sources render when source data exists
+  - empty source state renders when OpenAI returns no usable sources
+  - malformed/partial source data does not crash the UI
+- Document findings in `docs/REAL_PROVIDER_PILOT_NOTES.md` or a project-equivalent notes document.
+- Record follow-up bugs/tasks for citation mapping, parser, aggregation, or UI issues.
 
 ### Out of scope
+- Do not run large real-provider audits.
+- Do not increase real-provider caps.
+- Do not add providers other than OpenAI.
 - Do not change parser logic in this task.
 - Do not change scoring formulas in this task.
-- Do not change aggregation logic in this task.
-- Do not change provider adapter behavior in this task unless a tiny documentation-only correction is needed.
-- Do not run large additional real-provider audits.
-- Do not add new providers.
-- Do not increase pilot caps.
-- Do not implement UI redesign.
-- Do not add AI-generated recommendations.
-- Do not make product decisions silently.
+- Do not change aggregation definitions in this task.
+- Do not redesign source intelligence UI.
+- Do not expose full raw provider answers in normal user-facing UI.
+- Do not commit API keys, secrets, raw sensitive data, or local `.env` files.
+- Do not treat “OpenAI returned no citations” as a code bug unless the raw response proves citations were present but not mapped.
 
 ### Acceptance criteria
-- At least one `L1` real OpenAI response is compared raw → parsed → scored → displayed, if available from the pilot.
-- At least one `L2` real OpenAI response is compared raw → parsed → scored → displayed, if available from the pilot.
-- Parser issues are classified as false positive, false negative, missing extraction, malformed source handling, or acceptable behavior.
-- Scoring issues are classified as formula issue, component issue, visibility issue, aggregation issue, or acceptable behavior.
-- L1/L2 differences are documented.
-- UI issues caused by real data are documented separately from backend parser/scoring issues.
-- Follow-up fixes are written as concrete task proposals or bug entries.
-- No parser/scoring/provider contract changes are made in this task.
-- No secrets or API keys are included in the analysis document.
+- A controlled OpenAI `L2` audit is executed or fails with a controlled documented provider error.
+- `L2` request path is verified to include web-search configuration/tooling using stored request snapshot, provider metadata, adapter test evidence, or another documented proof path.
+- If request snapshot/provider metadata cannot prove L2 web-search enablement, the gap is documented and a follow-up task is created.
+- Pilot caps are respected.
+- Raw responses are stored for executed runs.
+- Raw responses are inspectable without exposing secrets.
+- OpenAI source/citation behavior is documented, including whether sources were returned.
+- If sources/citations are returned, backend mapping preserves them in the existing source/citation shape.
+- Post-processing creates parsed results and scores for successful stored responses where possible.
+- Aggregation/summary refreshes after post-processing.
+- Source intelligence UI displays populated, empty, or error states safely.
+- Follow-up bugs/tasks are recorded for any source/citation mapping issues.
+- No secrets or API keys are committed.
 
 ### Test requirements
-- No new automated tests are required if this task only documents analysis.
-- If tiny non-behavioral documentation or fixture changes are made, run relevant docs/static checks if available.
-- Manually verify that cited pilot examples exist in stored raw response inspection or pilot notes.
-- Manually verify that no API keys, secrets, or sensitive raw data are included in committed documentation.
-- If follow-up fixtures are added from real responses, redact sensitive data and add a reviewer note explaining what was redacted.
+- No automated test is required to call the real OpenAI API.
+- Manually verify the selected audit uses `scdl_level=L2`.
+- Manually verify or inspect that the OpenAI request path enables web search.
+- Verify `scdl_level=L2` and web-search-enabled evidence from stored request snapshot, provider metadata, adapter test evidence, or another documented proof path.
+- Manually verify raw response storage.
+- Manually verify raw response inspection.
+- Manually verify whether citations/sources are present in raw response.
+- Manually verify post-processing CLI result for the `L2` audit.
+- Manually verify source intelligence UI behavior.
+- If any code changes are made, run relevant backend provider/post-processing tests.
+- If citation/source mapping code is changed, add or update mocked unit/contract tests using redacted fixture data.
+- If UI code is changed, run relevant frontend tests/build.
+- Manually verify no API keys or secrets appear in logs, UI, notes, or committed files.
 
 ### Files likely affected
 Optional hint, not a hard boundary.
 - `docs/REAL_PROVIDER_PILOT_NOTES.md`
 - `docs/REAL_RESPONSE_ANALYSIS.md`
+- redacted OpenAI L2 fixture files only if explicitly needed
+- small backend/frontend fix files only if required to complete verification
+
+### Commands
+Use project commands from `/AGENTS.md`.
+
+Expected local processing command example:
+
+```powershell
+.\venv\Scripts\python.exe scripts\process_audit_results.py --audit-id <L2_AUDIT_ID>
+```
+
+If code changes are made, run:
+- relevant backend provider tests
+- relevant backend post-processing tests
+- relevant backend parser/scoring/aggregation tests if affected
+- relevant frontend tests/build if UI was touched
+
+### Dependencies
+- TASK-130 — Implement OpenAI real provider adapter for L1 and L2
+- TASK-131 — Add real-provider dry-run mode
+- TASK-132 — Add raw response inspection screen/log
+- TASK-135 — Add audit result post-processing service
+- TASK-136 — Add CLI command to process stored audit results
+- TASK-137 — Process current real audit and verify UI
+
+### Escalate if
+- OpenAI `L2` web search is unsupported by the configured model/API.
+- The raw OpenAI response contains citations/sources that cannot be represented by the existing provider/raw response contract.
+- Web-search execution requires increasing pilot caps.
+- L2 source mapping requires changing parser, scoring, aggregation, provider, or raw response contracts.
+- There is no reliable way to prove L2 web-search enablement from stored metadata, logs, or tests.
+- Source intelligence UI requires exposing full raw provider answers.
+- Any secret or API key appears in logs, UI, notes, or committed files.
+- The implementation requires a new provider, new billing logic, or product decision outside this task.
+
+### Done means
+Inherits project defaults from `/AGENTS.md`.
+
+Additional completion requirements:
+- `docs/REAL_PROVIDER_PILOT_NOTES.md` includes:
+  - L2 audit id
+  - query count and runs per query
+  - OpenAI model used
+  - confirmation of web-search request path
+  - proof source for web-search enablement, such as request snapshot, provider metadata, or adapter test evidence
+  - any gap in current request snapshot/provider metadata
+  - whether raw responses were stored
+  - whether citations/sources were returned
+  - whether citations/sources mapped correctly
+  - post-processing summary
+  - source intelligence UI result
+  - follow-up bugs/tasks
+- PR summary confirms no secrets or API keys were committed.
+
+---
+
+## TASK-139 — Analyze real Russian-language parser/scoring quality
+
+### Status
+Ready
+
+### Goal
+Evaluate how the existing parser, scoring, aggregation, and UI handle real Russian-language OpenAI `L1` and `L2` audit responses.
+
+### Why
+The current parser/scoring logic was mostly validated on mock data, but real Russian-language AI answers may expose issues in brand detection, competitor extraction, sentiment detection, recommendation detection, source handling, and score quality.
+
+### Context
+TASK-137 verified that stored real responses can be post-processed into parsed results, scores, summary, and UI views. TASK-138 specifically verified the OpenAI `L2` web-search path and source/citation behavior.
+
+This task is an analysis and follow-up planning task. It should identify quality gaps and propose concrete follow-up fixes, not immediately rewrite parser or scoring logic.
+
+Target example brand from testing:
+
+```text
+Окна Лабрадор
+```
+
+### Scope
+- Select a small set of real Russian-language `L1` and/or `L2` audit responses.
+- Use non-sensitive test queries only.
+- Review stored raw answers through the approved raw response inspection path.
+- Compare raw answers against parsed results.
+- Compare parsed results against saved scores.
+- Compare per-run scores against summary/aggregation output.
+- Compare backend data against frontend display.
+- Evaluate brand detection quality for Russian text:
+  - exact brand mentions
+  - inflected/variant mentions if present
+  - quoted brand mentions
+  - domain mentions if present
+  - false positives
+  - false negatives
+- Evaluate competitor extraction quality:
+  - competitors listed near the brand
+  - competitors listed instead of the brand
+  - missed competitors
+  - false competitors
+- Evaluate sentiment/recommendation extraction quality:
+  - positive/negative/neutral classification
+  - “recommended”, “best”, “top”, “порекомендовать”, “лучшие” style wording
+  - weak or indirect recommendations
+- Evaluate scoring quality:
+  - visibility score
+  - prominence/position behavior
+  - recommendation score
+  - source quality score
+  - final score
+  - visibility cap behavior
+- Evaluate `L1` versus `L2` differences:
+  - source/citation availability
+  - brand visibility changes
+  - competitor differences
+  - score differences
+- Evaluate UI quality for real Russian text:
+  - Cyrillic rendering
+  - long query/answer fragments
+  - competitor/source display
+  - empty states
+  - score readability
+- Document findings in `docs/REAL_RESPONSE_ANALYSIS.md` or `docs/REAL_PROVIDER_PILOT_NOTES.md`.
+- Convert observed issues into concrete follow-up bug/task proposals.
+
+### Out of scope
+- Do not change parser logic in this task.
+- Do not change scoring formulas in this task.
+- Do not change aggregation logic in this task.
+- Do not change OpenAI adapter behavior in this task.
+- Do not add new provider integrations.
+- Do not run large real-provider audits.
+- Do not increase pilot caps.
+- Do not add frontend redesign work.
+- Do not add AI-generated recommendations.
+- Do not commit raw sensitive response data, API keys, or secrets.
+- Do not make product decisions silently.
+
+### Acceptance criteria
+- At least one real Russian-language raw response is compared raw → parsed → scored → displayed.
+- Brand detection issues are classified as acceptable behavior, false positive, false negative, or missing variant handling.
+- Competitor extraction issues are classified as acceptable behavior, missed competitor, false competitor, or unsupported extraction pattern.
+- Sentiment/recommendation issues are classified as acceptable behavior, misclassification, unsupported Russian keyword/pattern, or ambiguous language.
+- Scoring issues are classified as acceptable behavior, formula issue, component issue, visibility issue, source issue, or aggregation issue.
+- `L1`/`L2` differences are documented if both modes have usable pilot data.
+- UI issues caused by Cyrillic or real Russian response shapes are documented separately from backend parser/scoring issues.
+- Follow-up fixes are written as concrete task proposals or bug entries.
+- No parser/scoring/provider/aggregation contract changes are made in this task.
+- No secrets or API keys are included in committed notes.
+
+### Test requirements
+- No new automated tests are required if this task only documents analysis.
+- Manually verify that inspected examples exist in stored raw response inspection or pilot notes.
+- Manually verify that parsed results and scores correspond to the selected raw responses.
+- Manually verify frontend display for selected Russian-language audit data.
+- Manually verify that no API keys, secrets, auth cookies, or sensitive raw data are included in committed documentation.
+- Verify the task file and analysis documents are saved as UTF-8 and Russian text such as `Окна Лабрадор` is not corrupted.
+- If redacted fixtures are added from real responses, ensure sensitive data is removed and document what was redacted.
+- If any code changes are made, run the relevant backend/frontend tests affected by those changes.
+
+### Files likely affected
+Optional hint, not a hard boundary.
+- `docs/REAL_RESPONSE_ANALYSIS.md`
+- `docs/REAL_PROVIDER_PILOT_NOTES.md`
 - `docs/TASKS.md` or follow-up task backlog
-- redacted fixtures only if explicitly needed
+- redacted fixture files only if explicitly needed
 
 ### Commands
 Use project commands from `/AGENTS.md`.
@@ -853,15 +687,16 @@ If this is documentation-only, no full test run is required unless project polic
 If fixtures or code are changed, run the relevant backend/frontend tests affected by those changes.
 
 ### Dependencies
-- TASK-133 — Run first real OpenAI audit pilot
+- TASK-137 — Process current real audit and verify UI
+- TASK-138 — Test OpenAI L2 web-search response and source mapping
 
 ### Escalate if
-- Pilot data is unavailable or incomplete.
-- Real OpenAI responses cannot be inspected safely.
-- Real response data contains sensitive information that cannot be committed.
+- No usable Russian-language real responses are available.
+- Stored raw responses cannot be inspected safely.
+- Real response data contains sensitive information that cannot be committed or safely redacted.
+- Parser/scoring fixes are required before analysis can be completed.
 - L1 or L2 behavior is too ambiguous to evaluate without a product decision.
-- Parser/scoring fixes are urgently required before analysis can be completed.
-- Follow-up changes would require altering parser, scoring, aggregation, provider, raw response, or audit state contracts.
+- The analysis reveals that current parser/scoring contracts cannot represent real Russian-language behavior.
 
 ### Done means
 Inherits project defaults from `/AGENTS.md`.
@@ -869,26 +704,29 @@ Inherits project defaults from `/AGENTS.md`.
 Additional completion requirements:
 - Analysis document clearly separates:
   - provider adapter issues
-  - parser issues
+  - Russian brand detection issues
+  - Russian competitor extraction issues
+  - Russian sentiment/recommendation issues
   - scoring issues
   - aggregation issues
   - UI issues
-  - product/question-design issues
-- Follow-up work is listed as concrete tasks or bug entries.
-- PR summary confirms no secrets or API keys were committed.
+  - product/query-design issues
+- Follow-up work is listed as concrete bugs or tasks.
+- PR summary confirms no secrets, API keys, auth cookies, or sensitive raw data were committed.
+- PR summary confirms UTF-8 encoding was preserved for Russian-language examples.
 
 ---
 
-## Phase G — Post-pilot stabilization
+## Phase G — Post-pilot parser/scoring stabilization
 
-Tasks in this phase must be written only after TASK-133 and TASK-134 are complete.
+Tasks in this phase must be written only after TASK-137, TASK-138, and TASK-139 are complete.
 
 Potential areas:
-- OpenAI adapter fixes
-- OpenAI L2 citation/source mapping fixes
-- parser improvements based on real responses
-- scoring calibration
-- aggregation fixes for real response shapes
+- post-processing idempotency fixes
+- Russian brand detection improvements
+- Russian competitor extraction improvements
+- sentiment/recommendation keyword expansion
+- OpenAI L2 source/citation mapping fixes
 - redacted real-response fixtures
-- UI fixes for real response shapes
-- second provider integration
+- scoring calibration
+- source intelligence UI fixes

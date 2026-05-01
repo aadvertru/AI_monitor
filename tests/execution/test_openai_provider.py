@@ -23,10 +23,14 @@ class _FakeResponsesClient:
 
 class OpenAIProviderAdapterTests(unittest.IsolatedAsyncioTestCase):
     async def test_successful_l1_response_is_normalized_without_web_search_tools(self) -> None:
+        class UsageObject:
+            def model_dump(self) -> dict:
+                return {"input_tokens": 3, "output_tokens": 5}
+
         response = SimpleNamespace(
             id="resp_123",
             output_text="Acme AI appears in the result.",
-            usage={"input_tokens": 3, "output_tokens": 5},
+            usage=UsageObject(),
             output=[
                 {
                     "type": "message",
@@ -55,6 +59,10 @@ class OpenAIProviderAdapterTests(unittest.IsolatedAsyncioTestCase):
         assert result.provider_metadata is not None
         self.assertEqual(result.provider_metadata["provider"], "openai")
         self.assertEqual(result.provider_metadata["model"], "l1-model")
+        self.assertEqual(
+            result.provider_metadata["usage"],
+            {"input_tokens": 3, "output_tokens": 5},
+        )
 
     async def test_successful_l2_response_enables_web_search_tool(self) -> None:
         response = SimpleNamespace(

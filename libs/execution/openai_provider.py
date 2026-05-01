@@ -293,7 +293,7 @@ class OpenAIProviderAdapter(BaseProviderAdapter):
         if isinstance(finish_reason, str):
             metadata["finish_reason"] = finish_reason
         if usage is not None:
-            metadata["usage"] = usage
+            metadata["usage"] = self._json_safe(usage)
         return metadata
 
     def _iter_message_content_items(self, response: Any) -> list[Any]:
@@ -336,4 +336,19 @@ class OpenAIProviderAdapter(BaseProviderAdapter):
         if isinstance(value, dict):
             return value.get(key)
         return getattr(value, key, None)
+
+    def _json_safe(self, value: Any) -> Any:
+        if value is None or isinstance(value, str | int | float | bool):
+            return value
+        if isinstance(value, list | tuple):
+            return [self._json_safe(item) for item in value]
+        if isinstance(value, dict):
+            return {str(key): self._json_safe(item) for key, item in value.items()}
+        if hasattr(value, "model_dump"):
+            dumped = value.model_dump()
+            if isinstance(dumped, dict):
+                return self._json_safe(dumped)
+        if hasattr(value, "__dict__"):
+            return self._json_safe(vars(value))
+        return str(value)
 
