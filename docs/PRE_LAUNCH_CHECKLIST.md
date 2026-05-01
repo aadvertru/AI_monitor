@@ -9,12 +9,14 @@ Items are grouped by area and sorted roughly by priority within each group.
 
 ### Backend
 
-**B-1 · No database migration system**
-File: `apps/api/database.py`, `lifespan` in `apps/api/main.py`
-`AUTO_CREATE_SCHEMA=1` calls `Base.metadata.create_all`, which is a no-op on existing tables.
-Any schema change (adding a column, adding an index) silently goes unapplied in an existing DB.
-Set up Alembic before the first real deployment, or any schema evolution will require a manual
-`DROP TABLE` and data loss.
+**B-1 · No background job worker** *(new — discovered TASK-132)*
+File: `apps/api/main.py` — `trigger_audit_run_record`, `workers/` (empty directory)
+`POST /audits/{id}/run` creates Job records in the DB and sets audit status to `RUNNING`, but
+nothing reads and executes those jobs. The `workers/` directory exists but contains no process.
+The only execution path that actually runs jobs is the pilot CLI
+(`scripts/run_real_provider_dry_run.py`), which is manual and pilot-scoped.
+Without a background worker, every production audit will sit in `RUNNING` state forever.
+Must implement an async worker (ARQ, Celery, or a simple asyncio polling loop) before launch.
 
 **B-2 · No rate limiting on auth endpoints**
 File: `apps/api/main.py` — `/auth/login`, `/auth/register`
@@ -27,12 +29,15 @@ File: `apps/api/main.py` — `RegisterRequest.validate_password`
 The only check is non-empty. No minimum length, no complexity requirement. Before launch, enforce
 at least 8 characters minimum.
 
-**B-4 · `enable_query_expansion` accepted but silently ignored**
+**B-4 · Several audit flags accepted but silently ignored**
 File: `apps/api/main.py` — `AuditCreateRequest`, `create_audit_record`
-The field is stored on the Audit model but no expansion logic is executed server-side. The frontend
-always sends `false`, so this is not currently harmful, but users who call the API directly and set
-`enable_query_expansion: true` will get no queries expanded with no error or warning.
-Either implement the feature or return a 400 for unsupported flags.
+Three fields are stored on the Audit model but never read by any execution logic:
+- `enable_query_expansion` — no expansion logic runs server-side.
+- `enable_source_intelligence` — stored but has no effect on provider calls or scoring.
+- `follow_up_depth` — stored (validated to 0 or 1) but no follow-up queries are issued.
+The frontend sends `false`/`0` for all three, so this is not currently harmful. Users calling
+the API directly who set these flags will get no different behaviour and no error or warning.
+Either implement each feature or return a 400 for unsupported flags before launch.
 
 ---
 
@@ -156,11 +161,6 @@ The error inline banner "Unable to start audit." rendered when `runAuditMutation
 covered by any test. Add a test that mocks a 409 or 500 from `POST /audits/:id/run` and asserts
 the banner appears.
 
-**T-4 · No backend API integration tests**
-Only unit tests and a frontend smoke flow exist. Schema changes (new required field, renamed key)
-can break the frontend contract silently. Add at least a minimal `pytest` integration suite that
-exercises the full HTTP stack against a test SQLite DB.
-
 ### Developer Experience
 
 **D-1 · No dev user creation script**
@@ -168,13 +168,7 @@ There is no `scripts/create_dev_user.py` or equivalent. A new developer must hit
 via curl or Postman to set up a local account. Add a simple CLI script (or a `make seed` target)
 that creates a default dev user.
 
-**D-2 · No `.env.example` for the API**
-`apps/web/.env.example` documents `VITE_API_BASE_URL`, but the backend has no equivalent.
-The API requires `SECRET_KEY`, optionally `DATABASE_URL`, `AUTO_CREATE_SCHEMA`, and cookie
-configuration variables. Create `apps/api/.env.example` listing all supported env vars with
-safe example values.
-
-**D-3 · `runs_per_query` is hardcoded to 1 in the frontend**
+**D-2 · `runs_per_query` is hardcoded to 1 in the frontend**
 File: `apps/web/src/features/audits/CreateAuditPage.tsx` — `buildPayload`
 The backend accepts `runs_per_query` 1–5 but the form always submits 1. If multi-run audits are
 a planned feature, expose this in the UI before launch. If not, document the constraint.
