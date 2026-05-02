@@ -30,6 +30,7 @@ AUTH_COOKIE_SAMESITE_ENV = "AUTH_COOKIE_SAMESITE"
 AUTH_COOKIE_PATH_ENV = "AUTH_COOKIE_PATH"
 AUTH_COOKIE_MAX_AGE_SECONDS_ENV = "AUTH_COOKIE_MAX_AGE_SECONDS"
 FRONTEND_ALLOWED_ORIGINS_ENV = "FRONTEND_ALLOWED_ORIGINS"
+FRONTEND_ALLOWED_ORIGIN_REGEX_ENV = "FRONTEND_ALLOWED_ORIGIN_REGEX"
 
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
 _FALSE_ENV_VALUES = {"0", "false", "no", "off"}
@@ -67,6 +68,7 @@ class AuthCookieConfig:
 @dataclass(frozen=True)
 class CorsConfig:
     allowed_origins: tuple[str, ...]
+    allowed_origin_regex: str | None = None
     allow_credentials: bool = True
     allow_methods: tuple[str, ...] = ("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
     allow_headers: tuple[str, ...] = ("Content-Type", "Authorization")
@@ -195,7 +197,11 @@ def load_cors_config(env: Mapping[str, str] | None = None) -> CorsConfig:
         FRONTEND_ALLOWED_ORIGINS_ENV,
         ",".join(DEFAULT_FRONTEND_ALLOWED_ORIGINS),
     )
-    return CorsConfig(allowed_origins=_normalize_origins(raw_origins))
+    allowed_origin_regex = source.get(FRONTEND_ALLOWED_ORIGIN_REGEX_ENV, "").strip()
+    return CorsConfig(
+        allowed_origins=_normalize_origins(raw_origins),
+        allowed_origin_regex=allowed_origin_regex or None,
+    )
 
 
 def configure_cors(app: FastAPI, env: Mapping[str, str] | None = None) -> CorsConfig:
@@ -204,6 +210,7 @@ def configure_cors(app: FastAPI, env: Mapping[str, str] | None = None) -> CorsCo
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(cors_config.allowed_origins),
+        allow_origin_regex=cors_config.allowed_origin_regex,
         allow_credentials=cors_config.allow_credentials,
         allow_methods=list(cors_config.allow_methods),
         allow_headers=list(cors_config.allow_headers),

@@ -43,9 +43,32 @@ describe("audit detail page", () => {
       "href",
       "/audits/42/sources",
     );
+    expect(screen.getByRole("link", { name: "Edit setup" })).toHaveAttribute(
+      "href",
+      "/audits/42/edit",
+    );
+    expect(screen.getByRole("link", { name: "Duplicate audit" })).toHaveAttribute(
+      "href",
+      "/audits/new",
+    );
     expect(screen.getByText("Provider summary")).toBeInTheDocument();
     expect(screen.getByText("Critical queries")).toBeInTheDocument();
     expect(screen.getByText("Competitor visibility")).toBeInTheDocument();
+  });
+
+  it("renders the saved audit setup read-only", async () => {
+    renderDetail();
+
+    expect(await screen.findByText("Audit setup")).toBeInTheDocument();
+    expect(screen.getByText("Saved inputs used for this audit run.")).toBeInTheDocument();
+    expect(screen.getAllByText("best ai visibility tools")).not.toHaveLength(0);
+    expect(screen.getAllByText("mock")).not.toHaveLength(0);
+    expect(screen.getByText("L1 - no web access")).toBeInTheDocument();
+    expect(screen.getByText("en")).toBeInTheDocument();
+    expect(screen.getByText("US")).toBeInTheDocument();
+    expect(screen.getByText("en-US")).toBeInTheDocument();
+    expect(screen.getByText("20")).toBeInTheDocument();
+    expect(screen.getByText("AI visibility monitoring platform.")).toBeInTheDocument();
   });
 
   it.each(["created", "running", "completed", "failed"] as const)(
@@ -63,6 +86,8 @@ describe("audit detail page", () => {
     expect(await screen.findByRole("heading", { name: "Acme AI" })).toBeInTheDocument();
     expect(screen.getByText("Partial")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Results" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Edit setup" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Duplicate audit" })).toBeInTheDocument();
   });
 
   it("shows loading state", async () => {

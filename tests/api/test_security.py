@@ -173,6 +173,20 @@ class SecurityUtilityTests(unittest.TestCase):
         )
         self.assertTrue(cors_config.allow_credentials)
 
+    def test_cors_config_loads_allowed_origin_regex_from_environment(self) -> None:
+        cors_config = load_cors_config(
+            env={
+                "FRONTEND_ALLOWED_ORIGINS": "http://localhost:5173",
+                "FRONTEND_ALLOWED_ORIGIN_REGEX": r"http://192\.168\.0\.\d+:5173",
+            }
+        )
+
+        self.assertEqual(cors_config.allowed_origins, ("http://localhost:5173",))
+        self.assertEqual(
+            cors_config.allowed_origin_regex,
+            r"http://192\.168\.0\.\d+:5173",
+        )
+
     def test_cors_config_rejects_wildcard_with_credentials(self) -> None:
         with self.assertRaises(AuthConfigError):
             load_cors_config(env={"FRONTEND_ALLOWED_ORIGINS": "*"})
@@ -199,6 +213,7 @@ class SecurityUtilityTests(unittest.TestCase):
         middleware = app.user_middleware[0]
         self.assertIs(middleware.cls, CORSMiddleware)
         self.assertEqual(middleware.kwargs["allow_origins"], ["http://localhost:5173"])
+        self.assertIsNone(middleware.kwargs["allow_origin_regex"])
         self.assertTrue(middleware.kwargs["allow_credentials"])
 
 

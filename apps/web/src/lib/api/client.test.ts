@@ -10,6 +10,7 @@ import {
   listAudits,
   resolveApiBaseUrl,
   runAuditPipeline,
+  updateAudit,
 } from "./client";
 import {
   auditDetailFixture,
@@ -71,6 +72,28 @@ describe("api client", () => {
     mockFetchSequence([{ body: auditDetailFixture }]);
 
     await expect(getAuditDetail(42)).resolves.toEqual(auditDetailFixture);
+  });
+
+  it("updates audit setup with a credentialed PUT request", async () => {
+    const fetchMock = mockFetchSequence([{ body: auditDetailFixture }]);
+
+    await expect(
+      updateAudit(42, {
+        brand_name: "Acme AI",
+        brand_domain: "acme.example",
+        providers: ["mock"],
+        runs_per_query: 1,
+        seed_queries: ["best ai visibility tools"],
+        scdl_level: "L1",
+      }),
+    ).resolves.toEqual(auditDetailFixture);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/audits/42",
+      expect.objectContaining({
+        credentials: "include",
+        method: "PUT",
+      }),
+    );
   });
 
   it("loads audit results responses", async () => {

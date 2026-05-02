@@ -127,6 +127,13 @@ export function createAudit(payload: AuditCreateRequest) {
   });
 }
 
+export function updateAudit(auditId: number, payload: AuditCreateRequest) {
+  return apiFetch<AuditDetail>(`/audits/${auditId}`, {
+    method: "PUT",
+    body: jsonBody(payload),
+  });
+}
+
 export function getAuditDetail(auditId: number) {
   return apiFetch<AuditDetail>(`/audits/${auditId}`);
 }

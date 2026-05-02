@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, Play, RefreshCw } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Copy, Pencil, Play, RefreshCw } from "lucide-react";
 import { useEffect } from "react";
 import { Link, useParams } from "react-router-dom";
 
@@ -17,9 +17,11 @@ import type {
   AuditSummaryResponse,
 } from "../../lib/api/types";
 import { AuditBreadcrumbs } from "./AuditBreadcrumbs";
+import { AuditSetupPanel } from "./AuditSetupPanel";
 import { AuditStatusBadge } from "./AuditStatusBadge";
 import { AuditSummaryContent } from "./AuditSummaryContent";
 import { AuditViewTabs } from "./AuditViewTabs";
+import { auditDetailToFormDefaults } from "./auditSetupFormMapping";
 
 function detailQueryKey(auditId: number) {
   return ["audit", auditId, "detail"] as const;
@@ -117,6 +119,7 @@ export function AuditDetailPage() {
   const hasError = detail.isError || summary.isError || !isValidAuditId;
   const currentStatus = status.data?.status ?? baseStatus;
   const isRunning = currentStatus === "running";
+  const canEdit = currentStatus === "created";
 
   const refresh = () => {
     void detail.refetch();
@@ -170,6 +173,23 @@ export function AuditDetailPage() {
             <RefreshCw className="size-4" aria-hidden="true" />
             Refresh
           </Button>
+          {canEdit ? (
+            <Button asChild variant="secondary">
+              <Link to={`/audits/${auditId}/edit`}>
+                <Pencil className="size-4" aria-hidden="true" />
+                Edit setup
+              </Link>
+            </Button>
+          ) : null}
+          <Button asChild variant="secondary">
+            <Link
+              to="/audits/new"
+              state={{ auditDefaults: auditDetailToFormDefaults(detail.data) }}
+            >
+              <Copy className="size-4" aria-hidden="true" />
+              Duplicate audit
+            </Link>
+          </Button>
           <Button
             type="button"
             disabled={isRunning || runAuditMutation.isPending}
@@ -188,6 +208,7 @@ export function AuditDetailPage() {
           {errorMessage(runAuditMutation.error)}
         </p>
       ) : null}
+      <AuditSetupPanel audit={detail.data} />
       <AuditSummaryContent auditId={auditId} summary={summary.data} />
     </section>
   );

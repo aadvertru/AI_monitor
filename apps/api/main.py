@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -75,6 +75,7 @@ UNAUTHORIZED_DETAIL = "Invalid authentication credentials."
 AUDIT_NOT_FOUND_DETAIL = "Audit was not found."
 AUDIT_RUNNING_DETAIL = "Audit is already running."
 AUDIT_NOT_TRIGGERABLE_DETAIL = "Audit can only be triggered from the created state."
+AUDIT_NOT_EDITABLE_DETAIL = "Audit can only be edited before it starts running."
 AUDIT_NOT_RUNNABLE_DETAIL = "Audit has no runnable query/provider combinations."
 RAW_RESPONSE_NOT_FOUND_DETAIL = "Raw response was not found."
 RAW_RESPONSE_FORBIDDEN_DETAIL = "Raw response inspection requires admin access."
@@ -283,25 +284,7 @@ async def create_audit_record(
     payload: AuditCreateRequest,
     user_id: int,
 ) -> AuditCreateResponse:
-    normalized_brand_name = payload.brand_name.lower()
-    existing_brand_stmt = (
-        select(Brand)
-        .where(func.lower(Brand.name) == normalized_brand_name)
-        .order_by(Brand.id)
-    )
-    brand = (await session.execute(existing_brand_stmt)).scalars().first()
-    if brand is None:
-        brand = Brand(
-            name=payload.brand_name,
-            domain=payload.brand_domain,
-            description=payload.brand_description,
-        )
-        session.add(brand)
-    else:
-        if brand.domain is None and payload.brand_domain is not None:
-            brand.domain = payload.brand_domain
-        if brand.description is None and payload.brand_description is not None:
-            brand.description = payload.brand_description
+    brand = await get_or_create_brand_for_audit(session, payload)
 
     audit = Audit(
         user_id=user_id,
@@ -339,6 +322,63 @@ async def create_audit_record(
         scdl_level=audit.scdl_level.value,
         seed_queries=seed_queries,
     )
+
+
+async def get_or_create_brand_for_audit(
+    session: AsyncSession,
+    payload: AuditCreateRequest,
+) -> Brand:
+    normalized_brand_name = payload.brand_name.lower()
+    existing_brand_stmt = (
+        select(Brand)
+        .where(func.lower(Brand.name) == normalized_brand_name)
+        .order_by(Brand.id)
+    )
+    brand = (await session.execute(existing_brand_stmt)).scalars().first()
+    if brand is None:
+        brand = Brand(
+            name=payload.brand_name,
+            domain=payload.brand_domain,
+            description=payload.brand_description,
+        )
+        session.add(brand)
+    else:
+        if brand.domain is None and payload.brand_domain is not None:
+            brand.domain = payload.brand_domain
+        if brand.description is None and payload.brand_description is not None:
+            brand.description = payload.brand_description
+
+    return brand
+
+
+async def update_audit_record(
+    session: AsyncSession,
+    audit: Audit,
+    payload: AuditCreateRequest,
+) -> AuditDetailResponse:
+    if audit.status != AuditStatus.CREATED:
+        raise HTTPException(status_code=409, detail=AUDIT_NOT_EDITABLE_DETAIL)
+
+    brand = await get_or_create_brand_for_audit(session, payload)
+    audit.brand = brand
+    audit.providers = payload.providers
+    audit.runs_per_query = payload.runs_per_query
+    audit.language = payload.language
+    audit.country = payload.country
+    audit.locale = payload.locale
+    audit.max_queries = payload.max_queries
+    audit.enable_query_expansion = payload.enable_query_expansion
+    audit.enable_source_intelligence = payload.enable_source_intelligence
+    audit.follow_up_depth = payload.follow_up_depth
+    audit.scdl_level = SCDLLevel(payload.scdl_level)
+
+    await session.execute(delete(Query).where(Query.audit_id == audit.id))
+    for query_text in payload.seed_queries or []:
+        session.add(Query(audit_id=audit.id, text=query_text))
+
+    await session.commit()
+    await session.refresh(audit)
+    return await build_audit_detail_response(session, audit, brand)
 
 
 async def register_user_record(
@@ -1138,6 +1178,24 @@ async def get_audit_detail(
         raise
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=500, detail="Failed to load audit.") from exc
+
+
+@app.put("/audits/{audit_id}", response_model=AuditDetailResponse)
+async def update_audit(
+    audit_id: int,
+    payload: AuditCreateRequest,
+    request: Request,
+    session: AsyncSession = DB_SESSION_DEPENDENCY,
+) -> AuditDetailResponse:
+    try:
+        current_user = await get_authenticated_user_from_request(session, request)
+        audit, _brand = await load_accessible_audit(session, audit_id, current_user)
+        return await update_audit_record(session, audit, payload)
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail="Failed to update audit.") from exc
 
 
 @app.get("/audits/{audit_id}/status", response_model=AuditStatusResponse)

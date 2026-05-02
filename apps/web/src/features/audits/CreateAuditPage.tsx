@@ -3,41 +3,24 @@ import { useMutation } from "@tanstack/react-query";
 import { ArrowLeft, Loader2, Plus, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
-import { Link, useNavigate } from "react-router-dom";
-import { z } from "zod";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { Button } from "../../components/ui/Button";
 import { Field } from "../../components/ui/Field";
 import { Input } from "../../components/ui/Input";
 import { ApiError, createAudit } from "../../lib/api/client";
-import type { AuditCreateRequest, SCDLLevel } from "../../lib/api/types";
-
-const providerOptions = [
-  { label: "Mock", value: "mock" },
-  { label: "OpenAI", value: "openai" },
-  { label: "Anthropic", value: "anthropic" },
-  { label: "Gemini", value: "gemini" },
-] as const;
-
-const languageOptions = [
-  { label: "English", value: "en" },
-  { label: "Ukrainian", value: "uk" },
-  { label: "Russian", value: "ru" },
-  { label: "Spanish", value: "es" },
-  { label: "German", value: "de" },
-  { label: "French", value: "fr" },
-] as const;
-
-const countryOptions = [
-  { label: "United States", value: "US" },
-  { label: "Ukraine", value: "UA" },
-  { label: "United Kingdom", value: "GB" },
-  { label: "Canada", value: "CA" },
-  { label: "Germany", value: "DE" },
-  { label: "France", value: "FR" },
-] as const;
-
-const queryExpansionTokenCost = 15;
+import {
+  buildPayload,
+  countryOptions,
+  estimateAuditTokens,
+  languageOptions,
+  parseSeedQueries,
+  providerOptions,
+  queryExpansionTokenCost,
+  schema,
+  type CreateAuditFormInput,
+  type CreateAuditFormValues,
+} from "./auditSetupFormConfig";
 
 const mockPaaQueries = [
   "PAA query 1: what are the best AI visibility monitoring tools?",
@@ -56,46 +39,6 @@ const mockAiExpansionQueries = [
   "AI expansion query 9: LLM visibility audit tools for B2B SaaS",
   "AI expansion query 10: track citations and sources in AI answers",
 ];
-
-function localeFrom(language: string, country: string) {
-  return `${language}-${country}`;
-}
-
-const schema = z.object({
-  brandName: z.string().trim().min(1, "Enter a brand name."),
-  brandDomain: z.string().trim().min(1, "Enter a brand domain."),
-  brandDescription: z.string().trim().optional(),
-  seedQueries: z.string().trim().optional(),
-  providers: z.array(z.string()).min(1, "Select at least one provider."),
-  language: z.enum(languageOptions.map((option) => option.value)),
-  country: z.enum(countryOptions.map((option) => option.value)),
-  maxQueries: z.union([z.literal(""), z.coerce.number().int().positive()]).optional(),
-  enableSourceIntelligence: z.boolean(),
-  scdlLevel: z.enum(["L1", "L2"]),
-});
-
-type CreateAuditFormInput = z.input<typeof schema>;
-type CreateAuditFormValues = z.output<typeof schema>;
-
-function optionalText(value?: string) {
-  const normalized = value?.trim();
-  return normalized ? normalized : null;
-}
-
-function parseSeedQueries(value?: string) {
-  const seen = new Set<string>();
-  const queries: string[] = [];
-
-  for (const line of value?.split(/\r?\n/) ?? []) {
-    const query = line.trim();
-    if (query && !seen.has(query.toLowerCase())) {
-      seen.add(query.toLowerCase());
-      queries.push(query);
-    }
-  }
-
-  return queries;
-}
 
 function mergeSeedQueries(currentValue: string | undefined, expandedQueries: string[]) {
   return [...parseSeedQueries(currentValue), ...expandedQueries]
@@ -118,60 +61,11 @@ function mockExpandQueries() {
   });
 }
 
-type EstimateValues = {
-  enableSourceIntelligence?: boolean;
-  maxQueries?: unknown;
-  providers?: string[];
-  scdlLevel?: "L1" | "L2";
-  seedQueries?: string;
-};
-
-function estimateAuditTokens(values: EstimateValues) {
-  const queryCount = parseSeedQueries(values.seedQueries).length;
-  const parsedMaxQueries =
-    typeof values.maxQueries === "number"
-      ? values.maxQueries
-      : typeof values.maxQueries === "string" && values.maxQueries.trim()
-        ? Number(values.maxQueries)
-        : null;
-  const maxQueries =
-    typeof parsedMaxQueries === "number" && Number.isFinite(parsedMaxQueries)
-      ? parsedMaxQueries
-      : null;
-  const effectiveQueries = maxQueries ? Math.min(queryCount, maxQueries) : queryCount;
-  const selectedProviders = values.providers?.length ?? 0;
-  const base = effectiveQueries * selectedProviders * 10;
-  const scdlMultiplier = values.scdlLevel === "L2" ? 1.5 : 1;
-  const sourceIntelligenceAddon = values.enableSourceIntelligence
-    ? effectiveQueries * selectedProviders * 5
-    : 0;
-
-  return Math.round(base * scdlMultiplier + sourceIntelligenceAddon);
-}
-
-function buildPayload(values: CreateAuditFormValues): AuditCreateRequest {
-  const seedQueries = parseSeedQueries(values.seedQueries);
-  return {
-    brand_name: values.brandName.trim(),
-    brand_domain: optionalText(values.brandDomain),
-    brand_description: optionalText(values.brandDescription),
-    providers: values.providers,
-    runs_per_query: 1,
-    seed_queries: seedQueries.length > 0 ? seedQueries : null,
-    language: optionalText(values.language),
-    country: optionalText(values.country),
-    locale: localeFrom(values.language, values.country),
-    max_queries:
-      values.maxQueries === "" || values.maxQueries === undefined ? null : values.maxQueries,
-    enable_query_expansion: false,
-    enable_source_intelligence: values.enableSourceIntelligence,
-    follow_up_depth: 0,
-    scdl_level: values.scdlLevel as SCDLLevel,
-  };
-}
-
 export function CreateAuditPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const duplicateDefaults = (location.state as { auditDefaults?: Partial<CreateAuditFormInput> } | null)
+    ?.auditDefaults;
   const [isExpandingQueries, setIsExpandingQueries] = useState(false);
   const createAuditMutation = useMutation({
     mutationFn: createAudit,
@@ -189,16 +83,16 @@ export function CreateAuditPage() {
   } = useForm<CreateAuditFormInput, unknown, CreateAuditFormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
-      brandName: "",
-      brandDomain: "",
-      brandDescription: "",
-      seedQueries: "",
-      providers: ["mock"],
-      language: "en",
-      country: "US",
-      maxQueries: "",
-      enableSourceIntelligence: false,
-      scdlLevel: "L1",
+      brandName: duplicateDefaults?.brandName ?? "",
+      brandDomain: duplicateDefaults?.brandDomain ?? "",
+      brandDescription: duplicateDefaults?.brandDescription ?? "",
+      seedQueries: duplicateDefaults?.seedQueries ?? "",
+      providers: duplicateDefaults?.providers ?? ["mock"],
+      language: duplicateDefaults?.language ?? "en",
+      country: duplicateDefaults?.country ?? "US",
+      maxQueries: duplicateDefaults?.maxQueries ?? "",
+      enableSourceIntelligence: duplicateDefaults?.enableSourceIntelligence ?? false,
+      scdlLevel: duplicateDefaults?.scdlLevel ?? "L1",
     },
   });
 

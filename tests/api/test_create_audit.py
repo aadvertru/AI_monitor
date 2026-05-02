@@ -8,9 +8,9 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from apps.api.main import AuditCreateRequest, create_audit
+from apps.api.main import AuditCreateRequest, create_audit, update_audit
 from apps.api.security import create_access_token, load_auth_config
-from libs.storage.models import Audit, Base, Brand, Query, User, UserRole
+from libs.storage.models import Audit, AuditStatus, Base, Brand, Query, User, UserRole
 
 AUTH_ENV = {"JWT_SECRET": "test-secret-value"}
 
@@ -296,6 +296,109 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
             assert saved_audit is not None
             self.assertEqual(saved_audit.user_id, owner.id)
             self.assertNotEqual(saved_audit.user_id, other_user.id)
+
+    async def test_created_audit_can_be_updated_before_run(self) -> None:
+        user = await self._create_user()
+        create_payload = AuditCreateRequest.model_validate(
+            {
+                "brand_name": "Acme AI",
+                "brand_domain": "acme.ai",
+                "providers": ["mock"],
+                "runs_per_query": 1,
+                "seed_queries": ["old query"],
+            }
+        )
+        update_payload = AuditCreateRequest.model_validate(
+            {
+                "brand_name": "Acme Updated",
+                "brand_domain": "updated.example",
+                "brand_description": "Updated description.",
+                "providers": ["openai"],
+                "runs_per_query": 1,
+                "language": "uk",
+                "country": "UA",
+                "locale": "uk-UA",
+                "max_queries": 3,
+                "seed_queries": ["new query", "another query"],
+                "enable_source_intelligence": True,
+                "scdl_level": "L2",
+            }
+        )
+
+        async with self.session_factory() as session:
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                created = await create_audit(
+                    payload=create_payload,
+                    request=self._authenticated_request(user),
+                    session=session,
+                )
+
+        async with self.session_factory() as session:
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                result = await update_audit(
+                    audit_id=created.audit_id,
+                    payload=update_payload,
+                    request=self._authenticated_request(user),
+                    session=session,
+                )
+
+        self.assertEqual(result.brand_name, "Acme Updated")
+        self.assertEqual(result.brand_domain, "updated.example")
+        self.assertEqual(result.brand_description, "Updated description.")
+        self.assertEqual(result.providers, ["openai"])
+        self.assertEqual(result.language, "uk")
+        self.assertEqual(result.country, "UA")
+        self.assertEqual(result.locale, "uk-UA")
+        self.assertEqual(result.max_queries, 3)
+        self.assertEqual(result.seed_queries, ["new query", "another query"])
+        self.assertTrue(result.enable_source_intelligence)
+        self.assertEqual(result.scdl_level, "L2")
+
+        async with self.session_factory() as session:
+            query_rows = (
+                await session.execute(
+                    select(Query).where(Query.audit_id == created.audit_id).order_by(Query.id)
+                )
+            ).scalars().all()
+            self.assertEqual([row.text for row in query_rows], ["new query", "another query"])
+
+    async def test_non_created_audit_update_is_rejected(self) -> None:
+        user = await self._create_user()
+        payload = AuditCreateRequest.model_validate(
+            {
+                "brand_name": "Acme AI",
+                "providers": ["mock"],
+                "runs_per_query": 1,
+            }
+        )
+
+        async with self.session_factory() as session:
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                created = await create_audit(
+                    payload=payload,
+                    request=self._authenticated_request(user),
+                    session=session,
+                )
+
+        async with self.session_factory() as session:
+            audit = await session.get(Audit, created.audit_id)
+            assert audit is not None
+            audit.status = AuditStatus.COMPLETED
+            await session.commit()
+
+        async with self.session_factory() as session:
+            with (
+                patch.dict("os.environ", AUTH_ENV, clear=True),
+                self.assertRaises(HTTPException) as context,
+            ):
+                await update_audit(
+                    audit_id=created.audit_id,
+                    payload=payload,
+                    request=self._authenticated_request(user),
+                    session=session,
+                )
+
+        self.assertEqual(context.exception.status_code, 409)
 
 
 if __name__ == "__main__":

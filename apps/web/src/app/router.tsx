@@ -7,6 +7,7 @@ import { AuditSourcesPage } from "../features/audits/AuditSourcesPage";
 import { AuditSummaryRedirect } from "../features/audits/AuditSummaryRedirect";
 import { AuditsDashboardPage } from "../features/audits/AuditsDashboardPage";
 import { CreateAuditPage } from "../features/audits/CreateAuditPage";
+import { EditAuditPage } from "../features/audits/EditAuditPage";
 import { GuestRoute, ProtectedRoute } from "../features/auth/routeGuards";
 import { LoginPage } from "../features/auth/LoginPage";
 import { RegisterPage } from "../features/auth/RegisterPage";
@@ -32,6 +33,7 @@ export function routes() {
           children: [
             { path: "/audits", element: <AuditsDashboardPage /> },
             { path: "/audits/new", element: <CreateAuditPage /> },
+            { path: "/audits/:auditId/edit", element: <EditAuditPage /> },
             { path: "/audits/:auditId/summary", element: <AuditSummaryRedirect /> },
             { path: "/audits/:auditId/results", element: <AuditResultsPage /> },
             { path: "/audits/:auditId/sources", element: <AuditSourcesPage /> },
