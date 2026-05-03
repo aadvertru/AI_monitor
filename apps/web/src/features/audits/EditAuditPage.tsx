@@ -1,8 +1,8 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Save } from "lucide-react";
+import { ArrowLeft, Plus, Save, Trash2 } from "lucide-react";
 import { useEffect } from "react";
-import { useForm, useWatch } from "react-hook-form";
+import { useFieldArray, useForm, useWatch } from "react-hook-form";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { Button } from "../../components/ui/Button";
@@ -13,11 +13,14 @@ import type { AuditDetail } from "../../lib/api/types";
 import { AuditBreadcrumbs } from "./AuditBreadcrumbs";
 import { AuditStatusBadge } from "./AuditStatusBadge";
 import {
+  brandDescriptionMaxLength,
   buildPayload,
   countryOptions,
+  emptySeedQueryItem,
   estimateAuditTokens,
   languageOptions,
   providerOptions,
+  queryTypeOptions,
   schema,
   type CreateAuditFormInput,
   type CreateAuditFormValues,
@@ -61,7 +64,7 @@ export function EditAuditPage() {
       brandName: "",
       brandDomain: "",
       brandDescription: "",
-      seedQueries: "",
+      seedQueryItems: [{ ...emptySeedQueryItem }],
       providers: ["mock"],
       language: "en",
       country: "US",
@@ -69,6 +72,10 @@ export function EditAuditPage() {
       enableSourceIntelligence: false,
       scdlLevel: "L1",
     },
+  });
+  const seedQueryFields = useFieldArray({
+    control,
+    name: "seedQueryItems",
   });
 
   useEffect(() => {
@@ -79,6 +86,7 @@ export function EditAuditPage() {
 
   const watchedValues = useWatch({ control });
   const estimatedTokens = estimateAuditTokens(watchedValues);
+  const brandDescriptionLength = watchedValues.brandDescription?.length ?? 0;
   const canEdit = detail.data?.status === "created";
   const onSubmit = handleSubmit((values) => {
     updateAuditMutation.mutate(values);
@@ -152,21 +160,58 @@ export function EditAuditPage() {
             <textarea
               id="edit-brand-description"
               className="min-h-24 w-full rounded-md border border-border bg-white px-3 py-2 text-sm text-ink outline-none transition-colors placeholder:text-slate-400 focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+              maxLength={brandDescriptionMaxLength}
               {...register("brandDescription")}
             />
+            <p className="text-xs text-subtle">
+              {brandDescriptionLength} / {brandDescriptionMaxLength}
+            </p>
           </Field>
 
-          <Field
-            htmlFor="edit-seed-queries"
-            label="Seed queries"
-            error={errors.seedQueries?.message}
-          >
-            <textarea
-              id="edit-seed-queries"
-              className="min-h-28 w-full rounded-md border border-border bg-white px-3 py-2 text-sm text-ink outline-none transition-colors placeholder:text-slate-400 focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-              {...register("seedQueries")}
-            />
-          </Field>
+          <fieldset className="space-y-2">
+            <legend className="text-sm font-medium text-ink">Seed queries</legend>
+            {seedQueryFields.fields.map((field, index) => (
+              <div className="grid gap-2 sm:grid-cols-[1fr_12rem_auto]" key={field.id}>
+                <Input
+                  aria-label={`Seed query ${index + 1}`}
+                  placeholder="best ai visibility tools"
+                  {...register(`seedQueryItems.${index}.text`)}
+                />
+                <select
+                  aria-label={`Query type ${index + 1}`}
+                  className="h-10 w-full rounded-md border border-border bg-white px-3 text-sm text-ink outline-none transition-colors focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                  {...register(`seedQueryItems.${index}.type`)}
+                >
+                  <option value="">No type</option>
+                  {queryTypeOptions.map((type) => (
+                    <option key={type.value} value={type.value}>
+                      {type.label}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  aria-label={`Remove seed query ${index + 1}`}
+                  onClick={() => seedQueryFields.remove(index)}
+                >
+                  <Trash2 className="size-4" aria-hidden="true" />
+                </Button>
+                <input type="hidden" {...register(`seedQueryItems.${index}.source`)} />
+              </div>
+            ))}
+            {errors.seedQueryItems?.message ? (
+              <p className="text-sm text-red-700">{errors.seedQueryItems.message}</p>
+            ) : null}
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => seedQueryFields.append({ ...emptySeedQueryItem })}
+            >
+              <Plus className="size-4" aria-hidden="true" />
+              Add query
+            </Button>
+          </fieldset>
 
           <div className="grid gap-4 md:grid-cols-[1.4fr_0.8fr]">
             <div>

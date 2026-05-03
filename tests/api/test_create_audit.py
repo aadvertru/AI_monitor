@@ -10,7 +10,17 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from apps.api.main import AuditCreateRequest, create_audit, update_audit
 from apps.api.security import create_access_token, load_auth_config
-from libs.storage.models import Audit, AuditStatus, Base, Brand, Query, User, UserRole
+from libs.storage.models import (
+    Audit,
+    AuditStatus,
+    Base,
+    Brand,
+    Query,
+    SeedQuerySource,
+    SeedQueryType,
+    User,
+    UserRole,
+)
 
 AUTH_ENV = {"JWT_SECRET": "test-secret-value"}
 
@@ -57,11 +67,10 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
                 "brand_name": "  Acme AI  ",
                 "providers": ["openai", "OPENAI", "mock"],
                 "runs_per_query": 2,
-                "brand_domain": "  acme.ai ",
+                "brand_domain": "  Acme.AI/ ",
                 "seed_queries": [
                     " best ai brand monitoring ",
                     "best ai brand monitoring",
-                    "",
                     "  how to monitor brand visibility  ",
                 ],
                 "max_queries": 20,
@@ -116,6 +125,8 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
                     "how to monitor brand visibility",
                 ],
             )
+            self.assertEqual([row.source for row in query_rows], [SeedQuerySource.USER] * 2)
+            self.assertEqual([row.query_type for row in query_rows], [None, None])
 
     async def test_unauthenticated_create_audit_is_rejected(self) -> None:
         payload = AuditCreateRequest.model_validate(
@@ -166,6 +177,46 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
                     "brand_name": "Acme",
                     "providers": ["openai"],
                     "runs_per_query": 6,
+                }
+            )
+
+    def test_invalid_brand_domain_rejected(self) -> None:
+        for brand_domain in (
+            "https://example.com",
+            "http://example.com",
+            "example.com/page",
+            "example.com?a=1",
+            "localhost",
+            "bad_domain",
+        ):
+            with self.subTest(brand_domain=brand_domain), self.assertRaises(ValidationError):
+                AuditCreateRequest.model_validate(
+                    {
+                        "brand_name": "Acme",
+                        "brand_domain": brand_domain,
+                        "providers": ["openai"],
+                        "runs_per_query": 1,
+                    }
+                )
+
+    def test_brand_description_length_is_limited(self) -> None:
+        valid_payload = AuditCreateRequest.model_validate(
+            {
+                "brand_name": "Acme",
+                "brand_description": "x" * 500,
+                "providers": ["openai"],
+                "runs_per_query": 1,
+            }
+        )
+        self.assertEqual(valid_payload.brand_description, "x" * 500)
+
+        with self.assertRaises(ValidationError):
+            AuditCreateRequest.model_validate(
+                {
+                    "brand_name": "Acme",
+                    "brand_description": "x" * 501,
+                    "providers": ["openai"],
+                    "runs_per_query": 1,
                 }
             )
 
@@ -229,6 +280,161 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
             saved_audit = await session.get(Audit, result.audit_id)
         assert saved_audit is not None
         self.assertEqual(saved_audit.scdl_level.value, "L2")
+
+    async def test_create_audit_accepts_canonical_seed_query_items(self) -> None:
+        user = await self._create_user()
+        payload = AuditCreateRequest.model_validate(
+            {
+                "brand_name": "Acme Typed",
+                "providers": ["mock"],
+                "runs_per_query": 1,
+                "seed_query_items": [
+                    {
+                        "text": "What is Acme Typed?",
+                        "type": "brand_direct",
+                        "source": "ai",
+                    },
+                    {
+                        "text": "Manual competitive query",
+                    },
+                ],
+            }
+        )
+
+        async with self.session_factory() as session:
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                result = await create_audit(
+                    payload=payload,
+                    request=self._authenticated_request(user),
+                    session=session,
+                )
+
+        self.assertEqual(
+            result.seed_queries,
+            ["What is Acme Typed?", "Manual competitive query"],
+        )
+        self.assertEqual(result.seed_query_items[0].source, "ai")
+        self.assertEqual(result.seed_query_items[0].type, "brand_direct")
+        self.assertEqual(result.seed_query_items[1].source, "user")
+        self.assertIsNone(result.seed_query_items[1].type)
+
+        async with self.session_factory() as session:
+            query_rows = (
+                await session.execute(
+                    select(Query).where(Query.audit_id == result.audit_id).order_by(Query.id)
+                )
+            ).scalars().all()
+
+        self.assertEqual(query_rows[0].text, "What is Acme Typed?")
+        self.assertEqual(query_rows[0].source, SeedQuerySource.AI)
+        self.assertEqual(query_rows[0].query_type, SeedQueryType.BRAND_DIRECT)
+        self.assertEqual(query_rows[1].source, SeedQuerySource.USER)
+        self.assertIsNone(query_rows[1].query_type)
+
+    def test_seed_query_item_validation_rejects_unknown_type_or_source(self) -> None:
+        for seed_query_item in (
+            {"text": "Valid text", "type": "unknown", "source": "ai"},
+            {"text": "Valid text", "type": "brand_direct", "source": "unknown"},
+            {"text": "Valid text", "source": "ai"},
+        ):
+            with self.subTest(seed_query_item=seed_query_item), self.assertRaises(
+                ValidationError
+            ):
+                AuditCreateRequest.model_validate(
+                    {
+                        "brand_name": "Acme",
+                        "providers": ["mock"],
+                        "runs_per_query": 1,
+                        "seed_query_items": [seed_query_item],
+                    }
+                )
+
+    def test_seed_query_field_conflict_is_rejected(self) -> None:
+        with self.assertRaises(ValidationError):
+            AuditCreateRequest.model_validate(
+                {
+                    "brand_name": "Acme",
+                    "providers": ["mock"],
+                    "runs_per_query": 1,
+                    "seed_queries": ["legacy query"],
+                    "seed_query_items": [{"text": "typed query"}],
+                }
+            )
+
+    def test_seed_query_count_limit_is_enforced(self) -> None:
+        valid_payload = AuditCreateRequest.model_validate(
+            {
+                "brand_name": "Acme",
+                "providers": ["mock"],
+                "runs_per_query": 1,
+                "seed_queries": [f"query {index}" for index in range(20)],
+            }
+        )
+        self.assertEqual(len(valid_payload.seed_queries or []), 20)
+
+        with self.assertRaises(ValidationError):
+            AuditCreateRequest.model_validate(
+                {
+                    "brand_name": "Acme",
+                    "providers": ["mock"],
+                    "runs_per_query": 1,
+                    "seed_queries": [f"query {index}" for index in range(21)],
+                }
+            )
+
+        with self.assertRaises(ValidationError):
+            AuditCreateRequest.model_validate(
+                {
+                    "brand_name": "Acme",
+                    "providers": ["mock"],
+                    "runs_per_query": 1,
+                    "seed_query_items": [
+                        {"text": f"query {index}"} for index in range(21)
+                    ],
+                }
+            )
+
+    def test_seed_query_text_validation_is_enforced(self) -> None:
+        for seed_queries in ([""], ["   "], ["ab"], ["x" * 301]):
+            with self.subTest(seed_queries=seed_queries), self.assertRaises(ValidationError):
+                AuditCreateRequest.model_validate(
+                    {
+                        "brand_name": "Acme",
+                        "providers": ["mock"],
+                        "runs_per_query": 1,
+                        "seed_queries": seed_queries,
+                    }
+                )
+
+        for seed_query_item in (
+            {"text": ""},
+            {"text": "   "},
+            {"text": "ab"},
+            {"text": "x" * 301},
+        ):
+            with self.subTest(seed_query_item=seed_query_item), self.assertRaises(
+                ValidationError
+            ):
+                AuditCreateRequest.model_validate(
+                    {
+                        "brand_name": "Acme",
+                        "providers": ["mock"],
+                        "runs_per_query": 1,
+                        "seed_query_items": [seed_query_item],
+                    }
+                )
+
+    def test_seed_query_text_normalization_is_conservative(self) -> None:
+        payload = AuditCreateRequest.model_validate(
+            {
+                "brand_name": "Acme",
+                "providers": ["mock"],
+                "runs_per_query": 1,
+                "seed_queries": ["  What   Is   Acme?  ", "what is acme?"],
+            }
+        )
+
+        self.assertEqual(payload.seed_queries, ["What Is Acme?"])
 
     async def test_repeated_audits_reuse_existing_brand(self) -> None:
         user = await self._create_user()
@@ -361,6 +567,52 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
                 )
             ).scalars().all()
             self.assertEqual([row.text for row in query_rows], ["new query", "another query"])
+
+    async def test_created_audit_can_be_updated_with_seed_query_items(self) -> None:
+        user = await self._create_user()
+        create_payload = AuditCreateRequest.model_validate(
+            {
+                "brand_name": "Acme AI",
+                "providers": ["mock"],
+                "runs_per_query": 1,
+                "seed_queries": ["old query"],
+            }
+        )
+        update_payload = AuditCreateRequest.model_validate(
+            {
+                "brand_name": "Acme AI",
+                "providers": ["mock"],
+                "runs_per_query": 1,
+                "seed_query_items": [
+                    {
+                        "text": "Generated query",
+                        "type": "recommendation",
+                        "source": "ai",
+                    }
+                ],
+            }
+        )
+
+        async with self.session_factory() as session:
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                created = await create_audit(
+                    payload=create_payload,
+                    request=self._authenticated_request(user),
+                    session=session,
+                )
+
+        async with self.session_factory() as session:
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                result = await update_audit(
+                    audit_id=created.audit_id,
+                    payload=update_payload,
+                    request=self._authenticated_request(user),
+                    session=session,
+                )
+
+        self.assertEqual(result.seed_queries, ["Generated query"])
+        self.assertEqual(result.seed_query_items[0].source, "ai")
+        self.assertEqual(result.seed_query_items[0].type, "recommendation")
 
     async def test_non_created_audit_update_is_rejected(self) -> None:
         user = await self._create_user()

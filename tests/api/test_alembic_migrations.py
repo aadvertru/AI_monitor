@@ -40,7 +40,10 @@ def test_alembic_upgrade_head_creates_current_schema() -> None:
     }.issubset(table_names)
 
     assert "role" in _column_names(inspector, "users")
-    assert {"user_id", "scdl_level"}.issubset(_column_names(inspector, "audits"))
+    assert {"user_id", "scdl_level", "archived_at"}.issubset(
+        _column_names(inspector, "audits")
+    )
+    assert {"query_type", "source"}.issubset(_column_names(inspector, "queries"))
     assert "status" in _column_names(inspector, "runs")
     assert "sources" in _column_names(inspector, "parsed_results")
 
@@ -56,7 +59,7 @@ def test_alembic_upgrade_head_creates_current_schema() -> None:
     with sqlite3.connect(db_path) as connection:
         version = connection.execute("SELECT version_num FROM alembic_version").fetchone()
 
-    assert version == ("0bd42c15e942",)
+    assert version == ("9d1e2f3a4b5c",)
 
 
 def _column_names(inspector, table_name: str) -> set[str]:

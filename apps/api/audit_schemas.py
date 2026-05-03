@@ -15,6 +15,15 @@ from pydantic import BaseModel, ConfigDict, Field
 # SCDL mapping: L1 = no web access; L2 = web access.
 SCDLLevelValue = Literal["L1", "L2"]
 AuditStatusValue = Literal["created", "running", "partial", "completed", "failed"]
+SeedQueryTypeValue = Literal[
+    "brand_direct",
+    "category_discovery",
+    "recommendation",
+    "comparison",
+    "alternative",
+    "problem_solution",
+]
+SeedQuerySourceValue = Literal["user", "ai"]
 RunStatusValue = Literal[
     "pending",
     "success",
@@ -39,6 +48,26 @@ class AuditListItemResponse(FrontendAuditSchema):
     runs_per_query: int
     created_at: datetime
     updated_at: datetime
+    archived_at: datetime | None = None
+
+
+class SeedQueryItemResponse(FrontendAuditSchema):
+    text: str
+    type: SeedQueryTypeValue | None = None
+    source: SeedQuerySourceValue = "user"
+
+
+class GeneratedSeedQuerySuggestionResponse(FrontendAuditSchema):
+    text: str
+    type: SeedQueryTypeValue
+    source: Literal["ai"] = "ai"
+
+
+class GenerateSeedQuerySuggestionsResponse(FrontendAuditSchema):
+    suggestions: list[GeneratedSeedQuerySuggestionResponse] = Field(default_factory=list)
+    skipped_duplicates: int = 0
+    skipped_limit: int = 0
+    warnings: list[str] = Field(default_factory=list)
 
 
 class AuditDetailResponse(FrontendAuditSchema):
@@ -57,11 +86,13 @@ class AuditDetailResponse(FrontendAuditSchema):
     locale: str | None = None
     max_queries: int | None = None
     seed_queries: list[str] = Field(default_factory=list)
+    seed_query_items: list[SeedQueryItemResponse] = Field(default_factory=list)
     enable_query_expansion: bool = False
     enable_source_intelligence: bool = False
     follow_up_depth: int = 0
     created_at: datetime
     updated_at: datetime
+    archived_at: datetime | None = None
 
 
 class AuditStatusResponse(FrontendAuditSchema):
@@ -196,6 +227,16 @@ class CriticalQueryItemResponse(FrontendAuditSchema):
     query_score: float | None = None
 
 
+class QueryTypeCoverageItemResponse(FrontendAuditSchema):
+    type: SeedQueryTypeValue | Literal["unknown"]
+    total_queries: int = 0
+    processed_runs: int = 0
+    failed_runs: int = 0
+    brand_found_count: int = 0
+    brand_found_rate: float = 0.0
+    average_score: float | None = None
+
+
 class AuditSummaryResponse(FrontendAuditSchema):
     audit_id: int
     audit_number: int
@@ -207,9 +248,11 @@ class AuditSummaryResponse(FrontendAuditSchema):
     completion_ratio: float = 0.0
     visibility_ratio: float = 0.0
     average_score: float | None = None
+    weighted_visibility_score: float | None = None
     critical_query_count: int = 0
     provider_scores: dict[str, float | None] = Field(default_factory=dict)
     critical_queries: list[CriticalQueryItemResponse] = Field(default_factory=list)
+    query_type_coverage: list[QueryTypeCoverageItemResponse] = Field(default_factory=list)
     competitors: list[CompetitorSummaryItemResponse] = Field(default_factory=list)
     sources: list[SourceSummaryItemResponse] = Field(default_factory=list)
 

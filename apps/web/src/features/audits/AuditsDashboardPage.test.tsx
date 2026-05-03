@@ -28,6 +28,12 @@ describe("audits dashboard page", () => {
     expect(screen.getByText("#1")).toBeInTheDocument();
     expect(screen.getByText("L1")).toBeInTheDocument();
     expect(screen.getByText("mock")).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Actions for audit #42" }));
+    expect(screen.getByRole("menuitem", { name: "Open" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Refresh" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Duplicate" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Archive" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Delete permanently" })).not.toBeInTheDocument();
   });
 
   it("renders an empty state with create-audit calls to action", async () => {
@@ -111,5 +117,96 @@ describe("audits dashboard page", () => {
     for (const status of statuses) {
       expect(await screen.findByText(statusLabels[status])).toBeInTheDocument();
     }
+  });
+
+  it("archives an audit after confirmation and removes it from active list", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const fetchMock = mockFetchSequence([
+      { body: currentUserFixture },
+      { body: auditListFixture },
+      { body: { audit_id: 42, status: "created", archived_at: "2026-05-02T10:00:00Z" } },
+      { body: [] },
+    ]);
+    const user = userEvent.setup();
+
+    renderRoute("/audits");
+
+    await user.click(await screen.findByRole("button", { name: "Actions for audit #42" }));
+    await user.click(screen.getByRole("menuitem", { name: "Archive" }));
+
+    expect(confirmSpy).toHaveBeenCalledWith("Вы уверены, что хотите архивировать этот аудит?");
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://localhost:8000/audits/42/archive",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    expect(await screen.findByText("No audits yet")).toBeInTheDocument();
+    confirmSpy.mockRestore();
+  });
+
+  it("shows archived audits and restores them", async () => {
+    const archivedAudit = {
+      ...auditListFixture[0],
+      archived_at: "2026-05-02T10:00:00Z",
+    };
+    const fetchMock = mockFetchSequence([
+      { body: currentUserFixture },
+      { body: [] },
+      { body: [archivedAudit] },
+      { body: { audit_id: 42, status: "created", archived_at: null } },
+      { body: [] },
+    ]);
+    const user = userEvent.setup();
+
+    renderRoute("/audits");
+
+    await user.click(await screen.findByRole("button", { name: "Archived" }));
+    expect(await screen.findByRole("link", { name: "Acme AI" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Actions for audit #42" }));
+    expect(screen.getByRole("menuitem", { name: "Restore" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Delete permanently" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Archive" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("menuitem", { name: "Restore" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://localhost:8000/audits/42/restore",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+  });
+
+  it("deletes archived audits after confirmation", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const archivedAudit = {
+      ...auditListFixture[0],
+      archived_at: "2026-05-02T10:00:00Z",
+    };
+    const fetchMock = mockFetchSequence([
+      { body: currentUserFixture },
+      { body: [] },
+      { body: [archivedAudit] },
+      { body: undefined, status: 204 },
+      { body: [] },
+    ]);
+    const user = userEvent.setup();
+
+    renderRoute("/audits");
+
+    await user.click(await screen.findByRole("button", { name: "Archived" }));
+    await user.click(await screen.findByRole("button", { name: "Actions for audit #42" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete permanently" }));
+
+    expect(confirmSpy).toHaveBeenCalledWith(
+      "Удалить аудит навсегда? Это действие нельзя отменить.",
+    );
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://localhost:8000/audits/42",
+        expect.objectContaining({ method: "DELETE" }),
+      );
+    });
+    confirmSpy.mockRestore();
   });
 });

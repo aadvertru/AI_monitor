@@ -6,6 +6,14 @@ import math
 from typing import Any
 
 CRITICAL_SCORE_THRESHOLD = 0.3
+QUERY_TYPE_WEIGHTS = {
+    "brand_direct": 1.0,
+    "category_discovery": 1.2,
+    "recommendation": 1.5,
+    "comparison": 1.3,
+    "alternative": 1.2,
+    "problem_solution": 1.4,
+}
 
 
 def _clamp(value: float, min_value: float, max_value: float) -> float:
@@ -21,6 +29,7 @@ def _empty_audit_summary() -> dict[str, Any]:
         "completion_ratio": 0.0,
         "visibility_ratio": 0.0,
         "average_score": None,
+        "weighted_visibility_score": None,
         "critical_query_count": 0,
         "provider_scores": {},
     }
@@ -139,6 +148,112 @@ def compute_provider_scores(run_results: list[dict]) -> dict[str, float | None]:
         return {}
 
 
+def _query_type_weight(value: object) -> float:
+    if isinstance(value, str):
+        return QUERY_TYPE_WEIGHTS.get(value, 1.0)
+    return 1.0
+
+
+def compute_weighted_visibility_score(run_results: list[dict]) -> float | None:
+    """Return query-type weighted average over successful scored runs only."""
+    try:
+        if not isinstance(run_results, list):
+            return None
+        weighted_total = 0.0
+        weight_total = 0.0
+
+        for run_result in run_results:
+            if not isinstance(run_result, dict):
+                return None
+            success_score = _safe_success_score(run_result)
+            if success_score is None:
+                status = run_result.get("status")
+                if status == "success":
+                    return None
+                continue
+
+            weight = _query_type_weight(run_result.get("query_type"))
+            weighted_total += success_score * weight
+            weight_total += weight
+
+        if weight_total == 0.0:
+            return None
+        return round(weighted_total / weight_total, 4)
+    except Exception:
+        return None
+
+
+def _query_type_key(value: object) -> str:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return "unknown"
+
+
+def compute_query_type_coverage(run_results: list[dict]) -> list[dict[str, Any]]:
+    """Return per-query-type coverage metrics without changing score formulas."""
+    try:
+        if not isinstance(run_results, list):
+            return []
+        if not run_results:
+            return []
+
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for run_result in run_results:
+            if not isinstance(run_result, dict):
+                continue
+            status = run_result.get("status")
+            query = run_result.get("query")
+            if not isinstance(status, str):
+                continue
+            if not isinstance(query, str):
+                continue
+            if status not in {"success", "error", "timeout", "rate_limited"}:
+                continue
+            groups.setdefault(_query_type_key(run_result.get("query_type")), []).append(
+                run_result
+            )
+
+        items: list[dict[str, Any]] = []
+        for query_type in sorted(groups):
+            query_type_runs = groups[query_type]
+            successful_runs = [
+                run_result
+                for run_result in query_type_runs
+                if _safe_success_score(run_result) is not None
+                and isinstance(run_result.get("visible_brand"), bool)
+            ]
+            failed_runs = len(query_type_runs) - len(successful_runs)
+            brand_found_count = sum(
+                1
+                for run_result in successful_runs
+                if run_result.get("visible_brand") is True
+            )
+            processed_runs = len(successful_runs)
+            brand_found_rate = (
+                round(brand_found_count / processed_runs, 4)
+                if processed_runs
+                else 0.0
+            )
+
+            items.append(
+                {
+                    "type": query_type,
+                    "total_queries": len(
+                        {run_result["query"] for run_result in query_type_runs}
+                    ),
+                    "processed_runs": processed_runs,
+                    "failed_runs": failed_runs,
+                    "brand_found_count": brand_found_count,
+                    "brand_found_rate": brand_found_rate,
+                    "average_score": compute_query_score(successful_runs),
+                }
+            )
+
+        return items
+    except Exception:
+        return []
+
+
 def find_critical_queries(run_results: list[dict]) -> list[dict]:
     """Return detailed critical queries with deterministic reason priority."""
     try:
@@ -231,6 +346,7 @@ def build_audit_summary(run_results: list[dict]) -> dict[str, Any]:
         )
 
         average_score = compute_query_score(run_results)
+        weighted_visibility_score = compute_weighted_visibility_score(run_results)
         provider_scores = compute_provider_scores(run_results)
         critical_query_count = len(find_critical_queries(run_results))
 
@@ -242,6 +358,7 @@ def build_audit_summary(run_results: list[dict]) -> dict[str, Any]:
             "completion_ratio": round(completion_ratio, 4),
             "visibility_ratio": round(visibility_ratio, 4),
             "average_score": average_score,
+            "weighted_visibility_score": weighted_visibility_score,
             "critical_query_count": critical_query_count,
             "provider_scores": provider_scores,
         }

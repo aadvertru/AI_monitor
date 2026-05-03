@@ -2,6 +2,14 @@ export type UserRole = "user" | "admin";
 export type AuditStatus = "created" | "running" | "partial" | "completed" | "failed";
 export type RunStatus = "pending" | "success" | "error" | "timeout" | "rate_limited";
 export type SCDLLevel = "L1" | "L2";
+export type SeedQueryType =
+  | "brand_direct"
+  | "category_discovery"
+  | "recommendation"
+  | "comparison"
+  | "alternative"
+  | "problem_solution";
+export type SeedQuerySource = "user" | "ai";
 
 export type CurrentUser = {
   id: number;
@@ -31,6 +39,7 @@ export type AuditListItem = {
   runs_per_query: number;
   created_at: string;
   updated_at: string;
+  archived_at: string | null;
 };
 
 export type AuditCreateRequest = {
@@ -44,10 +53,17 @@ export type AuditCreateRequest = {
   locale?: string | null;
   max_queries?: number | null;
   seed_queries?: string[] | null;
+  seed_query_items?: SeedQueryDraft[] | null;
   enable_query_expansion?: boolean;
   enable_source_intelligence?: boolean;
   follow_up_depth?: number;
   scdl_level?: SCDLLevel;
+};
+
+export type SeedQueryDraft = {
+  text: string;
+  type?: SeedQueryType | null;
+  source?: SeedQuerySource;
 };
 
 export type AuditCreateResponse = {
@@ -59,6 +75,7 @@ export type AuditCreateResponse = {
   runs_per_query: number;
   scdl_level: SCDLLevel;
   seed_queries: string[];
+  seed_query_items: SeedQueryDraft[];
 };
 
 export type AuditDetail = AuditListItem & {
@@ -69,9 +86,39 @@ export type AuditDetail = AuditListItem & {
   locale: string | null;
   max_queries: number | null;
   seed_queries: string[];
+  seed_query_items: SeedQueryDraft[];
   enable_query_expansion: boolean;
   enable_source_intelligence: boolean;
   follow_up_depth: number;
+};
+
+export type GenerateSeedQuerySuggestionsRequest = {
+  brandName?: string | null;
+  brandDomain?: string | null;
+  brandDescription?: string | null;
+  useDomain: boolean;
+  useDescription: boolean;
+  count?: number;
+  existingQueries: SeedQueryDraft[];
+};
+
+export type GeneratedSeedQuerySuggestion = {
+  text: string;
+  type: SeedQueryType;
+  source: "ai";
+};
+
+export type GenerateSeedQuerySuggestionsResponse = {
+  suggestions: GeneratedSeedQuerySuggestion[];
+  skippedDuplicates?: number;
+  skippedLimit?: number;
+  warnings?: string[];
+};
+
+export type AuditActionResponse = {
+  audit_id: number;
+  status: AuditStatus;
+  archived_at: string | null;
 };
 
 export type AuditStatusResponse = {
@@ -206,6 +253,16 @@ export type CriticalQueryItem = {
   query_score: number | null;
 };
 
+export type QueryTypeCoverageItem = {
+  type: SeedQueryType | "unknown";
+  total_queries: number;
+  processed_runs: number;
+  failed_runs: number;
+  brand_found_count: number;
+  brand_found_rate: number;
+  average_score: number | null;
+};
+
 export type AuditSummaryResponse = {
   audit_id: number;
   audit_number: number;
@@ -217,9 +274,11 @@ export type AuditSummaryResponse = {
   completion_ratio: number;
   visibility_ratio: number;
   average_score: number | null;
+  weighted_visibility_score: number | null;
   critical_query_count: number;
   provider_scores: Record<string, number | null>;
   critical_queries: CriticalQueryItem[];
+  query_type_coverage: QueryTypeCoverageItem[];
   competitors: CompetitorSummaryItem[];
   sources: SourceSummaryItem[];
 };

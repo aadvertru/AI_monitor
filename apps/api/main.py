@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,7 +33,11 @@ from apps.api.audit_schemas import (
     CompetitorSummaryItemResponse,
     ComponentScoresResponse,
     CriticalQueryItemResponse,
+    GeneratedSeedQuerySuggestionResponse,
+    GenerateSeedQuerySuggestionsResponse,
+    QueryTypeCoverageItemResponse,
     RawResponseInspectionResponse,
+    SeedQueryItemResponse,
     SourceSummaryItemResponse,
 )
 from apps.api.database import get_db_session, init_models, should_auto_create_schema
@@ -40,11 +52,20 @@ from apps.api.security import (
     verify_access_token,
     verify_password,
 )
-from libs.analysis.aggregation import build_audit_summary, find_critical_queries
+from apps.api.services.seed_query_generation import (
+    GenerateSeedQueriesInput,
+    SeedQueryDraft,
+    SeedQueryGenerationConfigError,
+    SeedQueryGenerationUnavailable,
+    generate_seed_query_suggestions,
+)
+from libs.analysis.aggregation import (
+    build_audit_summary,
+    compute_query_type_coverage,
+    find_critical_queries,
+)
 from libs.control.job_scheduler import schedule_jobs_for_audit
-from libs.control.query_capping import cap_queries
 from libs.control.query_deduplication import deduplicate_queries
-from libs.control.query_normalization import normalize_seed_queries
 from libs.execution.pilot_config import (
     PilotConfigError,
     PilotPolicyError,
@@ -63,19 +84,29 @@ from libs.storage.models import (
     RunStatus,
     SCDLLevel,
     Score,
+    SeedQuerySource,
+    SeedQueryType,
     User,
     UserRole,
 )
 
 SUPPORTED_PROVIDERS = frozenset({"mock", "openai", "anthropic", "gemini"})
 MAX_BRAND_NAME_LENGTH = 255
+MAX_BRAND_DESCRIPTION_LENGTH = 500
+MAX_SEED_QUERY_COUNT = 20
+MIN_SEED_QUERY_LENGTH = 3
+MAX_SEED_QUERY_LENGTH = 300
 MAX_EMAIL_LENGTH = 255
+BRAND_DOMAIN_PATTERN = re.compile(
+    r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$"
+)
 DB_SESSION_DEPENDENCY = Depends(get_db_session)
 UNAUTHORIZED_DETAIL = "Invalid authentication credentials."
 AUDIT_NOT_FOUND_DETAIL = "Audit was not found."
 AUDIT_RUNNING_DETAIL = "Audit is already running."
 AUDIT_NOT_TRIGGERABLE_DETAIL = "Audit can only be triggered from the created state."
 AUDIT_NOT_EDITABLE_DETAIL = "Audit can only be edited before it starts running."
+AUDIT_DELETE_ACTIVE_DETAIL = "Only archived audits can be deleted permanently."
 AUDIT_NOT_RUNNABLE_DETAIL = "Audit has no runnable query/provider combinations."
 RAW_RESPONSE_NOT_FOUND_DETAIL = "Raw response was not found."
 RAW_RESPONSE_FORBIDDEN_DETAIL = "Raw response inspection requires admin access."
@@ -119,6 +150,57 @@ def normalize_email(value: str) -> str:
     return normalized
 
 
+def normalize_brand_domain(value: str | None) -> str | None:
+    if value is None:
+        return None
+
+    normalized = value.strip().lower().rstrip("/")
+    if not normalized:
+        return None
+    if "://" in normalized or "/" in normalized or "?" in normalized or "#" in normalized:
+        raise ValueError("Invalid domain format")
+    if not BRAND_DOMAIN_PATTERN.fullmatch(normalized):
+        raise ValueError("Invalid domain format")
+    return normalized
+
+
+def normalize_seed_query_text(value: str) -> str:
+    normalized = " ".join(value.strip().split())
+    if not normalized:
+        raise ValueError("seed query text must not be empty.")
+    if len(normalized) < MIN_SEED_QUERY_LENGTH:
+        raise ValueError(f"seed query text min length is {MIN_SEED_QUERY_LENGTH}.")
+    if len(normalized) > MAX_SEED_QUERY_LENGTH:
+        raise ValueError(f"seed query text max length is {MAX_SEED_QUERY_LENGTH}.")
+    return normalized
+
+
+class SeedQueryItemRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str
+    type: Literal[
+        "brand_direct",
+        "category_discovery",
+        "recommendation",
+        "comparison",
+        "alternative",
+        "problem_solution",
+    ] | None = None
+    source: Literal["user", "ai"] = "user"
+
+    @field_validator("text")
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        return normalize_seed_query_text(value)
+
+    @model_validator(mode="after")
+    def validate_ai_query_type(self) -> SeedQueryItemRequest:
+        if self.source == "ai" and self.type is None:
+            raise ValueError("seed query type is required when source is ai.")
+        return self
+
+
 class AuditCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -127,13 +209,14 @@ class AuditCreateRequest(BaseModel):
     runs_per_query: int = Field(ge=1, le=5)
 
     brand_domain: str | None = None
-    brand_description: str | None = None
+    brand_description: str | None = Field(default=None, max_length=MAX_BRAND_DESCRIPTION_LENGTH)
 
     language: str | None = None
     country: str | None = None
     locale: str | None = None
     max_queries: int | None = None
     seed_queries: list[str] | None = None
+    seed_query_items: list[SeedQueryItemRequest] | None = None
     enable_query_expansion: bool = False
     enable_source_intelligence: bool = False
     follow_up_depth: int = 0
@@ -171,13 +254,12 @@ class AuditCreateRequest(BaseModel):
             raise ValueError("providers must contain at least one supported provider.")
         return normalized
 
-    @field_validator(
-        "brand_domain",
-        "brand_description",
-        "language",
-        "country",
-        "locale",
-    )
+    @field_validator("brand_domain")
+    @classmethod
+    def validate_brand_domain(cls, value: str | None) -> str | None:
+        return normalize_brand_domain(value)
+
+    @field_validator("brand_description", "language", "country", "locale")
     @classmethod
     def normalize_optional_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -187,13 +269,31 @@ class AuditCreateRequest(BaseModel):
 
     @field_validator("seed_queries")
     @classmethod
-    def normalize_seed_queries(
-        cls, value: list[str] | None, info: ValidationInfo
-    ) -> list[str] | None:
-        normalized = normalize_seed_queries(value)
+    def normalize_seed_queries(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        if len(value) > MAX_SEED_QUERY_COUNT:
+            raise ValueError(f"seed_queries max length is {MAX_SEED_QUERY_COUNT}.")
+        normalized = [normalize_seed_query_text(query) for query in value]
         deduplicated = deduplicate_queries(normalized)
-        capped = cap_queries(deduplicated, max_queries=info.data.get("max_queries"))
-        return capped or None
+        return deduplicated or None
+
+    @field_validator("seed_query_items")
+    @classmethod
+    def validate_seed_query_items(
+        cls, value: list[SeedQueryItemRequest] | None
+    ) -> list[SeedQueryItemRequest] | None:
+        if value is None:
+            return None
+        if len(value) > MAX_SEED_QUERY_COUNT:
+            raise ValueError(f"seed_query_items max length is {MAX_SEED_QUERY_COUNT}.")
+        return value
+
+    @model_validator(mode="after")
+    def validate_seed_query_fields(self) -> AuditCreateRequest:
+        if "seed_queries" in self.model_fields_set and "seed_query_items" in self.model_fields_set:
+            raise ValueError("Provide either seed_queries or seed_query_items, not both.")
+        return self
 
     @field_validator("max_queries")
     @classmethod
@@ -221,6 +321,38 @@ class AuditCreateResponse(BaseModel):
     runs_per_query: int
     scdl_level: str
     seed_queries: list[str]
+    seed_query_items: list[SeedQueryItemResponse] = Field(default_factory=list)
+
+
+class GenerateSeedQuerySuggestionsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    brand_name: str | None = None
+    brand_domain: str | None = None
+    brand_description: str | None = None
+    use_domain: bool = False
+    use_description: bool = False
+    count: int = Field(default=10, ge=1, le=10)
+    existing_queries: list[SeedQueryItemRequest] = Field(default_factory=list)
+
+    @field_validator("brand_name", "brand_description")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("brand_domain")
+    @classmethod
+    def normalize_domain(cls, value: str | None) -> str | None:
+        return normalize_brand_domain(value)
+
+
+class AuditActionResponse(BaseModel):
+    audit_id: int
+    status: str
+    archived_at: datetime | None = None
 
 
 class RegisterRequest(BaseModel):
@@ -279,6 +411,39 @@ def build_user_response(user: User) -> UserResponse:
     )
 
 
+def build_seed_query_items(payload: AuditCreateRequest) -> list[SeedQueryItemRequest]:
+    if payload.seed_query_items is not None:
+        return payload.seed_query_items
+    return [
+        SeedQueryItemRequest(text=query_text, source="user", type=None)
+        for query_text in payload.seed_queries or []
+    ]
+
+
+def add_seed_query_records(
+    session: AsyncSession,
+    audit_id: int,
+    seed_query_items: list[SeedQueryItemRequest],
+) -> None:
+    for item in seed_query_items:
+        session.add(
+            Query(
+                audit_id=audit_id,
+                text=item.text,
+                query_type=SeedQueryType(item.type) if item.type is not None else None,
+                source=SeedQuerySource(item.source),
+            )
+        )
+
+
+def build_seed_query_item_response(query: Query) -> SeedQueryItemResponse:
+    return SeedQueryItemResponse(
+        text=query.text,
+        type=query.query_type.value if query.query_type is not None else None,
+        source=query.source.value,
+    )
+
+
 async def create_audit_record(
     session: AsyncSession,
     payload: AuditCreateRequest,
@@ -304,9 +469,9 @@ async def create_audit_record(
     session.add(audit)
     await session.flush()
 
-    seed_queries = payload.seed_queries or []
-    for query_text in seed_queries:
-        session.add(Query(audit_id=audit.id, text=query_text))
+    seed_query_items = build_seed_query_items(payload)
+    add_seed_query_records(session, audit.id, seed_query_items)
+    seed_queries = [item.text for item in seed_query_items]
 
     await session.commit()
     await session.refresh(audit)
@@ -321,6 +486,14 @@ async def create_audit_record(
         runs_per_query=audit.runs_per_query,
         scdl_level=audit.scdl_level.value,
         seed_queries=seed_queries,
+        seed_query_items=[
+            SeedQueryItemResponse(
+                text=item.text,
+                type=item.type,
+                source=item.source,
+            )
+            for item in seed_query_items
+        ],
     )
 
 
@@ -373,8 +546,7 @@ async def update_audit_record(
     audit.scdl_level = SCDLLevel(payload.scdl_level)
 
     await session.execute(delete(Query).where(Query.audit_id == audit.id))
-    for query_text in payload.seed_queries or []:
-        session.add(Query(audit_id=audit.id, text=query_text))
+    add_seed_query_records(session, audit.id, build_seed_query_items(payload))
 
     await session.commit()
     await session.refresh(audit)
@@ -595,7 +767,7 @@ async def build_audit_detail_response(
     audit_number = await get_relative_audit_number(session, audit)
     queries = (
         await session.execute(
-            select(Query.text).where(Query.audit_id == audit.id).order_by(Query.id)
+            select(Query).where(Query.audit_id == audit.id).order_by(Query.id)
         )
     ).scalars().all()
     return AuditDetailResponse(
@@ -613,24 +785,29 @@ async def build_audit_detail_response(
         country=audit.country,
         locale=audit.locale,
         max_queries=audit.max_queries,
-        seed_queries=list(queries),
+        seed_queries=[query.text for query in queries],
+        seed_query_items=[build_seed_query_item_response(query) for query in queries],
         enable_query_expansion=audit.enable_query_expansion,
         enable_source_intelligence=audit.enable_source_intelligence,
         follow_up_depth=audit.follow_up_depth,
         created_at=audit.created_at,
         updated_at=audit.updated_at,
+        archived_at=audit.archived_at,
     )
 
 
 async def list_audit_records(
     session: AsyncSession,
     current_user: UserResponse,
+    *,
+    archived: bool = False,
 ) -> list[AuditListItemResponse]:
     stmt = (
         select(Audit, Brand)
         .join(Brand, Audit.brand_id == Brand.id)
         .order_by(Audit.created_at.desc(), Audit.id.desc())
     )
+    stmt = stmt.where(Audit.archived_at.is_not(None) if archived else Audit.archived_at.is_(None))
     if not _is_admin(current_user):
         stmt = stmt.where(Audit.user_id == current_user.id)
 
@@ -648,9 +825,41 @@ async def list_audit_records(
             runs_per_query=audit.runs_per_query,
             created_at=audit.created_at,
             updated_at=audit.updated_at,
+            archived_at=audit.archived_at,
         )
         for audit, brand in rows
     ]
+
+
+async def archive_audit_record(session: AsyncSession, audit: Audit) -> AuditActionResponse:
+    if audit.archived_at is None:
+        audit.archived_at = datetime.now(tz=timezone.utc)
+        await session.commit()
+        await session.refresh(audit)
+    return AuditActionResponse(
+        audit_id=audit.id,
+        status=_status_value(audit.status),
+        archived_at=audit.archived_at,
+    )
+
+
+async def restore_audit_record(session: AsyncSession, audit: Audit) -> AuditActionResponse:
+    if audit.archived_at is not None:
+        audit.archived_at = None
+        await session.commit()
+        await session.refresh(audit)
+    return AuditActionResponse(
+        audit_id=audit.id,
+        status=_status_value(audit.status),
+        archived_at=audit.archived_at,
+    )
+
+
+async def delete_archived_audit_record(session: AsyncSession, audit: Audit) -> None:
+    if audit.archived_at is None:
+        raise HTTPException(status_code=409, detail=AUDIT_DELETE_ACTIVE_DETAIL)
+    await session.delete(audit)
+    await session.commit()
 
 
 async def get_expected_run_count(session: AsyncSession, audit: Audit) -> int:
@@ -917,6 +1126,29 @@ def _run_results_for_summary(results: AuditResultsResponse) -> list[dict[str, An
     return run_results
 
 
+async def _query_types_by_id(
+    session: AsyncSession,
+    audit_id: int,
+) -> dict[int, str | None]:
+    rows = (
+        await session.execute(select(Query.id, Query.query_type).where(Query.audit_id == audit_id))
+    ).all()
+    return {
+        query_id: query_type.value if query_type is not None else None
+        for query_id, query_type in rows
+    }
+
+
+def _run_results_with_query_types(
+    results: AuditResultsResponse,
+    query_types_by_id: dict[int, str | None],
+) -> list[dict[str, Any]]:
+    run_results = _run_results_for_summary(results)
+    for index, row in enumerate(results.rows):
+        run_results[index]["query_type"] = query_types_by_id.get(row.query_id)
+    return run_results
+
+
 def _competitor_summary_items(
     results: AuditResultsResponse,
 ) -> list[CompetitorSummaryItemResponse]:
@@ -989,7 +1221,8 @@ async def build_audit_summary_response(
     audit: Audit,
 ) -> AuditSummaryResponse:
     results = await build_audit_results_response(session, audit)
-    run_results = _run_results_for_summary(results)
+    query_types_by_id = await _query_types_by_id(session, audit.id)
+    run_results = _run_results_with_query_types(results, query_types_by_id)
     summary = build_audit_summary(run_results)
     critical_queries = [
         CriticalQueryItemResponse(
@@ -1011,9 +1244,14 @@ async def build_audit_summary_response(
         completion_ratio=summary["completion_ratio"],
         visibility_ratio=summary["visibility_ratio"],
         average_score=summary["average_score"],
+        weighted_visibility_score=summary["weighted_visibility_score"],
         critical_query_count=summary["critical_query_count"],
         provider_scores=summary["provider_scores"],
         critical_queries=critical_queries,
+        query_type_coverage=[
+            QueryTypeCoverageItemResponse(**item)
+            for item in compute_query_type_coverage(run_results)
+        ],
         competitors=_competitor_summary_items(results),
         sources=_source_summary_items(results),
     )
@@ -1126,14 +1364,68 @@ async def get_current_user(
         raise HTTPException(status_code=500, detail="Failed to load current user.") from exc
 
 
+@app.post(
+    "/audit-seed-query-suggestions",
+    response_model=GenerateSeedQuerySuggestionsResponse,
+)
+async def suggest_seed_queries(
+    payload: GenerateSeedQuerySuggestionsRequest,
+    request: Request,
+    session: AsyncSession = DB_SESSION_DEPENDENCY,
+) -> GenerateSeedQuerySuggestionsResponse:
+    try:
+        await get_authenticated_user_from_request(session, request)
+        result = await generate_seed_query_suggestions(
+            GenerateSeedQueriesInput(
+                brand_name=payload.brand_name,
+                brand_domain=payload.brand_domain,
+                brand_description=payload.brand_description,
+                use_domain=payload.use_domain,
+                use_description=payload.use_description,
+                count=payload.count,
+                existing_queries=[
+                    SeedQueryDraft(
+                        text=query.text,
+                        type=query.type,
+                        source=query.source,
+                    )
+                    for query in payload.existing_queries
+                ],
+            )
+        )
+        return GenerateSeedQuerySuggestionsResponse(
+            suggestions=[
+                GeneratedSeedQuerySuggestionResponse(
+                    text=suggestion.text,
+                    type=suggestion.type,
+                    source=suggestion.source,
+                )
+                for suggestion in result.suggestions
+            ],
+            skipped_duplicates=result.skipped_duplicates,
+            skipped_limit=result.skipped_limit,
+            warnings=result.warnings,
+        )
+    except HTTPException:
+        raise
+    except SeedQueryGenerationConfigError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except SeedQueryGenerationUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Seed query generation is unavailable.",
+        ) from exc
+
+
 @app.get("/audits", response_model=list[AuditListItemResponse])
 async def list_audits(
     request: Request,
+    archived: bool = False,
     session: AsyncSession = DB_SESSION_DEPENDENCY,
 ) -> list[AuditListItemResponse]:
     try:
         current_user = await get_authenticated_user_from_request(session, request)
-        return await list_audit_records(session, current_user)
+        return await list_audit_records(session, current_user, archived=archived)
     except HTTPException:
         raise
     except SQLAlchemyError as exc:
@@ -1196,6 +1488,58 @@ async def update_audit(
     except SQLAlchemyError as exc:
         await session.rollback()
         raise HTTPException(status_code=500, detail="Failed to update audit.") from exc
+
+
+@app.post("/audits/{audit_id}/archive", response_model=AuditActionResponse)
+async def archive_audit(
+    audit_id: int,
+    request: Request,
+    session: AsyncSession = DB_SESSION_DEPENDENCY,
+) -> AuditActionResponse:
+    try:
+        current_user = await get_authenticated_user_from_request(session, request)
+        audit, _brand = await load_accessible_audit(session, audit_id, current_user)
+        return await archive_audit_record(session, audit)
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail="Failed to archive audit.") from exc
+
+
+@app.post("/audits/{audit_id}/restore", response_model=AuditActionResponse)
+async def restore_audit(
+    audit_id: int,
+    request: Request,
+    session: AsyncSession = DB_SESSION_DEPENDENCY,
+) -> AuditActionResponse:
+    try:
+        current_user = await get_authenticated_user_from_request(session, request)
+        audit, _brand = await load_accessible_audit(session, audit_id, current_user)
+        return await restore_audit_record(session, audit)
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail="Failed to restore audit.") from exc
+
+
+@app.delete("/audits/{audit_id}", status_code=204)
+async def delete_audit(
+    audit_id: int,
+    request: Request,
+    session: AsyncSession = DB_SESSION_DEPENDENCY,
+) -> Response:
+    try:
+        current_user = await get_authenticated_user_from_request(session, request)
+        audit, _brand = await load_accessible_audit(session, audit_id, current_user)
+        await delete_archived_audit_record(session, audit)
+        return Response(status_code=204)
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail="Failed to delete audit.") from exc
 
 
 @app.get("/audits/{audit_id}/status", response_model=AuditStatusResponse)

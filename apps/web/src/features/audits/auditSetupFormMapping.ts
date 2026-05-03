@@ -1,12 +1,24 @@
-import type { AuditDetail } from "../../lib/api/types";
+import type { AuditDetail, SeedQueryDraft } from "../../lib/api/types";
 import type { CreateAuditFormInput } from "./auditSetupFormConfig";
+
+function fallbackSeedQueryItems(audit: AuditDetail): SeedQueryDraft[] {
+  if (audit.seed_query_items.length > 0) {
+    return audit.seed_query_items;
+  }
+
+  return audit.seed_queries.map((text) => ({
+    text,
+    type: null,
+    source: "user",
+  }));
+}
 
 export function auditDetailToFormDefaults(audit: AuditDetail): Partial<CreateAuditFormInput> {
   return {
     brandName: audit.brand_name,
     brandDomain: audit.brand_domain ?? "",
     brandDescription: audit.brand_description ?? "",
-    seedQueries: audit.seed_queries.join("\n"),
+    seedQueryItems: fallbackSeedQueryItems(audit),
     providers: audit.providers,
     language: (audit.language ?? "en") as CreateAuditFormInput["language"],
     country: (audit.country ?? "US") as CreateAuditFormInput["country"],

@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   ApiError,
+  archiveAudit,
+  deleteArchivedAudit,
+  generateSeedQuerySuggestions,
   getAuditDetail,
   getAuditResults,
   getAuditSummary,
@@ -9,6 +12,7 @@ import {
   loginUser,
   listAudits,
   resolveApiBaseUrl,
+  restoreAudit,
   runAuditPipeline,
   updateAudit,
 } from "./client";
@@ -68,6 +72,16 @@ describe("api client", () => {
     await expect(listAudits()).resolves.toEqual(auditListFixture);
   });
 
+  it("loads archived audit list responses", async () => {
+    const fetchMock = mockFetchSequence([{ body: auditListFixture }]);
+
+    await expect(listAudits({ archived: true })).resolves.toEqual(auditListFixture);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/audits?archived=true",
+      expect.objectContaining({ credentials: "include" }),
+    );
+  });
+
   it("loads audit detail responses", async () => {
     mockFetchSequence([{ body: auditDetailFixture }]);
 
@@ -92,6 +106,67 @@ describe("api client", () => {
       expect.objectContaining({
         credentials: "include",
         method: "PUT",
+      }),
+    );
+  });
+
+  it("generates seed query suggestions with the documented endpoint and payload", async () => {
+    const rawResponse = {
+      suggestions: [
+        {
+          text: "best acme alternatives",
+          type: "alternative",
+          source: "ai",
+        },
+      ],
+      skipped_duplicates: 2,
+      skipped_limit: 1,
+      warnings: ["Duplicate suggestions were skipped."],
+    };
+    const fetchMock = mockFetchSequence([{ body: rawResponse }]);
+
+    await expect(
+      generateSeedQuerySuggestions({
+        brandName: "Acme AI",
+        brandDomain: "acme.example",
+        brandDescription: "AI visibility monitoring platform.",
+        useDomain: true,
+        useDescription: true,
+        count: 10,
+        existingQueries: [
+          {
+            text: "best ai visibility tools",
+            type: "category_discovery",
+            source: "user",
+          },
+        ],
+      }),
+    ).resolves.toEqual({
+      suggestions: rawResponse.suggestions,
+      skippedDuplicates: 2,
+      skippedLimit: 1,
+      warnings: rawResponse.warnings,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/audit-seed-query-suggestions",
+      expect.objectContaining({
+        credentials: "include",
+        method: "POST",
+        body: JSON.stringify({
+          brand_name: "Acme AI",
+          brand_domain: "acme.example",
+          brand_description: "AI visibility monitoring platform.",
+          use_domain: true,
+          use_description: true,
+          count: 10,
+          existing_queries: [
+            {
+              text: "best ai visibility tools",
+              type: "category_discovery",
+              source: "user",
+            },
+          ],
+        }),
       }),
     );
   });
@@ -125,6 +200,35 @@ describe("api client", () => {
     );
   });
 
+  it("archives, restores, and deletes audits with credentialed requests", async () => {
+    const actionResponse = {
+      audit_id: 42,
+      status: "created",
+      archived_at: "2026-05-02T10:00:00Z",
+    };
+    const fetchMock = mockFetchSequence([
+      { body: actionResponse },
+      { body: { ...actionResponse, archived_at: null } },
+      { body: undefined, status: 204 },
+    ]);
+
+    await expect(archiveAudit(42)).resolves.toEqual(actionResponse);
+    await expect(restoreAudit(42)).resolves.toEqual({ ...actionResponse, archived_at: null });
+    await expect(deleteArchivedAudit(42)).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/audits/42/archive",
+      expect.objectContaining({ credentials: "include", method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/audits/42/restore",
+      expect.objectContaining({ credentials: "include", method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/audits/42",
+      expect.objectContaining({ credentials: "include", method: "DELETE" }),
+    );
+  });
+
   it.each([
     [401, "Not authenticated."],
     [403, "Real provider execution is disabled."],
@@ -137,6 +241,22 @@ describe("api client", () => {
     await expect(runAuditPipeline(42)).rejects.toMatchObject({
       message: detail,
       status,
+    } satisfies Partial<ApiError>);
+  });
+
+  it("propagates seed query generation errors safely", async () => {
+    mockFetchSequence([{ body: { detail: "Seed query generation is unavailable." }, status: 503 }]);
+
+    await expect(
+      generateSeedQuerySuggestions({
+        brandName: "Acme AI",
+        useDomain: false,
+        useDescription: false,
+        existingQueries: [],
+      }),
+    ).rejects.toMatchObject({
+      message: "Seed query generation is unavailable.",
+      status: 503,
     } satisfies Partial<ApiError>);
   });
 

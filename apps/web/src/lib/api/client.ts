@@ -1,6 +1,7 @@
 import type {
   AuditCreateRequest,
   AuditCreateResponse,
+  AuditActionResponse,
   AuditDetail,
   AuditListItem,
   AuditPipelineRunResponse,
@@ -9,6 +10,9 @@ import type {
   AuditStatusResponse,
   AuditSummaryResponse,
   CurrentUser,
+  GenerateSeedQuerySuggestionsRequest,
+  GenerateSeedQuerySuggestionsResponse,
+  GeneratedSeedQuerySuggestion,
   LoginRequest,
   LogoutResponse,
   RegisterRequest,
@@ -94,6 +98,24 @@ function jsonBody(value: unknown) {
   return JSON.stringify(value);
 }
 
+type RawGenerateSeedQuerySuggestionsResponse = {
+  suggestions: GeneratedSeedQuerySuggestion[];
+  skipped_duplicates?: number;
+  skipped_limit?: number;
+  warnings?: string[];
+};
+
+function mapSeedQueryGenerationResponse(
+  response: RawGenerateSeedQuerySuggestionsResponse,
+): GenerateSeedQuerySuggestionsResponse {
+  return {
+    suggestions: response.suggestions,
+    skippedDuplicates: response.skipped_duplicates,
+    skippedLimit: response.skipped_limit,
+    warnings: response.warnings,
+  };
+}
+
 export function getCurrentUser() {
   return apiFetch<CurrentUser>("/auth/me");
 }
@@ -116,8 +138,9 @@ export function logoutUser() {
   return apiFetch<LogoutResponse>("/auth/logout", { method: "POST" });
 }
 
-export function listAudits() {
-  return apiFetch<AuditListItem[]>("/audits");
+export function listAudits({ archived = false }: { archived?: boolean } = {}) {
+  const params = archived ? "?archived=true" : "";
+  return apiFetch<AuditListItem[]>(`/audits${params}`);
 }
 
 export function createAudit(payload: AuditCreateRequest) {
@@ -125,6 +148,28 @@ export function createAudit(payload: AuditCreateRequest) {
     method: "POST",
     body: jsonBody(payload),
   });
+}
+
+export async function generateSeedQuerySuggestions(
+  payload: GenerateSeedQuerySuggestionsRequest,
+) {
+  const response = await apiFetch<RawGenerateSeedQuerySuggestionsResponse>(
+    "/audit-seed-query-suggestions",
+    {
+      method: "POST",
+      body: jsonBody({
+        brand_name: payload.brandName,
+        brand_domain: payload.brandDomain,
+        brand_description: payload.brandDescription,
+        use_domain: payload.useDomain,
+        use_description: payload.useDescription,
+        count: payload.count,
+        existing_queries: payload.existingQueries,
+      }),
+    },
+  );
+
+  return mapSeedQueryGenerationResponse(response);
 }
 
 export function updateAudit(auditId: number, payload: AuditCreateRequest) {
@@ -159,5 +204,23 @@ export function runAudit(auditId: number) {
 export function runAuditPipeline(auditId: number) {
   return apiFetch<AuditPipelineRunResponse>(`/audits/${auditId}/run-pipeline`, {
     method: "POST",
+  });
+}
+
+export function archiveAudit(auditId: number) {
+  return apiFetch<AuditActionResponse>(`/audits/${auditId}/archive`, {
+    method: "POST",
+  });
+}
+
+export function restoreAudit(auditId: number) {
+  return apiFetch<AuditActionResponse>(`/audits/${auditId}/restore`, {
+    method: "POST",
+  });
+}
+
+export function deleteArchivedAudit(auditId: number) {
+  return apiFetch<void>(`/audits/${auditId}`, {
+    method: "DELETE",
   });
 }

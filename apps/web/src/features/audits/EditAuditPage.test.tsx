@@ -17,6 +17,7 @@ describe("edit audit page", () => {
       brand_domain: "updated.example",
       providers: ["mock", "openai"],
       seed_queries: ["updated query"],
+      seed_query_items: [{ text: "updated query", type: null, source: "user" }],
     };
     const fetchMock = mockFetchSequence([
       { body: currentUserFixture },
@@ -28,13 +29,15 @@ describe("edit audit page", () => {
     renderRoute("/audits/42/edit");
 
     expect(await screen.findByRole("heading", { name: "Edit audit setup" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Brand description")).toHaveAttribute("maxLength", "500");
+    expect(screen.getByText("34 / 500")).toBeInTheDocument();
     await user.clear(screen.getByLabelText("Brand name"));
     await user.type(screen.getByLabelText("Brand name"), "Acme Updated");
     await user.clear(screen.getByLabelText("Brand domain"));
     await user.type(screen.getByLabelText("Brand domain"), "updated.example");
     await user.click(screen.getByLabelText("OpenAI"));
-    await user.clear(screen.getByLabelText("Seed queries"));
-    await user.type(screen.getByLabelText("Seed queries"), "updated query");
+    await user.clear(screen.getByLabelText("Seed query 1"));
+    await user.type(screen.getByLabelText("Seed query 1"), "updated query");
     await user.click(screen.getByRole("button", { name: "Save setup" }));
 
     await waitFor(() => {
@@ -48,8 +51,27 @@ describe("edit audit page", () => {
       brand_name: "Acme Updated",
       brand_domain: "updated.example",
       providers: ["mock", "openai"],
-      seed_queries: ["updated query"],
+      seed_query_items: [{ text: "updated query", type: null, source: "user" }],
     });
+    expect(JSON.parse(String(request?.body))).not.toHaveProperty("seed_queries");
+  });
+
+  it("validates edited brand domain format before API submission", async () => {
+    const fetchMock = mockFetchSequence([
+      { body: currentUserFixture },
+      { body: auditDetailFixture },
+    ]);
+    const user = userEvent.setup();
+
+    renderRoute("/audits/42/edit");
+
+    expect(await screen.findByRole("heading", { name: "Edit audit setup" })).toBeInTheDocument();
+    await user.clear(screen.getByLabelText("Brand domain"));
+    await user.type(screen.getByLabelText("Brand domain"), "https://updated.example/page");
+    await user.click(screen.getByRole("button", { name: "Save setup" }));
+
+    expect(await screen.findByText("Invalid domain format")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("does not render editable form controls for completed audits", async () => {

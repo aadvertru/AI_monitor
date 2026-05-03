@@ -38,6 +38,7 @@ export const auditListFixture: AuditListItem[] = [
     runs_per_query: 1,
     created_at: "2026-04-29T09:30:00Z",
     updated_at: "2026-04-29T09:30:00Z",
+    archived_at: null,
   },
 ];
 
@@ -50,6 +51,13 @@ export const auditCreateResponseFixture: AuditCreateResponse = {
   runs_per_query: 1,
   scdl_level: "L1",
   seed_queries: ["best ai visibility tools"],
+  seed_query_items: [
+    {
+      text: "best ai visibility tools",
+      type: null,
+      source: "user",
+    },
+  ],
 };
 
 export const auditDetailFixture: AuditDetail = {
@@ -61,6 +69,13 @@ export const auditDetailFixture: AuditDetail = {
   locale: "en-US",
   max_queries: 20,
   seed_queries: ["best ai visibility tools"],
+  seed_query_items: [
+    {
+      text: "best ai visibility tools",
+      type: null,
+      source: "user",
+    },
+  ],
   enable_query_expansion: false,
   enable_source_intelligence: false,
   follow_up_depth: 0,
@@ -162,12 +177,24 @@ export const auditSummaryFixture: AuditSummaryResponse = {
   completion_ratio: 1,
   visibility_ratio: 0.67,
   average_score: 0.74,
+  weighted_visibility_score: 0.76,
   critical_query_count: 1,
   provider_scores: {
     mock: 0.8,
     openai: 0.68,
   },
   critical_queries: criticalQueriesFixture,
+  query_type_coverage: [
+    {
+      type: "category_discovery",
+      total_queries: 2,
+      processed_runs: 4,
+      failed_runs: 1,
+      brand_found_count: 3,
+      brand_found_rate: 0.75,
+      average_score: 0.74,
+    },
+  ],
   competitors: competitorsSummaryFixture,
   sources: sourcesSummaryFixture,
 };
@@ -182,8 +209,10 @@ export const emptyAuditSummaryFixture: AuditSummaryResponse = {
   completion_ratio: 0,
   visibility_ratio: 0,
   average_score: null,
+  weighted_visibility_score: null,
   critical_query_count: 0,
   critical_queries: [],
+  query_type_coverage: [],
   provider_scores: {},
   competitors: [],
   sources: [],

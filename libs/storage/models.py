@@ -72,6 +72,20 @@ class SCDLLevel(str, Enum):
     L2 = "L2"
 
 
+class SeedQueryType(str, Enum):
+    BRAND_DIRECT = "brand_direct"
+    CATEGORY_DISCOVERY = "category_discovery"
+    RECOMMENDATION = "recommendation"
+    COMPARISON = "comparison"
+    ALTERNATIVE = "alternative"
+    PROBLEM_SOLUTION = "problem_solution"
+
+
+class SeedQuerySource(str, Enum):
+    USER = "user"
+    AI = "ai"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -149,6 +163,9 @@ class Audit(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utc_now, onupdate=_utc_now, nullable=False
     )
+    archived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     user: Mapped[User | None] = relationship(back_populates="audits")
     brand: Mapped[Brand] = relationship(back_populates="audits")
@@ -171,6 +188,23 @@ class Query(Base):
         ForeignKey("audits.id", ondelete="CASCADE"), nullable=False
     )
     text: Mapped[str] = mapped_column(Text, nullable=False)
+    query_type: Mapped[SeedQueryType | None] = mapped_column(
+        SQLEnum(
+            SeedQueryType,
+            values_callable=lambda enum: [item.value for item in enum],
+            native_enum=False,
+        ),
+        nullable=True,
+    )
+    source: Mapped[SeedQuerySource] = mapped_column(
+        SQLEnum(
+            SeedQuerySource,
+            values_callable=lambda enum: [item.value for item in enum],
+            native_enum=False,
+        ),
+        nullable=False,
+        default=SeedQuerySource.USER,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utc_now, nullable=False
     )

@@ -49,13 +49,20 @@ describe("audit summary page", () => {
     expect(screen.getByText("100%")).toBeInTheDocument();
     expect(screen.getByText("67%")).toBeInTheDocument();
     expect(screen.getByText("0.74")).toBeInTheDocument();
+    expect(screen.getByText("Weighted")).toBeInTheDocument();
+    expect(screen.getByText("0.76")).toBeInTheDocument();
   });
 
   it("renders an empty or newly created audit summary safely", async () => {
     renderSummary(emptyAuditSummaryFixture);
 
-    expect(await screen.findByText("Created")).toBeInTheDocument();
+    expect((await screen.findAllByText("Created")).length).toBeGreaterThan(0);
     expect(screen.getByText("No run data is available yet.")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Query-type diagnostics will appear after the audit has processed typed seed queries.",
+      ),
+    ).toBeInTheDocument();
     expect(screen.getByText("No provider scores yet.")).toBeInTheDocument();
     expect(screen.getByText("No critical queries detected.")).toBeInTheDocument();
     expect(screen.getByText("No competitors detected.")).toBeInTheDocument();
@@ -64,16 +71,32 @@ describe("audit summary page", () => {
   });
 
   it("renders partial or failed audit summary states safely", async () => {
-    renderSummary(partialAuditSummaryFixture);
+    renderSummary({
+      ...partialAuditSummaryFixture,
+      query_type_coverage: [
+        {
+          type: "recommendation",
+          total_queries: 2,
+          processed_runs: 1,
+          failed_runs: 1,
+          brand_found_count: 0,
+          brand_found_rate: 0,
+          average_score: 0.24,
+        },
+      ],
+    });
 
     expect(await screen.findByText("Partial")).toBeInTheDocument();
     expect(screen.getAllByText("50%").length).toBeGreaterThan(0);
+    expect(screen.getByText("Recommendation")).toBeInTheDocument();
+    expect(screen.getByText("0.24")).toBeInTheDocument();
   });
 
   it("handles missing optional summary fields", async () => {
     renderSummary({
       ...auditSummaryFixture,
       average_score: null,
+      weighted_visibility_score: null,
       provider_scores: { mock: null },
       competitors: [
         {
@@ -112,11 +135,40 @@ describe("audit summary page", () => {
     expect(screen.getAllByText("openai").length).toBeGreaterThan(0);
   });
 
+  it("renders query-type diagnostics when backend metrics are present", async () => {
+    renderSummary();
+
+    expect(await screen.findByText("Query-type diagnostics")).toBeInTheDocument();
+    expect(screen.getByText("Category discovery")).toBeInTheDocument();
+    expect(screen.getByText("75%")).toBeInTheDocument();
+    expect(screen.getByText("0.74")).toBeInTheDocument();
+  });
+
+  it("handles legacy unknown query types without crashing", async () => {
+    renderSummary({
+      ...auditSummaryFixture,
+      query_type_coverage: [
+        {
+          type: "unknown",
+          total_queries: 1,
+          processed_runs: 1,
+          failed_runs: 0,
+          brand_found_count: 1,
+          brand_found_rate: 1,
+          average_score: 0.5,
+        },
+      ],
+    });
+
+    expect(await screen.findByText("Unknown")).toBeInTheDocument();
+    expect(screen.getAllByText("100%").length).toBeGreaterThan(0);
+  });
+
   it("renders critical queries with backend-provided reasons", async () => {
     renderSummary();
 
     expect(await screen.findByText("Critical queries")).toBeInTheDocument();
-    expect(screen.getByText("best ai visibility tools")).toBeInTheDocument();
+    expect(screen.getAllByText("best ai visibility tools").length).toBeGreaterThan(0);
     expect(screen.getByText("Brand not visible")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "View related rows" })).toHaveAttribute(
       "href",

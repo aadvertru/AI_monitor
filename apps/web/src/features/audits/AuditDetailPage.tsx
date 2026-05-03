@@ -1,13 +1,26 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, Copy, Pencil, Play, RefreshCw } from "lucide-react";
+import {
+  AlertTriangle,
+  Archive,
+  ArrowLeft,
+  Copy,
+  Pencil,
+  Play,
+  RefreshCw,
+  RotateCcw,
+  Trash2,
+} from "lucide-react";
 import { useEffect } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { Button } from "../../components/ui/Button";
 import {
   getAuditDetail,
   getAuditStatus,
   getAuditSummary,
+  archiveAudit,
+  deleteArchivedAudit,
+  restoreAudit,
   runAuditPipeline,
 } from "../../lib/api/client";
 import type {
@@ -16,11 +29,16 @@ import type {
   AuditPipelineRunResponse,
   AuditSummaryResponse,
 } from "../../lib/api/types";
+import { AuditArchiveBadge } from "./AuditArchiveBadge";
 import { AuditBreadcrumbs } from "./AuditBreadcrumbs";
 import { AuditSetupPanel } from "./AuditSetupPanel";
 import { AuditStatusBadge } from "./AuditStatusBadge";
 import { AuditSummaryContent } from "./AuditSummaryContent";
 import { AuditViewTabs } from "./AuditViewTabs";
+import {
+  archiveConfirmationMessage,
+  deleteConfirmationMessage,
+} from "./auditActions";
 import { auditDetailToFormDefaults } from "./auditSetupFormMapping";
 
 function detailQueryKey(auditId: number) {
@@ -48,6 +66,7 @@ function errorMessage(error: unknown) {
 
 export function AuditDetailPage() {
   const params = useParams();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const auditId = Number(params.auditId);
   const isValidAuditId = Number.isInteger(auditId) && auditId > 0;
@@ -98,6 +117,27 @@ export function AuditDetailPage() {
       void queryClient.invalidateQueries({ queryKey: ["audits"] });
     },
   });
+  const archiveAuditMutation = useMutation({
+    mutationFn: () => archiveAudit(auditId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["audits"] });
+      navigate("/audits", { replace: true });
+    },
+  });
+  const restoreAuditMutation = useMutation({
+    mutationFn: () => restoreAudit(auditId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["audit", auditId] });
+      void queryClient.invalidateQueries({ queryKey: ["audits"] });
+    },
+  });
+  const deleteAuditMutation = useMutation({
+    mutationFn: () => deleteArchivedAudit(auditId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["audits"] });
+      navigate("/audits", { replace: true });
+    },
+  });
   const polledStatus = status.data?.status;
   useEffect(() => {
     if (!polledStatus || !auditTerminalStatuses.has(polledStatus)) {
@@ -120,6 +160,7 @@ export function AuditDetailPage() {
   const currentStatus = status.data?.status ?? baseStatus;
   const isRunning = currentStatus === "running";
   const canEdit = currentStatus === "created";
+  const isArchived = Boolean(detail.data?.archived_at);
 
   const refresh = () => {
     void detail.refetch();
@@ -156,6 +197,7 @@ export function AuditDetailPage() {
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-xl font-semibold text-ink">{detail.data.brand_name}</h1>
             <AuditStatusBadge status={summary.data.status} />
+            {isArchived ? <AuditArchiveBadge /> : null}
           </div>
           <p className="mt-1 text-sm text-subtle">
             Audit #{detail.data.audit_number}
@@ -190,9 +232,46 @@ export function AuditDetailPage() {
               Duplicate audit
             </Link>
           </Button>
+          {isArchived ? (
+            <>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => restoreAuditMutation.mutate()}
+              >
+                <RotateCcw className="size-4" aria-hidden="true" />
+                Restore
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => {
+                  if (window.confirm(deleteConfirmationMessage)) {
+                    deleteAuditMutation.mutate();
+                  }
+                }}
+              >
+                <Trash2 className="size-4" aria-hidden="true" />
+                Delete permanently
+              </Button>
+            </>
+          ) : (
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                if (window.confirm(archiveConfirmationMessage)) {
+                  archiveAuditMutation.mutate();
+                }
+              }}
+            >
+              <Archive className="size-4" aria-hidden="true" />
+              Archive
+            </Button>
+          )}
           <Button
             type="button"
-            disabled={isRunning || runAuditMutation.isPending}
+            disabled={isArchived || isRunning || runAuditMutation.isPending}
             onClick={() => runAuditMutation.mutate()}
           >
             <Play className="size-4" aria-hidden="true" />

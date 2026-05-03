@@ -15,6 +15,7 @@ from apps.api.audit_schemas import (
     CompetitorSummaryItemResponse,
     ComponentScoresResponse,
     CriticalQueryItemResponse,
+    QueryTypeCoverageItemResponse,
     SourceSummaryItemResponse,
 )
 
@@ -70,6 +71,7 @@ def test_audit_list_item_serializes_dashboard_fields() -> None:
         "runs_per_query": 2,
         "created_at": "2026-04-29T09:30:00Z",
         "updated_at": "2026-04-29T09:30:00Z",
+        "archived_at": None,
     }
     _assert_no_sensitive_keys(payload)
 
@@ -207,8 +209,20 @@ def test_audit_summary_serializes_metrics_competitors_sources_and_critical_queri
             completion_ratio=0.75,
             visibility_ratio=0.67,
             average_score=0.62,
+            weighted_visibility_score=0.66,
             critical_query_count=1,
             provider_scores={"mock": 0.62, "openai": None},
+            query_type_coverage=[
+                QueryTypeCoverageItemResponse(
+                    type="recommendation",
+                    total_queries=2,
+                    processed_runs=3,
+                    failed_runs=1,
+                    brand_found_count=1,
+                    brand_found_rate=0.3333,
+                    average_score=0.62,
+                )
+            ],
             critical_queries=[
                 CriticalQueryItemResponse(
                     query="best ai visibility monitor",
@@ -239,6 +253,9 @@ def test_audit_summary_serializes_metrics_competitors_sources_and_critical_queri
     assert payload["completion_ratio"] == 0.75
     assert payload["audit_number"] == 3
     assert payload["visibility_ratio"] == 0.67
+    assert payload["weighted_visibility_score"] == 0.66
+    assert payload["query_type_coverage"][0]["type"] == "recommendation"
+    assert payload["query_type_coverage"][0]["brand_found_rate"] == 0.3333
     assert payload["critical_queries"][0]["reason"] == "low_score"
     assert payload["competitors"][0]["name"] == "Other Monitor"
     assert payload["sources"][0]["citation_count"] == 3

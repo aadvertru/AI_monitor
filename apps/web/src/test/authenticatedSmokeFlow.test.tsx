@@ -87,14 +87,14 @@ describe("authenticated SCDL smoke flow", () => {
 
     expect(await screen.findByRole("heading", { name: "Acme AI" })).toBeInTheDocument();
     expect(screen.getAllByText(/Audit #1/).length).toBeGreaterThan(0);
-    expect(screen.getByText(/acme\.example/)).toBeInTheDocument();
+    expect(screen.getAllByText(/acme\.example/).length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole("button", { name: "Start audit" }));
     expect((await screen.findAllByText("Completed")).length).toBeGreaterThan(0);
 
     expect(screen.getByRole("link", { name: "Summary" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByText("Contoso Monitor")).toBeInTheDocument();
-    expect(screen.getByText("best ai visibility tools")).toBeInTheDocument();
+    expect(screen.getAllByText("best ai visibility tools").length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole("link", { name: "View related rows" }));
     expect(await screen.findByRole("heading", { name: "Audit results" })).toBeInTheDocument();

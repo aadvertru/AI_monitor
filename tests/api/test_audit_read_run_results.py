@@ -37,6 +37,7 @@ from libs.storage.models import (
     RunStatus,
     SCDLLevel,
     Score,
+    SeedQueryType,
     User,
     UserRole,
 )
@@ -1145,6 +1146,7 @@ class AuditReadRunResultsAPITests(unittest.IsolatedAsyncioTestCase):
                     select(Query).where(Query.audit_id == audit.id).order_by(Query.id)
                 )
             ).scalars().all()
+            queries[0].query_type = SeedQueryType.BRAND_DIRECT
             visible_run = Run(
                 audit_id=audit.id,
                 query_id=queries[0].id,
@@ -1232,7 +1234,31 @@ class AuditReadRunResultsAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.completion_ratio, 1.0)
         self.assertEqual(result.visibility_ratio, 0.5)
         self.assertEqual(result.average_score, 0.45)
+        self.assertEqual(result.weighted_visibility_score, 0.45)
         self.assertEqual(result.provider_scores, {"mock": 0.45})
+        self.assertEqual(
+            [item.model_dump() for item in result.query_type_coverage],
+            [
+                {
+                    "type": "brand_direct",
+                    "total_queries": 1,
+                    "processed_runs": 1,
+                    "failed_runs": 0,
+                    "brand_found_count": 1,
+                    "brand_found_rate": 1.0,
+                    "average_score": 0.8,
+                },
+                {
+                    "type": "unknown",
+                    "total_queries": 1,
+                    "processed_runs": 1,
+                    "failed_runs": 0,
+                    "brand_found_count": 0,
+                    "brand_found_rate": 0.0,
+                    "average_score": 0.1,
+                },
+            ],
+        )
         self.assertEqual(result.critical_query_count, 1)
         self.assertEqual(result.critical_queries[0].query, "critical query")
         self.assertEqual(result.competitors[0].name, "Other Monitor")
@@ -1260,6 +1286,64 @@ class AuditReadRunResultsAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.critical_queries, [])
         self.assertEqual(result.competitors, [])
         self.assertEqual(result.sources, [])
+
+    async def test_summary_query_type_coverage_reports_failed_runs(self) -> None:
+        owner = await self._create_user()
+        audit = await self._create_audit(
+            owner,
+            status=AuditStatus.PARTIAL,
+            query_texts=["recommendation query"],
+        )
+
+        async with self.session_factory() as session:
+            query = (
+                await session.execute(select(Query).where(Query.audit_id == audit.id))
+            ).scalars().one()
+            query.query_type = SeedQueryType.RECOMMENDATION
+            failed_run = Run(
+                audit_id=audit.id,
+                query_id=query.id,
+                provider="mock",
+                run_number=1,
+                status=RunStatus.ERROR,
+            )
+            session.add(failed_run)
+            await session.flush()
+            session.add(
+                RawResponse(
+                    run_id=failed_run.id,
+                    request_snapshot={"query": "recommendation query"},
+                    raw_answer=None,
+                    citations=[],
+                    provider_metadata={"provider": "mock"},
+                    provider_status="error",
+                    error_object={"code": "mock_error", "message": "Provider failed."},
+                )
+            )
+            await session.commit()
+
+        async with self.session_factory() as session:
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                result = await get_audit_summary(
+                    audit_id=audit.id,
+                    request=self._authenticated_request(owner),
+                    session=session,
+                )
+
+        self.assertEqual(
+            [item.model_dump() for item in result.query_type_coverage],
+            [
+                {
+                    "type": "recommendation",
+                    "total_queries": 1,
+                    "processed_runs": 0,
+                    "failed_runs": 1,
+                    "brand_found_count": 0,
+                    "brand_found_rate": 0.0,
+                    "average_score": None,
+                }
+            ],
+        )
 
     async def test_unauthenticated_and_cross_user_summary_are_rejected(self) -> None:
         owner = await self._create_user("owner@example.com")

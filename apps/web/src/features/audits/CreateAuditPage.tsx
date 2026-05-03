@@ -1,72 +1,46 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation } from "@tanstack/react-query";
-import { ArrowLeft, Loader2, Plus, Sparkles } from "lucide-react";
+import { ArrowLeft, Loader2, Plus, Sparkles, Trash2 } from "lucide-react";
 import { useState } from "react";
-import { useForm, useWatch } from "react-hook-form";
+import { useFieldArray, useForm, useWatch } from "react-hook-form";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { Button } from "../../components/ui/Button";
 import { Field } from "../../components/ui/Field";
 import { Input } from "../../components/ui/Input";
-import { ApiError, createAudit } from "../../lib/api/client";
+import { ApiError, createAudit, generateSeedQuerySuggestions } from "../../lib/api/client";
 import {
+  brandDescriptionMaxLength,
+  appendGeneratedSeedQueries,
   buildPayload,
   countryOptions,
+  emptySeedQueryItem,
   estimateAuditTokens,
   languageOptions,
-  parseSeedQueries,
   providerOptions,
-  queryExpansionTokenCost,
+  queryTypeOptions,
   schema,
+  parseSeedQueryItems,
+  seedQueryItemsFromText,
   type CreateAuditFormInput,
   type CreateAuditFormValues,
 } from "./auditSetupFormConfig";
 
-const mockPaaQueries = [
-  "PAA query 1: what are the best AI visibility monitoring tools?",
-  "PAA query 2: how do brands track visibility in AI answers?",
-];
-
-const mockAiExpansionQueries = [
-  "AI expansion query 1: compare AI brand monitoring platforms",
-  "AI expansion query 2: tools for tracking ChatGPT brand mentions",
-  "AI expansion query 3: how to measure brand visibility in LLM answers",
-  "AI expansion query 4: best platforms for AI search visibility audits",
-  "AI expansion query 5: monitor competitor mentions in AI responses",
-  "AI expansion query 6: AI answer optimization tools for marketing teams",
-  "AI expansion query 7: brand monitoring software for generative AI",
-  "AI expansion query 8: measure Share of Voice in AI-generated answers",
-  "AI expansion query 9: LLM visibility audit tools for B2B SaaS",
-  "AI expansion query 10: track citations and sources in AI answers",
-];
-
-function mergeSeedQueries(currentValue: string | undefined, expandedQueries: string[]) {
-  return [...parseSeedQueries(currentValue), ...expandedQueries]
-    .reduce<string[]>((queries, query) => {
-      const normalized = query.trim();
-      const seen = new Set(queries.map((item) => item.toLowerCase()));
-      if (normalized && !seen.has(normalized.toLowerCase())) {
-        queries.push(normalized);
-      }
-      return queries;
-    }, [])
-    .join("\n");
-}
-
-function mockExpandQueries() {
-  return new Promise<string[]>((resolve) => {
-    window.setTimeout(() => {
-      resolve([...mockPaaQueries, ...mockAiExpansionQueries]);
-    }, 250);
-  });
-}
+type CreateAuditDefaults = Partial<CreateAuditFormInput> & {
+  seedQueries?: string;
+};
 
 export function CreateAuditPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const duplicateDefaults = (location.state as { auditDefaults?: Partial<CreateAuditFormInput> } | null)
+  const duplicateDefaults = (location.state as { auditDefaults?: CreateAuditDefaults } | null)
     ?.auditDefaults;
-  const [isExpandingQueries, setIsExpandingQueries] = useState(false);
+  const [isGenerationOpen, setIsGenerationOpen] = useState(false);
+  const [useDomainForGeneration, setUseDomainForGeneration] = useState<boolean | null>(null);
+  const [useDescriptionForGeneration, setUseDescriptionForGeneration] = useState<boolean | null>(
+    null,
+  );
+  const [generationWarnings, setGenerationWarnings] = useState<string[]>([]);
   const createAuditMutation = useMutation({
     mutationFn: createAudit,
     onSuccess: (response) => {
@@ -86,7 +60,8 @@ export function CreateAuditPage() {
       brandName: duplicateDefaults?.brandName ?? "",
       brandDomain: duplicateDefaults?.brandDomain ?? "",
       brandDescription: duplicateDefaults?.brandDescription ?? "",
-      seedQueries: duplicateDefaults?.seedQueries ?? "",
+      seedQueryItems:
+        duplicateDefaults?.seedQueryItems ?? seedQueryItemsFromText(duplicateDefaults?.seedQueries),
       providers: duplicateDefaults?.providers ?? ["mock"],
       language: duplicateDefaults?.language ?? "en",
       country: duplicateDefaults?.country ?? "US",
@@ -95,31 +70,71 @@ export function CreateAuditPage() {
       scdlLevel: duplicateDefaults?.scdlLevel ?? "L1",
     },
   });
+  const seedQueryFields = useFieldArray({
+    control,
+    name: "seedQueryItems",
+  });
+  const generateMutation = useMutation({
+    mutationFn: generateSeedQuerySuggestions,
+    onSuccess: (response) => {
+      const currentQueries = getValues("seedQueryItems");
+      const appendResult = appendGeneratedSeedQueries(
+        currentQueries,
+        response.suggestions,
+      );
+      const warnings = [...(response.warnings ?? [])];
+      const addedCount =
+        appendResult.queries.length - parseSeedQueryItems(currentQueries).length;
+      if (appendResult.duplicateCount > 0) {
+        warnings.push(`${appendResult.duplicateCount} duplicate queries were skipped.`);
+      }
+      if (appendResult.limitSkipped > 0) {
+        warnings.push(
+          `Only ${addedCount} queries were added because the audit limit is 20 seed queries.`,
+        );
+      }
+      setValue("seedQueryItems", appendResult.queries, {
+        shouldDirty: true,
+        shouldValidate: true,
+      });
+      setGenerationWarnings(warnings);
+    },
+    onError: () => {
+      setGenerationWarnings([]);
+    },
+  });
 
   const watchedValues = useWatch({ control });
-  const seedQueryCount = parseSeedQueries(watchedValues.seedQueries).length;
   const estimatedTokens = estimateAuditTokens(watchedValues);
-  const canExpandQueries = seedQueryCount > 0 && !isExpandingQueries;
+  const brandDescriptionLength = watchedValues.brandDescription?.length ?? 0;
+  const hasGenerationDomain = Boolean(watchedValues.brandDomain?.trim());
+  const hasGenerationDescription = Boolean(watchedValues.brandDescription?.trim());
+  const effectiveUseDomainForGeneration =
+    hasGenerationDomain && (useDomainForGeneration ?? true);
+  const effectiveUseDescriptionForGeneration =
+    hasGenerationDescription && (useDescriptionForGeneration ?? true);
+  const canGenerateQueries =
+    !generateMutation.isPending &&
+    (effectiveUseDomainForGeneration || effectiveUseDescriptionForGeneration);
 
   const onSubmit = handleSubmit((values) => {
     createAuditMutation.mutate(buildPayload(values));
   });
 
-  const expandQueries = async () => {
-    if (!canExpandQueries) {
+  const generateQueries = () => {
+    if (!canGenerateQueries) {
       return;
     }
 
-    setIsExpandingQueries(true);
-    try {
-      const expandedQueries = await mockExpandQueries();
-      setValue("seedQueries", mergeSeedQueries(getValues("seedQueries"), expandedQueries), {
-        shouldDirty: true,
-        shouldValidate: true,
-      });
-    } finally {
-      setIsExpandingQueries(false);
-    }
+    generateMutation.mutate({
+      brandName: getValues("brandName"),
+      brandDomain: getValues("brandDomain"),
+      brandDescription: getValues("brandDescription"),
+      useDomain: effectiveUseDomainForGeneration,
+      useDescription: effectiveUseDescriptionForGeneration,
+      count: 10,
+      existingQueries: parseSeedQueryItems(getValues("seedQueryItems")),
+    });
   };
 
   return (
@@ -155,34 +170,112 @@ export function CreateAuditPage() {
           <textarea
             id="brand-description"
             className="min-h-24 w-full rounded-md border border-border bg-white px-3 py-2 text-sm text-ink outline-none transition-colors placeholder:text-slate-400 focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+            maxLength={brandDescriptionMaxLength}
             {...register("brandDescription")}
           />
+          <p className="text-xs text-subtle">
+            {brandDescriptionLength} / {brandDescriptionMaxLength}
+          </p>
         </Field>
 
         <div className="space-y-3">
-          <Field htmlFor="seed-queries" label="Seed queries" error={errors.seedQueries?.message}>
-            <textarea
-              id="seed-queries"
-              className="min-h-28 w-full rounded-md border border-border bg-white px-3 py-2 text-sm text-ink outline-none transition-colors placeholder:text-slate-400 focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-              placeholder={"best ai visibility tools\nbrand monitoring platforms"}
-              {...register("seedQueries")}
-            />
-          </Field>
+          <fieldset className="space-y-2">
+            <legend className="text-sm font-medium text-ink">Seed queries</legend>
+            {seedQueryFields.fields.map((field, index) => (
+              <div className="grid gap-2 sm:grid-cols-[1fr_12rem_auto]" key={field.id}>
+                <Input
+                  aria-label={`Seed query ${index + 1}`}
+                  placeholder="best ai visibility tools"
+                  {...register(`seedQueryItems.${index}.text`)}
+                />
+                <select
+                  aria-label={`Query type ${index + 1}`}
+                  className="h-10 w-full rounded-md border border-border bg-white px-3 text-sm text-ink outline-none transition-colors focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
+                  {...register(`seedQueryItems.${index}.type`)}
+                >
+                  <option value="">No type</option>
+                  {queryTypeOptions.map((type) => (
+                    <option key={type.value} value={type.value}>
+                      {type.label}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  aria-label={`Remove seed query ${index + 1}`}
+                  onClick={() => seedQueryFields.remove(index)}
+                >
+                  <Trash2 className="size-4" aria-hidden="true" />
+                </Button>
+                <input type="hidden" {...register(`seedQueryItems.${index}.source`)} />
+              </div>
+            ))}
+            {errors.seedQueryItems?.message ? (
+              <p className="text-sm text-red-700">{errors.seedQueryItems.message}</p>
+            ) : null}
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => seedQueryFields.append({ ...emptySeedQueryItem })}
+            >
+              <Plus className="size-4" aria-hidden="true" />
+              Add query
+            </Button>
+          </fieldset>
           <Button
             type="button"
             variant="secondary"
-            disabled={!canExpandQueries}
-            onClick={expandQueries}
+            onClick={() => setIsGenerationOpen((current) => !current)}
           >
-            {isExpandingQueries ? (
-              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-            ) : (
-              <Sparkles className="size-4" aria-hidden="true" />
-            )}
-            {isExpandingQueries
-              ? "Expanding queries..."
-              : `Query expansion · ${queryExpansionTokenCost} tokens`}
+            <Sparkles className="size-4" aria-hidden="true" />
+            Generate seed queries
           </Button>
+          {isGenerationOpen ? (
+            <div className="space-y-3 rounded-md border border-border bg-muted p-3">
+              <p className="text-sm font-medium text-ink">Generate seed queries</p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <label className="flex items-center gap-2 text-sm text-ink">
+                  <input
+                    className="size-4 accent-brand-600"
+                    type="checkbox"
+                    checked={effectiveUseDomainForGeneration}
+                    disabled={!hasGenerationDomain}
+                    onChange={(event) => setUseDomainForGeneration(event.target.checked)}
+                  />
+                  Use brand domain
+                </label>
+                <label className="flex items-center gap-2 text-sm text-ink">
+                  <input
+                    className="size-4 accent-brand-600"
+                    type="checkbox"
+                    checked={effectiveUseDescriptionForGeneration}
+                    disabled={!hasGenerationDescription}
+                    onChange={(event) => setUseDescriptionForGeneration(event.target.checked)}
+                  />
+                  Use brand description
+                </label>
+              </div>
+              <Button type="button" disabled={!canGenerateQueries} onClick={generateQueries}>
+                {generateMutation.isPending ? (
+                  <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                ) : (
+                  <Sparkles className="size-4" aria-hidden="true" />
+                )}
+                {generateMutation.isPending ? "Generating..." : "Generate 10 queries"}
+              </Button>
+              {generateMutation.isError ? (
+                <p className="text-sm text-red-700">
+                  Could not generate seed queries. Please try again or enter queries manually.
+                </p>
+              ) : null}
+              {generationWarnings.map((warning) => (
+                <p className="text-sm text-amber-700" key={warning}>
+                  {warning}
+                </p>
+              ))}
+            </div>
+          ) : null}
         </div>
 
         <div className="grid gap-4 md:grid-cols-[1.4fr_0.8fr]">

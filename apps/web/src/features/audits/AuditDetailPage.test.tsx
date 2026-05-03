@@ -71,6 +71,19 @@ describe("audit detail page", () => {
     expect(screen.getByText("AI visibility monitoring platform.")).toBeInTheDocument();
   });
 
+  it("shows an archive badge for archived audits", async () => {
+    mockFetchSequence([
+      { body: currentUserFixture },
+      { body: { ...auditDetailFixture, archived_at: "2026-05-02T10:00:00Z" } },
+      { body: auditSummaryFixture },
+    ]);
+
+    renderRoute("/audits/42");
+
+    expect(await screen.findByText("In archive")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Restore" })).toBeInTheDocument();
+  });
+
   it.each(["created", "running", "completed", "failed"] as const)(
     "renders %s audit status",
     async (status) => {
@@ -88,6 +101,31 @@ describe("audit detail page", () => {
     expect(screen.getByRole("link", { name: "Results" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Edit setup" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Duplicate audit" })).toBeInTheDocument();
+  });
+
+  it("archives an audit from detail after confirmation", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const fetchMock = mockFetchSequence([
+      { body: currentUserFixture },
+      { body: auditDetailFixture },
+      { body: auditSummaryFixture },
+      { body: { audit_id: 42, status: "created", archived_at: "2026-05-02T10:00:00Z" } },
+      { body: [] },
+    ]);
+    const user = userEvent.setup();
+
+    renderRoute("/audits/42");
+
+    await user.click(await screen.findByRole("button", { name: "Archive" }));
+
+    expect(confirmSpy).toHaveBeenCalledWith("Вы уверены, что хотите архивировать этот аудит?");
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://localhost:8000/audits/42/archive",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    confirmSpy.mockRestore();
   });
 
   it("shows loading state", async () => {

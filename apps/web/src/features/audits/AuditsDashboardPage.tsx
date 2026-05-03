@@ -1,12 +1,22 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Plus, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { Button } from "../../components/ui/Button";
 import { Input } from "../../components/ui/Input";
-import { listAudits } from "../../lib/api/client";
+import {
+  archiveAudit,
+  deleteArchivedAudit,
+  listAudits,
+  restoreAudit,
+} from "../../lib/api/client";
 import type { AuditListItem } from "../../lib/api/types";
+import {
+  archiveConfirmationMessage,
+  deleteConfirmationMessage,
+} from "./auditActions";
+import { AuditRowActions } from "./AuditRowActions";
 import { AuditStatusBadge } from "./AuditStatusBadge";
 
 function formatTimestamp(value: string) {
@@ -34,10 +44,27 @@ function matchesSearch(audit: AuditListItem, query: string) {
 }
 
 export function AuditsDashboardPage() {
+  const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
   const audits = useQuery({
-    queryKey: ["audits"],
-    queryFn: listAudits,
+    queryKey: ["audits", showArchived ? "archived" : "active"],
+    queryFn: () => listAudits({ archived: showArchived }),
+  });
+  const invalidateAuditLists = () => {
+    void queryClient.invalidateQueries({ queryKey: ["audits"] });
+  };
+  const archiveAuditMutation = useMutation({
+    mutationFn: archiveAudit,
+    onSuccess: invalidateAuditLists,
+  });
+  const restoreAuditMutation = useMutation({
+    mutationFn: restoreAudit,
+    onSuccess: invalidateAuditLists,
+  });
+  const deleteAuditMutation = useMutation({
+    mutationFn: deleteArchivedAudit,
+    onSuccess: invalidateAuditLists,
   });
   const filteredAudits = useMemo(
     () => audits.data?.filter((audit) => matchesSearch(audit, search)) ?? [],
@@ -56,6 +83,23 @@ export function AuditsDashboardPage() {
             <Plus className="size-4" aria-hidden="true" />
             New audit
           </Link>
+        </Button>
+      </div>
+
+      <div className="flex gap-2 border-b border-border px-5 py-3">
+        <Button
+          type="button"
+          variant={showArchived ? "ghost" : "secondary"}
+          onClick={() => setShowArchived(false)}
+        >
+          Active
+        </Button>
+        <Button
+          type="button"
+          variant={showArchived ? "secondary" : "ghost"}
+          onClick={() => setShowArchived(true)}
+        >
+          Archived
         </Button>
       </div>
 
@@ -92,14 +136,22 @@ export function AuditsDashboardPage() {
 
       {audits.data && audits.data.length === 0 ? (
         <div className="px-5 py-10">
-          <p className="text-sm font-medium text-ink">No audits yet</p>
-          <p className="mt-1 text-sm text-subtle">Create an audit to track AI visibility.</p>
-          <Button asChild className="mt-4">
-            <Link to="/audits/new">
-              <Plus className="size-4" aria-hidden="true" />
-              New audit
-            </Link>
-          </Button>
+          <p className="text-sm font-medium text-ink">
+            {showArchived ? "No archived audits" : "No audits yet"}
+          </p>
+          <p className="mt-1 text-sm text-subtle">
+            {showArchived
+              ? "Archived audits will appear here."
+              : "Create an audit to track AI visibility."}
+          </p>
+          {!showArchived ? (
+            <Button asChild className="mt-4">
+              <Link to="/audits/new">
+                <Plus className="size-4" aria-hidden="true" />
+                New audit
+              </Link>
+            </Button>
+          ) : null}
         </div>
       ) : null}
 
@@ -122,6 +174,7 @@ export function AuditsDashboardPage() {
                 <th className="px-5 py-3 font-semibold">Providers</th>
                 <th className="px-5 py-3 font-semibold">Runs</th>
                 <th className="px-5 py-3 font-semibold">Updated</th>
+                <th className="px-5 py-3 text-right font-semibold">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -149,6 +202,26 @@ export function AuditsDashboardPage() {
                   <td className="px-5 py-3 text-subtle">{audit.runs_per_query}</td>
                   <td className="px-5 py-3 text-subtle">
                     {formatTimestamp(audit.updated_at)}
+                  </td>
+                  <td className="px-5 py-3">
+                    <AuditRowActions
+                      audit={audit}
+                      archived={showArchived}
+                      onArchive={() => {
+                        if (window.confirm(archiveConfirmationMessage)) {
+                          archiveAuditMutation.mutate(audit.audit_id);
+                        }
+                      }}
+                      onRestore={() => restoreAuditMutation.mutate(audit.audit_id)}
+                      onDelete={() => {
+                        if (window.confirm(deleteConfirmationMessage)) {
+                          deleteAuditMutation.mutate(audit.audit_id);
+                        }
+                      }}
+                      onRefresh={() => {
+                        void audits.refetch();
+                      }}
+                    />
                   </td>
                 </tr>
               ))}

@@ -7,7 +7,7 @@ import { z } from "zod";
 import { Button } from "../../components/ui/Button";
 import { Field } from "../../components/ui/Field";
 import { Input } from "../../components/ui/Input";
-import { ApiError } from "../../lib/api/client";
+import { API_BASE_URL, ApiError } from "../../lib/api/client";
 import { AuthLayout } from "./AuthLayout";
 import { useLoginMutation } from "./session";
 
@@ -75,6 +75,14 @@ export function LoginPage() {
               : "Unable to sign in."}
           </p>
         ) : null}
+        {import.meta.env.DEV && login.error && !(login.error instanceof ApiError) ? (
+          <p className="break-all rounded-md border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-800">
+            Debug:{" "}
+            {login.error instanceof Error
+              ? `${login.error.name}: ${login.error.message}`
+              : String(login.error)}
+          </p>
+        ) : null}
         <Button type="submit" className="w-full" disabled={login.isPending}>
           <LogIn className="size-4" aria-hidden="true" />
           Sign in
@@ -86,6 +94,11 @@ export function LoginPage() {
           Create one
         </Link>
       </p>
+      {import.meta.env.DEV ? (
+        <p className="mt-3 break-all text-center text-xs text-subtle">
+          API: {API_BASE_URL}
+        </p>
+      ) : null}
     </AuthLayout>
   );
 }

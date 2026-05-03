@@ -7,6 +7,8 @@ from libs.analysis.aggregation import (
     build_audit_summary,
     compute_provider_scores,
     compute_query_score,
+    compute_query_type_coverage,
+    compute_weighted_visibility_score,
     find_critical_queries,
 )
 
@@ -156,6 +158,50 @@ class AggregationTests(unittest.TestCase):
 
         self.assertEqual(compute_provider_scores(run_results), {})
 
+    def test_weighted_visibility_score_uses_query_type_weights(self) -> None:
+        run_results = [
+            {
+                "status": "success",
+                "final_score": 0.2,
+                "query_type": "brand_direct",
+            },
+            {
+                "status": "success",
+                "final_score": 0.8,
+                "query_type": "recommendation",
+            },
+        ]
+
+        self.assertEqual(compute_weighted_visibility_score(run_results), 0.56)
+
+    def test_weighted_visibility_score_defaults_missing_type_to_one(self) -> None:
+        run_results = [
+            {"status": "success", "final_score": 0.2, "query_type": None},
+            {
+                "status": "success",
+                "final_score": 0.8,
+                "query_type": "category_discovery",
+            },
+        ]
+
+        self.assertEqual(compute_weighted_visibility_score(run_results), 0.5273)
+
+    def test_weighted_visibility_score_ignores_failed_runs_denominator(self) -> None:
+        run_results = [
+            {
+                "status": "success",
+                "final_score": 0.7,
+                "query_type": "comparison",
+            },
+            {
+                "status": "error",
+                "final_score": 0.0,
+                "query_type": "recommendation",
+            },
+        ]
+
+        self.assertEqual(compute_weighted_visibility_score(run_results), 0.7)
+
     def test_build_audit_summary_happy_path_multiple_queries_providers(self) -> None:
         run_results = [
             {
@@ -225,6 +271,7 @@ class AggregationTests(unittest.TestCase):
         self.assertEqual(summary["completion_ratio"], 0.5)
         self.assertEqual(summary["visibility_ratio"], 0.25)
         self.assertEqual(summary["average_score"], 0.45)
+        self.assertEqual(summary["weighted_visibility_score"], 0.45)
         self.assertEqual(summary["critical_query_count"], 2)
         self.assertEqual(
             summary["provider_scores"],
@@ -264,6 +311,7 @@ class AggregationTests(unittest.TestCase):
         self.assertEqual(summary["completion_ratio"], 0.6667)
         self.assertEqual(summary["visibility_ratio"], 0.5)
         self.assertEqual(summary["average_score"], 0.4)
+        self.assertEqual(summary["weighted_visibility_score"], 0.4)
         self.assertEqual(summary["critical_query_count"], 1)
         self.assertEqual(summary["provider_scores"], {"mock": None, "openai": 0.4})
 
@@ -293,6 +341,7 @@ class AggregationTests(unittest.TestCase):
         self.assertEqual(summary["completion_ratio"], 0.0)
         self.assertEqual(summary["visibility_ratio"], 0.0)
         self.assertIsNone(summary["average_score"])
+        self.assertIsNone(summary["weighted_visibility_score"])
         self.assertEqual(summary["critical_query_count"], 2)
         self.assertEqual(summary["provider_scores"], {"mock": None, "openai": None})
 
@@ -307,6 +356,7 @@ class AggregationTests(unittest.TestCase):
                 "completion_ratio": 0.0,
                 "visibility_ratio": 0.0,
                 "average_score": None,
+                "weighted_visibility_score": None,
                 "critical_query_count": 0,
                 "provider_scores": {},
             },
@@ -347,6 +397,7 @@ class AggregationTests(unittest.TestCase):
                 "completion_ratio": 0.6667,
                 "visibility_ratio": 0.0,
                 "average_score": 0.3,
+                "weighted_visibility_score": 0.3,
                 "critical_query_count": 2,
                 "provider_scores": {"a": 0.3, "b": None},
             },
@@ -373,6 +424,7 @@ class AggregationTests(unittest.TestCase):
                 "completion_ratio": 0.0,
                 "visibility_ratio": 0.0,
                 "average_score": None,
+                "weighted_visibility_score": None,
                 "critical_query_count": 0,
                 "provider_scores": {},
             },
@@ -551,6 +603,92 @@ class AggregationTests(unittest.TestCase):
                     "query_score": 0.2,
                 }
             ],
+        )
+
+    def test_query_type_coverage_groups_success_failed_and_unknown(self) -> None:
+        run_results = [
+            {
+                "query": "brand query",
+                "provider": "openai",
+                "status": "success",
+                "visible_brand": True,
+                "final_score": 0.8,
+                "query_type": "brand_direct",
+            },
+            {
+                "query": "brand query",
+                "provider": "mock",
+                "status": "success",
+                "visible_brand": False,
+                "final_score": 0.2,
+                "query_type": "brand_direct",
+            },
+            {
+                "query": "recommendation query",
+                "provider": "openai",
+                "status": "error",
+                "visible_brand": False,
+                "final_score": 0.0,
+                "query_type": "recommendation",
+            },
+            {
+                "query": "legacy query",
+                "provider": "openai",
+                "status": "success",
+                "visible_brand": True,
+                "final_score": 0.6,
+                "query_type": None,
+            },
+        ]
+
+        self.assertEqual(
+            compute_query_type_coverage(run_results),
+            [
+                {
+                    "type": "brand_direct",
+                    "total_queries": 1,
+                    "processed_runs": 2,
+                    "failed_runs": 0,
+                    "brand_found_count": 1,
+                    "brand_found_rate": 0.5,
+                    "average_score": 0.5,
+                },
+                {
+                    "type": "recommendation",
+                    "total_queries": 1,
+                    "processed_runs": 0,
+                    "failed_runs": 1,
+                    "brand_found_count": 0,
+                    "brand_found_rate": 0.0,
+                    "average_score": None,
+                },
+                {
+                    "type": "unknown",
+                    "total_queries": 1,
+                    "processed_runs": 1,
+                    "failed_runs": 0,
+                    "brand_found_count": 1,
+                    "brand_found_rate": 1.0,
+                    "average_score": 0.6,
+                },
+            ],
+        )
+
+    def test_query_type_coverage_ignores_non_terminal_pending_runs(self) -> None:
+        self.assertEqual(
+            compute_query_type_coverage(
+                [
+                    {
+                        "query": "pending query",
+                        "provider": "openai",
+                        "status": "pending",
+                        "visible_brand": False,
+                        "final_score": 0.0,
+                        "query_type": "brand_direct",
+                    }
+                ]
+            ),
+            [],
         )
 
 

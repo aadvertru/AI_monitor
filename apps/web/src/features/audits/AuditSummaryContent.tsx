@@ -3,6 +3,16 @@ import { Bar, BarChart, CartesianGrid, Tooltip, XAxis, YAxis } from "recharts";
 
 import type { AuditSummaryResponse } from "../../lib/api/types";
 
+const queryTypeLabels: Record<string, string> = {
+  brand_direct: "Brand direct",
+  category_discovery: "Category discovery",
+  recommendation: "Recommendation",
+  comparison: "Comparison",
+  alternative: "Alternative",
+  problem_solution: "Problem-solution",
+  unknown: "Unknown",
+};
+
 function formatPercent(value: number) {
   return `${Math.round(value * 100)}%`;
 }
@@ -30,6 +40,10 @@ function providerChartData(summary: AuditSummaryResponse) {
     }));
 }
 
+function queryTypeLabel(value: string) {
+  return queryTypeLabels[value] ?? value;
+}
+
 export function AuditSummaryContent({
   auditId,
   summary,
@@ -41,12 +55,16 @@ export function AuditSummaryContent({
 
   return (
     <div className="space-y-5 px-5 py-5">
-      <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+      <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-7">
         <MetricCard label="Queries" value={summary.total_queries} />
         <MetricCard label="Runs" value={summary.total_runs} />
         <MetricCard label="Completion" value={formatPercent(summary.completion_ratio)} />
         <MetricCard label="Visibility" value={formatPercent(summary.visibility_ratio)} />
         <MetricCard label="Avg score" value={formatScore(summary.average_score)} />
+        <MetricCard
+          label="Weighted"
+          value={formatScore(summary.weighted_visibility_score)}
+        />
         <MetricCard label="Critical" value={summary.critical_query_count} />
       </div>
 
@@ -55,6 +73,48 @@ export function AuditSummaryContent({
           No run data is available yet.
         </div>
       ) : null}
+
+      <div className="rounded-md border border-border bg-white p-4">
+        <h2 className="text-sm font-semibold text-ink">Query-type diagnostics</h2>
+        {summary.query_type_coverage.length > 0 ? (
+          <div className="mt-3 overflow-x-auto">
+            <table className="min-w-full divide-y divide-border text-sm">
+              <thead className="text-left text-xs uppercase text-subtle">
+                <tr>
+                  <th className="py-2 pr-3 font-semibold">Query type</th>
+                  <th className="px-3 py-2 font-semibold">Queries</th>
+                  <th className="px-3 py-2 font-semibold">Processed</th>
+                  <th className="px-3 py-2 font-semibold">Failed</th>
+                  <th className="px-3 py-2 font-semibold">Brand found</th>
+                  <th className="px-3 py-2 font-semibold">Visibility</th>
+                  <th className="px-3 py-2 font-semibold">Avg score</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {summary.query_type_coverage.map((item) => (
+                  <tr key={item.type}>
+                    <td className="py-2 pr-3 font-medium text-ink">
+                      {queryTypeLabel(item.type)}
+                    </td>
+                    <td className="px-3 py-2 text-subtle">{item.total_queries}</td>
+                    <td className="px-3 py-2 text-subtle">{item.processed_runs}</td>
+                    <td className="px-3 py-2 text-subtle">{item.failed_runs}</td>
+                    <td className="px-3 py-2 text-subtle">{item.brand_found_count}</td>
+                    <td className="px-3 py-2 text-subtle">
+                      {formatPercent(item.brand_found_rate)}
+                    </td>
+                    <td className="px-3 py-2 text-subtle">{formatScore(item.average_score)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="mt-3 text-sm text-subtle">
+            Query-type diagnostics will appear after the audit has processed typed seed queries.
+          </p>
+        )}
+      </div>
 
       <div className="grid gap-5 lg:grid-cols-[1fr_0.9fr]">
         <div className="rounded-md border border-border bg-white p-4">
