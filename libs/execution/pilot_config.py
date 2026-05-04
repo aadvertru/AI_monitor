@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-ProviderMode = Literal["mock", "openai"]
+ProviderMode = Literal["mock", "openai", "openrouter", "anthropic"]
 
 DEFAULT_PROVIDER_MODE: ProviderMode = "mock"
 DEFAULT_REAL_PROVIDER_ENABLED = False
@@ -23,7 +23,14 @@ OPENAI_PILOT_API_FAMILY = "responses_api"
 
 MOCK_PROVIDER = "mock"
 OPENAI_PROVIDER = "openai"
-ALLOWED_PROVIDER_MODES = frozenset({MOCK_PROVIDER, OPENAI_PROVIDER})
+ANTHROPIC_PROVIDER = "anthropic"
+OPENROUTER_PROVIDER = "openrouter"
+ALLOWED_PROVIDER_MODES = frozenset(
+    {MOCK_PROVIDER, OPENAI_PROVIDER, OPENROUTER_PROVIDER, ANTHROPIC_PROVIDER}
+)
+SUPPORTED_EXECUTION_PROVIDERS = frozenset(
+    {MOCK_PROVIDER, OPENAI_PROVIDER, OPENROUTER_PROVIDER, ANTHROPIC_PROVIDER}
+)
 
 
 class PilotConfigError(ValueError):
@@ -90,9 +97,9 @@ def validate_audit_against_pilot_config(
 ) -> None:
     """Validate an audit before scheduling or adapter selection.
 
-    SCDL policy for the OpenAI pilot:
-    - L1 is a no-web OpenAI answer.
-    - L2 may use OpenAI web search when TASK-130 implements that adapter path.
+    SCDL policy for the real-provider pilot:
+    - L1 is a no-web provider answer.
+    - L2 support is explicit per provider.
     """
     resolved_config = config or load_real_provider_pilot_config()
     normalized_providers = [provider.strip().lower() for provider in providers]
@@ -101,7 +108,11 @@ def validate_audit_against_pilot_config(
         raise PilotPolicyError("Audit must include at least one provider.")
 
     unsupported = sorted(
-        {provider for provider in normalized_providers if provider not in ALLOWED_PROVIDER_MODES}
+        {
+            provider
+            for provider in normalized_providers
+            if provider not in SUPPORTED_EXECUTION_PROVIDERS
+        }
     )
     if unsupported:
         raise PilotPolicyError(
@@ -118,20 +129,22 @@ def validate_audit_against_pilot_config(
             )
         return
 
-    if any(provider != OPENAI_PROVIDER for provider in normalized_providers):
+    active_provider = resolved_config.provider_mode
+    if any(provider != active_provider for provider in normalized_providers):
         raise PilotPolicyError(
-            "Provider mode 'openai' allows OpenAI execution only; mixed provider lists "
+            f"Provider mode '{active_provider}' allows {active_provider} execution only; "
+            "mixed provider lists "
             "are rejected during the pilot."
         )
 
     if not resolved_config.real_provider_enabled:
         raise PilotPolicyError(
             "Real provider execution is disabled. Set REAL_PROVIDER_ENABLED=true "
-            "to run the OpenAI pilot."
+            f"to run the {active_provider} pilot."
         )
 
     if scdl_level not in {"L1", "L2"}:
-        raise PilotPolicyError("SCDL level must be L1 or L2 for the OpenAI pilot.")
+        raise PilotPolicyError("SCDL level must be L1 or L2 for the real-provider pilot.")
 
     provider_count = len(set(normalized_providers))
     if provider_count > resolved_config.max_providers:
@@ -151,7 +164,8 @@ def _load_provider_mode(source: Mapping[str, str]) -> ProviderMode:
     value = raw_value.strip().lower()
     if value not in ALLOWED_PROVIDER_MODES:
         raise PilotConfigError(
-            "PROVIDER_MODE must be 'mock' or 'openai' for the real-provider pilot."
+            "PROVIDER_MODE must be 'mock', 'openai', 'openrouter', or 'anthropic' "
+            "for the real-provider pilot."
         )
     return value  # type: ignore[return-value]
 

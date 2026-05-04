@@ -18,6 +18,7 @@ from libs.storage.models import (
     Query,
     RawResponse,
     Run,
+    SCDLLevel,
     build_job_idempotency_key,
 )
 
@@ -64,12 +65,14 @@ class AuditExecutionServiceTests(unittest.IsolatedAsyncioTestCase):
         job_status: JobStatus = JobStatus.PENDING,
         query_text: str = "best ai monitoring tools",
         runs_per_query: int = 1,
+        scdl_level: SCDLLevel = SCDLLevel.L1,
     ) -> tuple[Audit, Job]:
         brand = Brand(name=brand_name)
         audit = Audit(
             brand=brand,
             providers=[provider],
             runs_per_query=runs_per_query,
+            scdl_level=scdl_level,
             status=AuditStatus.RUNNING,
         )
         query = Query(audit=audit, text=query_text)
@@ -272,6 +275,148 @@ class AuditExecutionServiceTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIn("Provider mode 'mock'", summary.fatal_error or "")
+
+    async def test_anthropic_l1_execution_is_allowed_in_anthropic_provider_mode(self) -> None:
+        audit, _job = await self._create_audit_with_job(provider="anthropic")
+        provider = _RecordingProvider(
+            ProviderResponse(
+                status="success",
+                raw_answer="Acme AI is visible in this Claude answer.",
+                citations=[],
+                response_time=0.1,
+                error=None,
+                provider_metadata={"provider": "anthropic", "model": "claude-test"},
+            )
+        )
+
+        summary = await execute_audit_jobs(
+            self.session,
+            audit.id,
+            pilot_config=RealProviderPilotConfig(
+                real_provider_enabled=True,
+                provider_mode="anthropic",
+            ),
+            provider_factory=lambda _provider: provider,
+        )
+
+        raw_response = (
+            await self.session.execute(select(RawResponse))
+        ).scalar_one_or_none()
+        self.assertEqual(summary.jobs_executed, 1)
+        self.assertEqual(summary.success_count, 1)
+        self.assertEqual(provider.calls[0]["provider"], "anthropic")
+        assert raw_response is not None
+        self.assertEqual(raw_response.provider_status, "success")
+
+    async def test_anthropic_l2_unsupported_is_stored_without_fallback(self) -> None:
+        from libs.execution.anthropic_provider import AnthropicProviderAdapter
+
+        audit, _job = await self._create_audit_with_job(
+            provider="anthropic",
+            scdl_level=SCDLLevel.L2,
+        )
+
+        summary = await execute_audit_jobs(
+            self.session,
+            audit.id,
+            pilot_config=RealProviderPilotConfig(
+                real_provider_enabled=True,
+                provider_mode="anthropic",
+            ),
+            provider_factory=lambda _provider: AnthropicProviderAdapter(),
+        )
+
+        raw_response = (
+            await self.session.execute(select(RawResponse))
+        ).scalar_one_or_none()
+        self.assertEqual(summary.jobs_executed, 1)
+        self.assertEqual(summary.error_count, 1)
+        assert raw_response is not None
+        self.assertEqual(raw_response.error_object["code"], "UNSUPPORTED_L2")
+        self.assertEqual(raw_response.error_object["provider"], "anthropic")
+
+    async def test_openrouter_l1_execution_is_allowed_in_openrouter_provider_mode(self) -> None:
+        audit, _job = await self._create_audit_with_job(provider="openrouter")
+        provider = _RecordingProvider(
+            ProviderResponse(
+                status="success",
+                raw_answer="Acme AI is visible in this gateway answer.",
+                citations=[],
+                response_time=0.1,
+                error=None,
+                provider_metadata={
+                    "provider": "openrouter",
+                    "execution_provider": "openrouter",
+                    "model_id": "anthropic/claude-test",
+                    "model_provider": "anthropic",
+                    "gateway": True,
+                    "gateway_l2_experimental": False,
+                    "level": "L1",
+                },
+            )
+        )
+
+        summary = await execute_audit_jobs(
+            self.session,
+            audit.id,
+            pilot_config=RealProviderPilotConfig(
+                real_provider_enabled=True,
+                provider_mode="openrouter",
+            ),
+            provider_factory=lambda _provider: provider,
+        )
+
+        raw_response = (
+            await self.session.execute(select(RawResponse))
+        ).scalar_one_or_none()
+        self.assertEqual(summary.jobs_executed, 1)
+        self.assertEqual(summary.success_count, 1)
+        self.assertEqual(provider.calls[0]["provider"], "openrouter")
+        assert raw_response is not None
+        self.assertEqual(raw_response.provider_status, "success")
+        self.assertEqual(raw_response.provider_metadata["execution_provider"], "openrouter")
+
+    async def test_openrouter_l2_execution_stores_gateway_sources_without_fallback(self) -> None:
+        audit, _job = await self._create_audit_with_job(
+            provider="openrouter",
+            scdl_level=SCDLLevel.L2,
+        )
+        provider = _RecordingProvider(
+            ProviderResponse(
+                status="success",
+                raw_answer="Acme AI is visible with sources.",
+                citations=[{"url": "https://example.com", "title": "Example"}],
+                response_time=0.1,
+                error=None,
+                provider_metadata={
+                    "provider": "openrouter",
+                    "execution_provider": "openrouter",
+                    "model_id": "anthropic/claude-test",
+                    "model_provider": "anthropic",
+                    "gateway": True,
+                    "gateway_l2_experimental": True,
+                    "level": "L2",
+                },
+            )
+        )
+
+        summary = await execute_audit_jobs(
+            self.session,
+            audit.id,
+            pilot_config=RealProviderPilotConfig(
+                real_provider_enabled=True,
+                provider_mode="openrouter",
+            ),
+            provider_factory=lambda _provider: provider,
+        )
+
+        raw_response = (
+            await self.session.execute(select(RawResponse))
+        ).scalar_one_or_none()
+        self.assertEqual(summary.jobs_executed, 1)
+        self.assertEqual(summary.success_count, 1)
+        assert raw_response is not None
+        self.assertEqual(raw_response.provider_metadata["gateway_l2_experimental"], True)
 
 
 if __name__ == "__main__":

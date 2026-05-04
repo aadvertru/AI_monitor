@@ -115,10 +115,56 @@ class RealProviderPilotConfigTests(unittest.TestCase):
 
     def test_unsupported_provider_mode_returns_controlled_error(self) -> None:
         with self.assertRaisesRegex(PilotConfigError, "PROVIDER_MODE"):
-            load_real_provider_pilot_config(env={"PROVIDER_MODE": "anthropic"})
+            load_real_provider_pilot_config(env={"PROVIDER_MODE": "gemini"})
 
     def test_unsupported_provider_execution_returns_controlled_error(self) -> None:
         with self.assertRaisesRegex(PilotPolicyError, "Unsupported real-provider"):
+            validate_audit_against_pilot_config(
+                providers=["gemini"],
+                query_count=1,
+                runs_per_query=1,
+                scdl_level="L1",
+                config=load_real_provider_pilot_config(
+                    env={"PROVIDER_MODE": "openai", "REAL_PROVIDER_ENABLED": "true"}
+                ),
+            )
+
+    def test_anthropic_provider_mode_allows_anthropic_l1_execution(self) -> None:
+        validate_audit_against_pilot_config(
+            providers=["anthropic"],
+            query_count=1,
+            runs_per_query=1,
+            scdl_level="L1",
+            config=load_real_provider_pilot_config(
+                env={"PROVIDER_MODE": "anthropic", "REAL_PROVIDER_ENABLED": "true"}
+            ),
+        )
+
+    def test_anthropic_l2_is_allowed_to_reach_adapter_for_unsupported_l2_error(self) -> None:
+        validate_audit_against_pilot_config(
+            providers=["anthropic"],
+            query_count=1,
+            runs_per_query=1,
+            scdl_level="L2",
+            config=load_real_provider_pilot_config(
+                env={"PROVIDER_MODE": "anthropic", "REAL_PROVIDER_ENABLED": "true"}
+            ),
+        )
+
+    def test_openrouter_provider_mode_allows_openrouter_l1_and_l2_execution(self) -> None:
+        for scdl_level in ("L1", "L2"):
+            validate_audit_against_pilot_config(
+                providers=["openrouter"],
+                query_count=1,
+                runs_per_query=1,
+                scdl_level=scdl_level,
+                config=load_real_provider_pilot_config(
+                    env={"PROVIDER_MODE": "openrouter", "REAL_PROVIDER_ENABLED": "true"}
+                ),
+            )
+
+    def test_provider_mode_mismatch_rejects_anthropic_openai_and_openrouter(self) -> None:
+        with self.assertRaisesRegex(PilotPolicyError, "Provider mode 'openai'"):
             validate_audit_against_pilot_config(
                 providers=["anthropic"],
                 query_count=1,
@@ -126,6 +172,28 @@ class RealProviderPilotConfigTests(unittest.TestCase):
                 scdl_level="L1",
                 config=load_real_provider_pilot_config(
                     env={"PROVIDER_MODE": "openai", "REAL_PROVIDER_ENABLED": "true"}
+                ),
+            )
+
+        with self.assertRaisesRegex(PilotPolicyError, "Provider mode 'anthropic'"):
+            validate_audit_against_pilot_config(
+                providers=["openai"],
+                query_count=1,
+                runs_per_query=1,
+                scdl_level="L1",
+                config=load_real_provider_pilot_config(
+                    env={"PROVIDER_MODE": "anthropic", "REAL_PROVIDER_ENABLED": "true"}
+                ),
+            )
+
+        with self.assertRaisesRegex(PilotPolicyError, "Provider mode 'openrouter'"):
+            validate_audit_against_pilot_config(
+                providers=["openai"],
+                query_count=1,
+                runs_per_query=1,
+                scdl_level="L1",
+                config=load_real_provider_pilot_config(
+                    env={"PROVIDER_MODE": "openrouter", "REAL_PROVIDER_ENABLED": "true"}
                 ),
             )
 

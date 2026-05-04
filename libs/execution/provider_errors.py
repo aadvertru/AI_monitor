@@ -231,6 +231,8 @@ def provider_label(provider: str) -> str:
         return "Mock provider"
     if normalized == "anthropic":
         return "Anthropic"
+    if normalized == "openrouter":
+        return "OpenRouter"
     return provider.strip() or "Provider"
 
 

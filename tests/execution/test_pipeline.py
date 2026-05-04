@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from apps.api.main import build_audit_results_response, build_audit_summary_response
 from libs.execution.audit_execution import AuditJobExecutionSummary, execute_audit_jobs
+from libs.execution.pilot_config import RealProviderPilotConfig
 from libs.execution.pipeline import run_audit_pipeline
 from libs.execution.post_processing import AuditPostProcessingSummary, process_audit_results
 from libs.execution.provider_adapter import BaseProviderAdapter, ProviderResponse
@@ -20,6 +21,7 @@ from libs.storage.models import (
     ParsedResult,
     Query,
     RawResponse,
+    SCDLLevel,
     Score,
 )
 
@@ -73,12 +75,14 @@ class AuditPipelineTests(unittest.IsolatedAsyncioTestCase):
         providers: list[str] | None = None,
         query_texts: list[str] | None = None,
         status: AuditStatus = AuditStatus.CREATED,
+        scdl_level: SCDLLevel = SCDLLevel.L1,
     ) -> Audit:
         brand = Brand(name=brand_name, domain="acme.ai")
         audit = Audit(
             brand=brand,
             providers=providers or ["mock"],
             runs_per_query=1,
+            scdl_level=scdl_level,
             status=status,
         )
         self.session.add(audit)
@@ -271,6 +275,104 @@ class AuditPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary.final_audit_status, "failed")
         self.assertIn("Provider mode 'mock'", summary.fatal_error or "")
         openai_query.assert_not_called()
+
+    async def test_anthropic_l1_pipeline_completes_with_mocked_provider(self) -> None:
+        audit = await self._create_audit(providers=["anthropic"])
+        provider = _QueryAwareProvider()
+
+        summary = await run_audit_pipeline(
+            self.session,
+            audit.id,
+            pilot_config=RealProviderPilotConfig(
+                real_provider_enabled=True,
+                provider_mode="anthropic",
+            ),
+            provider_factory=lambda _provider: provider,
+        )
+
+        saved_audit = await self.session.get(Audit, audit.id)
+        assert saved_audit is not None
+        results = await build_audit_results_response(self.session, saved_audit)
+        self.assertEqual(summary.final_audit_status, "completed")
+        self.assertEqual(saved_audit.status, AuditStatus.COMPLETED)
+        self.assertEqual(results.total, 1)
+        self.assertEqual(results.rows[0].provider, "anthropic")
+        self.assertTrue(results.rows[0].visible_brand)
+
+    async def test_anthropic_l2_pipeline_fails_with_unsupported_l2_without_fallback(
+        self,
+    ) -> None:
+        from libs.execution.anthropic_provider import AnthropicProviderAdapter
+
+        audit = await self._create_audit(
+            providers=["anthropic"],
+            scdl_level=SCDLLevel.L2,
+        )
+
+        summary = await run_audit_pipeline(
+            self.session,
+            audit.id,
+            pilot_config=RealProviderPilotConfig(
+                real_provider_enabled=True,
+                provider_mode="anthropic",
+            ),
+            provider_factory=lambda _provider: AnthropicProviderAdapter(),
+        )
+
+        raw_response = (
+            await self.session.execute(select(RawResponse))
+        ).scalar_one_or_none()
+        self.assertEqual(summary.final_audit_status, "failed")
+        assert raw_response is not None
+        self.assertEqual(raw_response.error_object["code"], "UNSUPPORTED_L2")
+
+    async def test_openrouter_l1_pipeline_completes_with_mocked_gateway_provider(
+        self,
+    ) -> None:
+        audit = await self._create_audit(providers=["openrouter"])
+        provider = _QueryAwareProvider()
+
+        summary = await run_audit_pipeline(
+            self.session,
+            audit.id,
+            pilot_config=RealProviderPilotConfig(
+                real_provider_enabled=True,
+                provider_mode="openrouter",
+            ),
+            provider_factory=lambda _provider: provider,
+        )
+
+        saved_audit = await self.session.get(Audit, audit.id)
+        assert saved_audit is not None
+        results = await build_audit_results_response(self.session, saved_audit)
+        self.assertEqual(summary.final_audit_status, "completed")
+        self.assertEqual(results.total, 1)
+        self.assertEqual(results.rows[0].provider, "openrouter")
+
+    async def test_openrouter_l2_pipeline_completes_with_mocked_gateway_provider(
+        self,
+    ) -> None:
+        audit = await self._create_audit(
+            providers=["openrouter"],
+            scdl_level=SCDLLevel.L2,
+        )
+        provider = _QueryAwareProvider()
+
+        summary = await run_audit_pipeline(
+            self.session,
+            audit.id,
+            pilot_config=RealProviderPilotConfig(
+                real_provider_enabled=True,
+                provider_mode="openrouter",
+            ),
+            provider_factory=lambda _provider: provider,
+        )
+
+        saved_audit = await self.session.get(Audit, audit.id)
+        assert saved_audit is not None
+        results = await build_audit_results_response(self.session, saved_audit)
+        self.assertEqual(summary.final_audit_status, "completed")
+        self.assertEqual(results.rows[0].provider, "openrouter")
 
     async def test_missing_audit_returns_fatal_summary(self) -> None:
         summary = await run_audit_pipeline(self.session, 404)
