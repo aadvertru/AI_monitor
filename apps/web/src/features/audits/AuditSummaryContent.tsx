@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { Bar, BarChart, CartesianGrid, Tooltip, XAxis, YAxis } from "recharts";
 
 import type { AuditSummaryResponse } from "../../lib/api/types";
+import { ProviderDiagnostics } from "./ProviderDiagnostics";
 
 const queryTypeLabels: Record<string, string> = {
   brand_direct: "Brand direct",
@@ -73,6 +74,8 @@ export function AuditSummaryContent({
           No run data is available yet.
         </div>
       ) : null}
+
+      <ProviderDiagnostics diagnostics={summary.provider_diagnostics} compact />
 
       <div className="rounded-md border border-border bg-white p-4">
         <h2 className="text-sm font-semibold text-ink">Query-type diagnostics</h2>

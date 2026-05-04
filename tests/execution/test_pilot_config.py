@@ -36,17 +36,16 @@ class RealProviderPilotConfigTests(unittest.TestCase):
                 ),
             )
 
-    def test_only_openai_is_allowed_as_real_provider(self) -> None:
-        with self.assertRaisesRegex(PilotPolicyError, "OpenAI execution only"):
-            validate_audit_against_pilot_config(
-                providers=["mock"],
-                query_count=1,
-                runs_per_query=1,
-                scdl_level="L1",
-                config=load_real_provider_pilot_config(
-                    env={"PROVIDER_MODE": "openai", "REAL_PROVIDER_ENABLED": "true"}
-                ),
-            )
+    def test_mock_only_audit_is_allowed_in_openai_provider_mode(self) -> None:
+        validate_audit_against_pilot_config(
+            providers=["mock"],
+            query_count=10,
+            runs_per_query=5,
+            scdl_level="L2",
+            config=load_real_provider_pilot_config(
+                env={"PROVIDER_MODE": "openai", "REAL_PROVIDER_ENABLED": "true"}
+            ),
+        )
 
     def test_mixed_provider_lists_are_rejected_in_real_provider_mode(self) -> None:
         with self.assertRaisesRegex(PilotPolicyError, "mixed provider lists"):

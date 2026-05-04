@@ -122,15 +122,28 @@ class OpenAIProviderAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(fake_client.calls), 1)
         self.assertEqual(fake_client.calls[0]["input"], "query")
 
-    async def test_malformed_response_returns_safe_empty_answer(self) -> None:
+    async def test_malformed_response_returns_invalid_response_error(self) -> None:
         fake_client = _FakeResponsesClient(result=SimpleNamespace(output=[]))
 
         adapter = _adapter(fake_client)
         result = await adapter.query("malformed", scdl_level="L1")
 
-        self.assertEqual(result.status, "success")
+        self.assertEqual(result.status, "error")
         self.assertIsNone(result.raw_answer)
-        self.assertEqual(result.citations, [])
+        self.assertIsNone(result.citations)
+        assert result.error is not None
+        self.assertEqual(result.error["code"], "INVALID_RESPONSE")
+
+    async def test_empty_response_returns_empty_response_error(self) -> None:
+        fake_client = _FakeResponsesClient(result=SimpleNamespace(output_text=""))
+
+        adapter = _adapter(fake_client)
+        result = await adapter.query("empty", scdl_level="L1")
+
+        self.assertEqual(result.status, "error")
+        self.assertIsNone(result.raw_answer)
+        assert result.error is not None
+        self.assertEqual(result.error["code"], "EMPTY_RESPONSE")
 
     async def test_timeout_is_mapped_to_timeout_status_without_secret_leak(self) -> None:
         secret = "sk-test-secret"
@@ -143,7 +156,10 @@ class OpenAIProviderAdapterTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.status, "timeout")
         assert result.error is not None
-        self.assertEqual(result.error["code"], "timeout")
+        self.assertEqual(result.error["code"], "TIMEOUT")
+        self.assertEqual(result.error["provider"], "openai")
+        self.assertEqual(result.error["model"], "l1-model")
+        self.assertTrue(result.error["retryable"])
         self.assertNotIn(secret, result.error["message"])
         self.assertNotIn(secret, str(result.provider_metadata))
 
@@ -159,7 +175,8 @@ class OpenAIProviderAdapterTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.status, "rate_limited")
         assert result.error is not None
-        self.assertEqual(result.error["code"], "rate_limited")
+        self.assertEqual(result.error["code"], "RATE_LIMIT")
+        self.assertTrue(result.error["retryable"])
         self.assertNotIn(secret, result.error["message"])
 
     async def test_missing_api_key_returns_error_response_without_calling_client(self) -> None:
@@ -171,7 +188,7 @@ class OpenAIProviderAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.status, "error")
         self.assertIsNone(result.raw_answer)
         assert result.error is not None
-        self.assertEqual(result.error["code"], "missing_api_key")
+        self.assertEqual(result.error["code"], "NO_API_KEY")
         self.assertEqual(fake_client.calls, [])
 
     async def test_unsupported_scdl_level_returns_controlled_error(self) -> None:
@@ -182,7 +199,7 @@ class OpenAIProviderAdapterTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.status, "error")
         assert result.error is not None
-        self.assertEqual(result.error["code"], "unsupported_scdl_level")
+        self.assertEqual(result.error["code"], "UNSUPPORTED_L2")
         self.assertEqual(fake_client.calls, [])
 
 

@@ -35,6 +35,7 @@ import { AuditSetupPanel } from "./AuditSetupPanel";
 import { AuditStatusBadge } from "./AuditStatusBadge";
 import { AuditSummaryContent } from "./AuditSummaryContent";
 import { AuditViewTabs } from "./AuditViewTabs";
+import { ProviderDiagnostics } from "./ProviderDiagnostics";
 import {
   archiveConfirmationMessage,
   deleteConfirmationMessage,
@@ -110,6 +111,8 @@ export function AuditDetailPage() {
                 ...current,
                 status: status ?? current.status,
                 total_runs: Math.max(current.total_runs, response.scheduling.total_jobs),
+                provider_diagnostics:
+                  response.provider_diagnostics ?? current.provider_diagnostics,
               }
             : current,
       );
@@ -161,6 +164,10 @@ export function AuditDetailPage() {
   const isRunning = currentStatus === "running";
   const canEdit = currentStatus === "created";
   const isArchived = Boolean(detail.data?.archived_at);
+  const statusDiagnostics = status.data?.provider_diagnostics ?? [];
+  const pipelineDiagnostics = runAuditMutation.data?.provider_diagnostics ?? [];
+  const hasActionDiagnostics =
+    statusDiagnostics.length > 0 || pipelineDiagnostics.length > 0;
 
   const refresh = () => {
     void detail.refetch();
@@ -286,6 +293,12 @@ export function AuditDetailPage() {
         <p className="border-b border-border px-5 py-3 text-sm text-red-700">
           {errorMessage(runAuditMutation.error)}
         </p>
+      ) : null}
+      {hasActionDiagnostics ? (
+        <div className="space-y-3 border-b border-border px-5 py-3">
+          <ProviderDiagnostics diagnostics={pipelineDiagnostics} compact />
+          <ProviderDiagnostics diagnostics={statusDiagnostics} compact />
+        </div>
       ) : null}
       <AuditSetupPanel audit={detail.data} />
       <AuditSummaryContent auditId={auditId} summary={summary.data} />

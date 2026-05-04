@@ -108,6 +108,9 @@ def validate_audit_against_pilot_config(
             f"Unsupported real-provider pilot providers: {', '.join(unsupported)}."
         )
 
+    if all(provider == MOCK_PROVIDER for provider in normalized_providers):
+        return
+
     if resolved_config.provider_mode == MOCK_PROVIDER:
         if any(provider != MOCK_PROVIDER for provider in normalized_providers):
             raise PilotPolicyError(

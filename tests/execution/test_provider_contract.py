@@ -6,6 +6,7 @@ from dataclasses import FrozenInstanceError
 from libs.execution.provider_adapter import (
     ALLOWED_PROVIDER_STATUSES,
     ProviderResponse,
+    normalize_provider_response,
 )
 
 
@@ -32,13 +33,16 @@ class ProviderContractTests(unittest.TestCase):
             raw_answer=None,
             citations=None,
             response_time=None,
-            error={"code": "provider_error", "message": "provider failed"},
+            error={
+                "code": "PROVIDER_REQUEST_FAILED",
+                "message": "provider failed",
+            },
             provider_metadata={"request_id": "abc"},
         )
 
         self.assertEqual(response.status, "error")
         self.assertIsNone(response.raw_answer)
-        self.assertEqual(response.error["code"], "provider_error")
+        self.assertEqual(response.error["code"], "PROVIDER_REQUEST_FAILED")
         self.assertEqual(response.error["message"], "provider failed")
 
     def test_status_values_are_bounded(self) -> None:
@@ -63,12 +67,39 @@ class ProviderContractTests(unittest.TestCase):
             raw_answer=None,
             citations=None,
             response_time=3.0,
-            error=None,
+            error={"code": "TIMEOUT", "message": "provider timed out"},
             provider_metadata=None,
         )
 
         with self.assertRaises(FrozenInstanceError):
             response.status = "success"  # type: ignore[misc]
+
+    def test_non_success_response_requires_error_object(self) -> None:
+        with self.assertRaises(ValueError):
+            ProviderResponse(
+                status="timeout",
+                raw_answer=None,
+                citations=None,
+                response_time=3.0,
+                error=None,
+                provider_metadata=None,
+            )
+
+    def test_normalizer_converts_empty_success_to_provider_error(self) -> None:
+        response = ProviderResponse(
+            status="success",
+            raw_answer="",
+            citations=[],
+            response_time=0.1,
+            error=None,
+            provider_metadata={"provider": "mock"},
+        )
+
+        normalized = normalize_provider_response(response, provider="mock", level="L1")
+
+        self.assertEqual(normalized.status, "error")
+        assert normalized.error is not None
+        self.assertEqual(normalized.error["code"], "EMPTY_RESPONSE")
 
     def test_citations_shape_matches_contract(self) -> None:
         valid = ProviderResponse(

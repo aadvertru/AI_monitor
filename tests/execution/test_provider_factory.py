@@ -15,6 +15,17 @@ class ProviderFactoryTests(unittest.TestCase):
 
         self.assertIsInstance(adapter, MockProviderAdapter)
 
+    def test_mock_adapter_is_selected_in_openai_provider_mode(self) -> None:
+        adapter = build_provider_adapter(
+            "mock",
+            pilot_config=RealProviderPilotConfig(
+                real_provider_enabled=True,
+                provider_mode="openai",
+            ),
+        )
+
+        self.assertIsInstance(adapter, MockProviderAdapter)
+
     def test_openai_adapter_requires_real_provider_mode_enabled(self) -> None:
         with self.assertRaisesRegex(PilotPolicyError, "real provider mode is enabled"):
             build_provider_adapter("openai")

@@ -23,8 +23,6 @@ def build_provider_adapter(
     config = pilot_config or load_real_provider_pilot_config()
 
     if normalized_provider == "mock":
-        if config.provider_mode != "mock":
-            raise PilotPolicyError("Mock adapter can only be selected in mock provider mode.")
         return MockProviderAdapter()
 
     if normalized_provider == "openai":

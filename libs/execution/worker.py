@@ -5,7 +5,12 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from libs.execution.provider_adapter import BaseProviderAdapter, ProviderResponse
+from libs.execution.provider_adapter import (
+    BaseProviderAdapter,
+    ProviderResponse,
+    normalize_provider_response,
+)
+from libs.execution.provider_errors import unknown_provider_error
 from libs.storage.models import Audit, Job, JobStatus, Query, RawResponse, Run, RunStatus
 
 
@@ -79,11 +84,18 @@ async def execute_job(
                 raw_answer=None,
                 citations=None,
                 response_time=None,
-                error={
-                    "code": "provider_exception",
-                    "message": "Provider raised an unexpected exception.",
-                },
+                error=unknown_provider_error(
+                    job.provider,
+                    level=scdl_level_value,
+                ).to_error_dict(),
                 provider_metadata={"provider": job.provider},
+            )
+        else:
+            response = normalize_provider_response(
+                response,
+                provider=job.provider,
+                model=_metadata_model(response.provider_metadata),
+                level=scdl_level_value,
             )
 
         run.status = _map_provider_status_to_run_status(response.status)
@@ -124,4 +136,11 @@ async def execute_job(
     except Exception:
         await session.rollback()
         raise
+
+
+def _metadata_model(provider_metadata: dict | None) -> str | None:
+    if provider_metadata is None:
+        return None
+    model = provider_metadata.get("model")
+    return model if isinstance(model, str) else None
 

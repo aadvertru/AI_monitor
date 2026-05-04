@@ -90,13 +90,16 @@ describe("audit setup form schema", () => {
     scdlLevel: "L1",
   };
 
-  it("allows empty seed query rows because payload building filters them out", () => {
+  it("rejects a form with only empty seed query rows", () => {
     const result = schema.safeParse({
       ...validValues,
       seedQueryItems: [{ text: "", type: null, source: "user" }],
     });
 
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.message).toBe("Add at least one seed query.");
+    }
   });
 
   it("rejects non-empty seed query rows shorter than three characters", () => {

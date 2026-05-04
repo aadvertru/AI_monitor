@@ -7,6 +7,7 @@ import {
   currentUserFixture,
   emptyAuditSummaryFixture,
   partialAuditSummaryFixture,
+  providerDiagnosticFixture,
 } from "../../test/fixtures";
 import { mockFetchSequence } from "../../test/mockFetch";
 import { renderRoute } from "../../test/render";
@@ -42,13 +43,13 @@ describe("audit summary page", () => {
     expect(screen.getByRole("link", { name: "Results" })).toHaveAttribute("href", "/audits/42/results");
     expect(screen.getByRole("link", { name: "Sources" })).toHaveAttribute("href", "/audits/42/sources");
     expect(screen.getByText("Completed")).toBeInTheDocument();
-    expect(screen.getByText("Queries")).toBeInTheDocument();
+    expect(screen.getAllByText("Queries").length).toBeGreaterThan(0);
     expect(screen.getAllByText("3").length).toBeGreaterThan(0);
     expect(screen.getByText("Runs")).toBeInTheDocument();
     expect(screen.getByText("6")).toBeInTheDocument();
     expect(screen.getByText("100%")).toBeInTheDocument();
     expect(screen.getByText("67%")).toBeInTheDocument();
-    expect(screen.getByText("0.74")).toBeInTheDocument();
+    expect(screen.getAllByText("0.74").length).toBeGreaterThan(0);
     expect(screen.getByText("Weighted")).toBeInTheDocument();
     expect(screen.getByText("0.76")).toBeInTheDocument();
   });
@@ -67,7 +68,7 @@ describe("audit summary page", () => {
     expect(screen.getByText("No critical queries detected.")).toBeInTheDocument();
     expect(screen.getByText("No competitors detected.")).toBeInTheDocument();
     expect(screen.getByText("No source citations yet.")).toBeInTheDocument();
-    expect(screen.getByText("N/A")).toBeInTheDocument();
+    expect(screen.getAllByText("N/A").length).toBeGreaterThan(0);
   });
 
   it("renders partial or failed audit summary states safely", async () => {
@@ -90,6 +91,23 @@ describe("audit summary page", () => {
     expect(screen.getAllByText("50%").length).toBeGreaterThan(0);
     expect(screen.getByText("Recommendation")).toBeInTheDocument();
     expect(screen.getByText("0.24")).toBeInTheDocument();
+  });
+
+  it("renders provider diagnostics without unsafe fields", async () => {
+    renderSummary({
+      ...partialAuditSummaryFixture,
+      provider_diagnostics: [
+        {
+          ...providerDiagnosticFixture,
+          details: { traceback: "hidden-stack" },
+        } as never,
+      ],
+    });
+
+    expect(await screen.findByText("Provider issue")).toBeInTheDocument();
+    expect(screen.getByText("OpenAI request timed out.")).toBeInTheDocument();
+    expect(screen.getByText(/openai - L2 - gpt-test - retryable/)).toBeInTheDocument();
+    expect(screen.queryByText(/traceback|hidden-stack|sk-/i)).not.toBeInTheDocument();
   });
 
   it("handles missing optional summary fields", async () => {
@@ -141,7 +159,7 @@ describe("audit summary page", () => {
     expect(await screen.findByText("Query-type diagnostics")).toBeInTheDocument();
     expect(screen.getByText("Category discovery")).toBeInTheDocument();
     expect(screen.getByText("75%")).toBeInTheDocument();
-    expect(screen.getByText("0.74")).toBeInTheDocument();
+    expect(screen.getAllByText("0.74").length).toBeGreaterThan(0);
   });
 
   it("handles legacy unknown query types without crashing", async () => {

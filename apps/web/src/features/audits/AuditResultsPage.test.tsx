@@ -57,8 +57,22 @@ describe("audit results page", () => {
 
     expect((await screen.findAllByText("Error")).length).toBeGreaterThan(0);
     expect(screen.getByText("Provider failed.")).toBeInTheDocument();
+    expect(screen.getByText("Provider issue: OpenAI request failed.")).toBeInTheDocument();
     expect(screen.getAllByText("Timeout").length).toBeGreaterThan(0);
     expect(screen.getByText("Provider timed out.")).toBeInTheDocument();
+    expect(screen.getByText("Provider issue: OpenAI request timed out.")).toBeInTheDocument();
+  });
+
+  it("does not render provider issue text for successful rows", async () => {
+    renderResults({
+      ...auditResultsFixture,
+      rows: [auditResultsFixture.rows[0]],
+      total: 1,
+      provider_diagnostics: [],
+    });
+
+    expect(await screen.findByText("best ai visibility tools")).toBeInTheDocument();
+    expect(screen.queryByText(/Provider issue:/)).not.toBeInTheDocument();
   });
 
   it("renders an empty results state", async () => {
@@ -136,5 +150,6 @@ describe("audit results page", () => {
     await screen.findByText("best ai visibility tools");
     expect(screen.queryByText("raw_answer")).not.toBeInTheDocument();
     expect(screen.queryByText("501")).not.toBeInTheDocument();
+    expect(screen.queryByText(/api_key|traceback|sk-/i)).not.toBeInTheDocument();
   });
 });

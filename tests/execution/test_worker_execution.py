@@ -150,10 +150,9 @@ class WorkerExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(persisted_run.status, RunStatus.ERROR)
         self.assertEqual(raw_response.provider_status, "error")
         self.assertIsNone(raw_response.raw_answer)
-        self.assertEqual(
-            raw_response.error_object,
-            {"code": "mock_error", "message": "Provider failed."},
-        )
+        self.assertEqual(raw_response.error_object["code"], "PROVIDER_REQUEST_FAILED")
+        self.assertEqual(raw_response.error_object["provider"], "mock")
+        self.assertEqual(raw_response.error_object["level"], "L1")
 
     async def test_provider_exception_fallback_does_not_persist_raw_exception_message(
         self,
@@ -172,8 +171,35 @@ class WorkerExecutionTests(unittest.IsolatedAsyncioTestCase):
         ).scalar_one_or_none()
         assert raw_response is not None
         self.assertEqual(raw_response.provider_status, "error")
-        self.assertEqual(raw_response.error_object["code"], "provider_exception")
+        self.assertEqual(raw_response.error_object["code"], "UNKNOWN_PROVIDER_ERROR")
         self.assertNotIn(secret, raw_response.error_object["message"])
+
+    async def test_empty_success_response_is_persisted_as_provider_error(self) -> None:
+        class _EmptySuccessProvider(BaseProviderAdapter):
+            async def query(self, query: str, **kwargs) -> ProviderResponse:
+                return ProviderResponse(
+                    status="success",
+                    raw_answer="",
+                    citations=[],
+                    response_time=0.2,
+                    error=None,
+                    provider_metadata={"provider": "mock"},
+                )
+
+        job = await self._create_job(provider_code="mock")
+
+        run = await execute_job(self.session, job.id, _EmptySuccessProvider())
+
+        persisted_job = await self.session.get(Job, job.id)
+        raw_response = (
+            await self.session.execute(select(RawResponse).where(RawResponse.run_id == run.id))
+        ).scalar_one_or_none()
+        assert persisted_job is not None
+        assert raw_response is not None
+        self.assertEqual(persisted_job.status, JobStatus.FAILED)
+        self.assertEqual(run.status, RunStatus.ERROR)
+        self.assertEqual(raw_response.provider_status, "error")
+        self.assertEqual(raw_response.error_object["code"], "EMPTY_RESPONSE")
 
     async def test_worker_does_not_parse_or_score(self) -> None:
         job = await self._create_job(provider_code="mock")

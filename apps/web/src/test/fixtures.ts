@@ -9,6 +9,7 @@ import type {
   AuditStatusResponse,
   LogoutResponse,
   CurrentUser,
+  ProviderDiagnostic,
 } from "../lib/api/types";
 import type { ApiErrorPayload } from "../lib/api/client";
 
@@ -91,6 +92,7 @@ export const auditStatusFixture: AuditStatusResponse = {
   failed_runs: 0,
   completion_ratio: 0.25,
   updated_at: "2026-04-29T09:35:00Z",
+  provider_diagnostics: [],
 };
 
 export const auditRunTriggerFixture: AuditRunTriggerResponse = {
@@ -134,6 +136,18 @@ export const auditPipelineRunFixture: AuditPipelineRunResponse = {
   },
   final_audit_status: "completed",
   fatal_error: null,
+  provider_diagnostics: [],
+};
+
+export const providerDiagnosticFixture: ProviderDiagnostic = {
+  code: "TIMEOUT",
+  message: "OpenAI request timed out.",
+  provider: "openai",
+  model: "gpt-test",
+  level: "L2",
+  retryable: true,
+  run_id: 1003,
+  query_id: 103,
 };
 
 export const criticalQueriesFixture: AuditSummaryResponse["critical_queries"] = [
@@ -197,6 +211,7 @@ export const auditSummaryFixture: AuditSummaryResponse = {
   ],
   competitors: competitorsSummaryFixture,
   sources: sourcesSummaryFixture,
+  provider_diagnostics: [],
 };
 
 export const emptyAuditSummaryFixture: AuditSummaryResponse = {
@@ -216,6 +231,7 @@ export const emptyAuditSummaryFixture: AuditSummaryResponse = {
   provider_scores: {},
   competitors: [],
   sources: [],
+  provider_diagnostics: [],
 };
 
 export const partialAuditSummaryFixture: AuditSummaryResponse = {
@@ -274,6 +290,7 @@ export const auditResultsFixture: AuditResultsResponse = {
       raw_answer_ref: 501,
       error_code: null,
       error_message: null,
+      provider_error: null,
     },
     {
       audit_id: 42,
@@ -291,8 +308,18 @@ export const auditResultsFixture: AuditResultsResponse = {
       competitors: [],
       sources: [],
       raw_answer_ref: null,
-      error_code: "provider_error",
+      error_code: "PROVIDER_REQUEST_FAILED",
       error_message: "Provider failed.",
+      provider_error: {
+        code: "PROVIDER_REQUEST_FAILED",
+        message: "OpenAI request failed.",
+        provider: "openai",
+        model: "gpt-test",
+        level: "L2",
+        retryable: true,
+        run_id: 1002,
+        query_id: 102,
+      },
     },
     {
       audit_id: 42,
@@ -310,10 +337,12 @@ export const auditResultsFixture: AuditResultsResponse = {
       competitors: [],
       sources: [],
       raw_answer_ref: null,
-      error_code: "timeout",
+      error_code: "TIMEOUT",
       error_message: "Provider timed out.",
+      provider_error: providerDiagnosticFixture,
     },
   ],
+  provider_diagnostics: [providerDiagnosticFixture],
 };
 
 export const emptyAuditResultsFixture: AuditResultsResponse = {
@@ -321,4 +350,5 @@ export const emptyAuditResultsFixture: AuditResultsResponse = {
   audit_number: 1,
   total: 0,
   rows: [],
+  provider_diagnostics: [],
 };

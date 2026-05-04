@@ -236,7 +236,9 @@ class AuditPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved_audit.status, AuditStatus.PARTIAL)
         self.assertEqual(results.total, 2)
         self.assertTrue(any(row.final_score is not None for row in results.rows))
-        self.assertTrue(any(row.error_code == "mock_error" for row in results.rows))
+        self.assertTrue(
+            any(row.error_code == "PROVIDER_REQUEST_FAILED" for row in results.rows)
+        )
 
         api_summary = await build_audit_summary_response(self.session, saved_audit)
         self.assertEqual(api_summary.status, "partial")

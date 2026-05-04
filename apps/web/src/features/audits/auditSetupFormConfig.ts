@@ -105,30 +105,40 @@ const seedQueryItemSchema = z.object({
   source: z.enum(["user", "ai"]).optional(),
 });
 
-export const schema = z.object({
-  brandName: z.string().trim().min(1, "Enter a brand name."),
-  brandDomain: z
-    .string()
-    .trim()
-    .min(1, "Enter a brand domain.")
-    .refine(isValidBrandDomain, invalidDomainMessage)
-    .transform(normalizeBrandDomain),
-  brandDescription: z
-    .string()
-    .trim()
-    .max(brandDescriptionMaxLength, `Brand description must be ${brandDescriptionMaxLength} characters or fewer.`)
-    .optional(),
-  seedQueryItems: z
-    .array(seedQueryItemSchema)
-    .max(maxSeedQueryCount, `Use ${maxSeedQueryCount} seed queries or fewer.`)
-    .optional(),
-  providers: z.array(z.string()).min(1, "Select at least one provider."),
-  language: z.enum(languageOptions.map((option) => option.value)),
-  country: z.enum(countryOptions.map((option) => option.value)),
-  maxQueries: z.union([z.literal(""), z.coerce.number().int().positive()]).optional(),
-  enableSourceIntelligence: z.boolean(),
-  scdlLevel: z.enum(["L1", "L2"]),
-});
+export const schema = z
+  .object({
+    brandName: z.string().trim().min(1, "Enter a brand name."),
+    brandDomain: z
+      .string()
+      .trim()
+      .min(1, "Enter a brand domain.")
+      .refine(isValidBrandDomain, invalidDomainMessage)
+      .transform(normalizeBrandDomain),
+    brandDescription: z
+      .string()
+      .trim()
+      .max(brandDescriptionMaxLength, `Brand description must be ${brandDescriptionMaxLength} characters or fewer.`)
+      .optional(),
+    seedQueryItems: z
+      .array(seedQueryItemSchema)
+      .max(maxSeedQueryCount, `Use ${maxSeedQueryCount} seed queries or fewer.`)
+      .optional(),
+    providers: z.array(z.string()).min(1, "Select at least one provider."),
+    language: z.enum(languageOptions.map((option) => option.value)),
+    country: z.enum(countryOptions.map((option) => option.value)),
+    maxQueries: z.union([z.literal(""), z.coerce.number().int().positive()]).optional(),
+    enableSourceIntelligence: z.boolean(),
+    scdlLevel: z.enum(["L1", "L2"]),
+  })
+  .superRefine((values, context) => {
+    if (parseSeedQueryItems(values.seedQueryItems).length === 0) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Add at least one seed query.",
+        path: ["seedQueryItems"],
+      });
+    }
+  });
 
 export type CreateAuditFormInput = z.input<typeof schema>;
 export type CreateAuditFormValues = z.output<typeof schema>;

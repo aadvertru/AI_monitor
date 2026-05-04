@@ -6,6 +6,15 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Literal
 
+from libs.execution.provider_errors import (
+    ProviderErrorCode,
+    empty_response_error,
+    invalid_response_error,
+    normalize_provider_error_dict,
+    rate_limit_error,
+    timeout_error,
+)
+
 ProviderStatus = Literal["success", "error", "timeout", "rate_limited"]
 ALLOWED_PROVIDER_STATUSES = frozenset({"success", "error", "timeout", "rate_limited"})
 
@@ -38,8 +47,11 @@ class ProviderResponse:
             ):
                 raise ValueError("error.code and error.message must be strings.")
 
-        if self.status == "error" and self.error is None:
-            raise ValueError("error status requires a normalized error object.")
+        if self.status != "success" and self.error is None:
+            raise ValueError("non-success status requires a normalized error object.")
+
+        if self.status == "success" and self.error is not None:
+            raise ValueError("success status must not include an error object.")
 
         if self.provider_metadata is not None and not isinstance(self.provider_metadata, dict):
             raise ValueError("provider_metadata must be a dict when provided.")
@@ -68,3 +80,66 @@ class BaseProviderAdapter(ABC):
         Implementations must never raise exceptions outward. Failures must be
         mapped to ProviderResponse with status in ALLOWED_PROVIDER_STATUSES.
         """
+
+
+def normalize_provider_response(
+    response: ProviderResponse,
+    *,
+    provider: str,
+    model: str | None = None,
+    level: str | None = None,
+) -> ProviderResponse:
+    """Return a ProviderResponse with normalized provider error payloads."""
+    if response.status == "success":
+        if response.raw_answer is None:
+            return _with_error_response(
+                response,
+                invalid_response_error(provider, model, level).to_error_dict(),
+            )
+        if response.raw_answer.strip() == "":
+            return _with_error_response(
+                response,
+                empty_response_error(provider, model, level).to_error_dict(),
+            )
+        return response
+
+    if response.status == "timeout":
+        return _with_error_response(
+            response,
+            timeout_error(provider, model, level).to_error_dict(),
+            status="timeout",
+        )
+
+    if response.status == "rate_limited":
+        return _with_error_response(
+            response,
+            rate_limit_error(provider, model, level).to_error_dict(),
+            status="rate_limited",
+        )
+
+    return _with_error_response(
+        response,
+        normalize_provider_error_dict(
+            response.error,
+            provider=provider,
+            model=model,
+            level=level,
+            fallback_code=ProviderErrorCode.PROVIDER_REQUEST_FAILED,
+        ),
+    )
+
+
+def _with_error_response(
+    response: ProviderResponse,
+    error: dict,
+    *,
+    status: ProviderStatus = "error",
+) -> ProviderResponse:
+    return ProviderResponse(
+        status=status,
+        raw_answer=None,
+        citations=response.citations if status == "success" else None,
+        response_time=response.response_time,
+        error=error,
+        provider_metadata=response.provider_metadata,
+    )

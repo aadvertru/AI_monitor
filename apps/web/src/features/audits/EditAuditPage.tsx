@@ -1,24 +1,31 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Plus, Save, Trash2 } from "lucide-react";
-import { useEffect } from "react";
+import { ArrowLeft, Loader2, Plus, Save, Sparkles, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useFieldArray, useForm, useWatch } from "react-hook-form";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { Button } from "../../components/ui/Button";
 import { Field } from "../../components/ui/Field";
 import { Input } from "../../components/ui/Input";
-import { ApiError, getAuditDetail, updateAudit } from "../../lib/api/client";
+import {
+  ApiError,
+  generateSeedQuerySuggestions,
+  getAuditDetail,
+  updateAudit,
+} from "../../lib/api/client";
 import type { AuditDetail } from "../../lib/api/types";
 import { AuditBreadcrumbs } from "./AuditBreadcrumbs";
 import { AuditStatusBadge } from "./AuditStatusBadge";
 import {
   brandDescriptionMaxLength,
+  appendGeneratedSeedQueries,
   buildPayload,
   countryOptions,
   emptySeedQueryItem,
   estimateAuditTokens,
   languageOptions,
+  parseSeedQueryItems,
   providerOptions,
   queryTypeOptions,
   schema,
@@ -35,6 +42,12 @@ export function EditAuditPage() {
   const params = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [isGenerationOpen, setIsGenerationOpen] = useState(false);
+  const [useDomainForGeneration, setUseDomainForGeneration] = useState<boolean | null>(null);
+  const [useDescriptionForGeneration, setUseDescriptionForGeneration] = useState<boolean | null>(
+    null,
+  );
+  const [generationWarnings, setGenerationWarnings] = useState<string[]>([]);
   const auditId = Number(params.auditId);
   const isValidAuditId = Number.isInteger(auditId) && auditId > 0;
   const detail = useQuery({
@@ -55,9 +68,11 @@ export function EditAuditPage() {
   const {
     formState: { errors },
     control,
+    getValues,
     handleSubmit,
     register,
     reset,
+    setValue,
   } = useForm<CreateAuditFormInput, unknown, CreateAuditFormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
@@ -77,6 +92,31 @@ export function EditAuditPage() {
     control,
     name: "seedQueryItems",
   });
+  const generateMutation = useMutation({
+    mutationFn: generateSeedQuerySuggestions,
+    onSuccess: (response) => {
+      const currentQueries = getValues("seedQueryItems");
+      const appendResult = appendGeneratedSeedQueries(currentQueries, response.suggestions);
+      const warnings = [...(response.warnings ?? [])];
+      const addedCount = appendResult.queries.length - parseSeedQueryItems(currentQueries).length;
+      if (appendResult.duplicateCount > 0) {
+        warnings.push(`${appendResult.duplicateCount} duplicate queries were skipped.`);
+      }
+      if (appendResult.limitSkipped > 0) {
+        warnings.push(
+          `Only ${addedCount} queries were added because the audit limit is 20 seed queries.`,
+        );
+      }
+      setValue("seedQueryItems", appendResult.queries, {
+        shouldDirty: true,
+        shouldValidate: true,
+      });
+      setGenerationWarnings(warnings);
+    },
+    onError: () => {
+      setGenerationWarnings([]);
+    },
+  });
 
   useEffect(() => {
     if (detail.data) {
@@ -87,10 +127,36 @@ export function EditAuditPage() {
   const watchedValues = useWatch({ control });
   const estimatedTokens = estimateAuditTokens(watchedValues);
   const brandDescriptionLength = watchedValues.brandDescription?.length ?? 0;
+  const seedQueryItemsError =
+    errors.seedQueryItems?.message ?? errors.seedQueryItems?.root?.message;
+  const hasGenerationDomain = Boolean(watchedValues.brandDomain?.trim());
+  const hasGenerationDescription = Boolean(watchedValues.brandDescription?.trim());
+  const effectiveUseDomainForGeneration =
+    hasGenerationDomain && (useDomainForGeneration ?? true);
+  const effectiveUseDescriptionForGeneration =
+    hasGenerationDescription && (useDescriptionForGeneration ?? true);
+  const canGenerateQueries =
+    !generateMutation.isPending &&
+    (effectiveUseDomainForGeneration || effectiveUseDescriptionForGeneration);
   const canEdit = detail.data?.status === "created";
   const onSubmit = handleSubmit((values) => {
     updateAuditMutation.mutate(values);
   });
+  const generateQueries = () => {
+    if (!canGenerateQueries) {
+      return;
+    }
+
+    generateMutation.mutate({
+      brandName: getValues("brandName"),
+      brandDomain: getValues("brandDomain"),
+      brandDescription: getValues("brandDescription"),
+      useDomain: effectiveUseDomainForGeneration,
+      useDescription: effectiveUseDescriptionForGeneration,
+      count: 10,
+      existingQueries: parseSeedQueryItems(getValues("seedQueryItems")),
+    });
+  };
 
   if (detail.isLoading) {
     return (
@@ -200,8 +266,8 @@ export function EditAuditPage() {
                 <input type="hidden" {...register(`seedQueryItems.${index}.source`)} />
               </div>
             ))}
-            {errors.seedQueryItems?.message ? (
-              <p className="text-sm text-red-700">{errors.seedQueryItems.message}</p>
+            {seedQueryItemsError ? (
+              <p className="text-sm text-red-700">{seedQueryItemsError}</p>
             ) : null}
             <Button
               type="button"
@@ -211,6 +277,59 @@ export function EditAuditPage() {
               <Plus className="size-4" aria-hidden="true" />
               Add query
             </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setIsGenerationOpen((current) => !current)}
+            >
+              <Sparkles className="size-4" aria-hidden="true" />
+              Generate seed queries
+            </Button>
+            {isGenerationOpen ? (
+              <div className="space-y-3 rounded-md border border-border bg-muted p-3">
+                <p className="text-sm font-medium text-ink">Generate seed queries</p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <label className="flex items-center gap-2 text-sm text-ink">
+                    <input
+                      className="size-4 accent-brand-600"
+                      type="checkbox"
+                      checked={effectiveUseDomainForGeneration}
+                      disabled={!hasGenerationDomain}
+                      onChange={(event) => setUseDomainForGeneration(event.target.checked)}
+                    />
+                    Use brand domain
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-ink">
+                    <input
+                      className="size-4 accent-brand-600"
+                      type="checkbox"
+                      checked={effectiveUseDescriptionForGeneration}
+                      disabled={!hasGenerationDescription}
+                      onChange={(event) => setUseDescriptionForGeneration(event.target.checked)}
+                    />
+                    Use brand description
+                  </label>
+                </div>
+                <Button type="button" disabled={!canGenerateQueries} onClick={generateQueries}>
+                  {generateMutation.isPending ? (
+                    <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <Sparkles className="size-4" aria-hidden="true" />
+                  )}
+                  {generateMutation.isPending ? "Generating..." : "Generate 10 queries"}
+                </Button>
+                {generateMutation.isError ? (
+                  <p className="text-sm text-red-700">
+                    Could not generate seed queries. Please try again or enter queries manually.
+                  </p>
+                ) : null}
+                {generationWarnings.map((warning) => (
+                  <p className="text-sm text-amber-700" key={warning}>
+                    {warning}
+                  </p>
+                ))}
+              </div>
+            ) : null}
           </fieldset>
 
           <div className="grid gap-4 md:grid-cols-[1.4fr_0.8fr]">

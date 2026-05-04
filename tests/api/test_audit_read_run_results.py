@@ -1400,6 +1400,156 @@ class AuditReadRunResultsAPITests(unittest.IsolatedAsyncioTestCase):
         parse_mock.assert_not_called()
         score_mock.assert_not_called()
 
+    async def test_provider_diagnostics_are_exposed_on_status_results_and_summary(
+        self,
+    ) -> None:
+        owner = await self._create_user()
+        audit = await self._create_audit(
+            owner,
+            status=AuditStatus.PARTIAL,
+            providers=["openai"],
+        )
+        await self._add_raw_response(
+            audit,
+            run_status=RunStatus.TIMEOUT,
+            provider_status="timeout",
+            raw_answer=None,
+            provider_metadata={"provider": "openai", "model": "gpt-test"},
+            error_object={
+                "code": "TIMEOUT",
+                "message": "OpenAI request timed out.",
+                "provider": "openai",
+                "model": "gpt-test",
+                "level": "L1",
+                "retryable": True,
+                "details": {"traceback": "hidden"},
+            },
+        )
+
+        async with self.session_factory() as session:
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                request = self._authenticated_request(owner)
+                status = await get_audit_status(
+                    audit_id=audit.id,
+                    request=request,
+                    session=session,
+                )
+                results = await get_audit_results(
+                    audit_id=audit.id,
+                    request=request,
+                    session=session,
+                )
+                summary = await get_audit_summary(
+                    audit_id=audit.id,
+                    request=request,
+                    session=session,
+                )
+
+        self.assertEqual(status.provider_diagnostics[0].code, "TIMEOUT")
+        self.assertEqual(status.provider_diagnostics[0].provider, "openai")
+        self.assertEqual(status.provider_diagnostics[0].model, "gpt-test")
+        self.assertTrue(status.provider_diagnostics[0].retryable)
+        self.assertEqual(results.rows[0].provider_error.code, "TIMEOUT")
+        self.assertEqual(results.provider_diagnostics[0].query_id, results.rows[0].query_id)
+        self.assertEqual(summary.provider_diagnostics[0].code, "TIMEOUT")
+        serialized = str(summary.model_dump())
+        self.assertNotIn("traceback", serialized)
+        self.assertNotIn("hidden", serialized)
+
+    async def test_legacy_failed_run_gets_safe_generic_provider_diagnostic(self) -> None:
+        owner = await self._create_user()
+        audit = await self._create_audit(owner, status=AuditStatus.FAILED)
+
+        async with self.session_factory() as session:
+            query = (
+                await session.execute(select(Query).where(Query.audit_id == audit.id))
+            ).scalars().one()
+            session.add(
+                Run(
+                    audit_id=audit.id,
+                    query_id=query.id,
+                    provider="mock",
+                    run_number=1,
+                    status=RunStatus.ERROR,
+                )
+            )
+            await session.commit()
+
+        async with self.session_factory() as session:
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                results = await get_audit_results(
+                    audit_id=audit.id,
+                    request=self._authenticated_request(owner),
+                    session=session,
+                )
+
+        self.assertEqual(results.rows[0].provider_error.code, "UNKNOWN_PROVIDER_ERROR")
+        self.assertEqual(results.rows[0].provider_error.provider, "mock")
+
+    async def test_pipeline_response_includes_safe_provider_diagnostic_for_fatal_error(
+        self,
+    ) -> None:
+        admin = await self._create_user("admin@example.com", role=UserRole.ADMIN)
+        audit = await self._create_audit(admin, providers=["openai"])
+        pipeline_summary = AuditPipelineSummary(
+            audit_id=audit.id,
+            scheduling=AuditSchedulingSummary(
+                audit_id=audit.id,
+                fatal_error="Real provider execution is disabled with sk-hidden.",
+            ),
+            final_audit_status="failed",
+        )
+
+        async with self.session_factory() as session:
+            with (
+                patch.dict("os.environ", AUTH_ENV, clear=True),
+                patch(
+                    "apps.api.main.run_audit_pipeline",
+                    new=AsyncMock(return_value=pipeline_summary),
+                ),
+            ):
+                result = await run_audit_pipeline_dev(
+                    audit_id=audit.id,
+                    request=self._authenticated_request(admin),
+                    session=session,
+                )
+
+        self.assertEqual(result.provider_diagnostics[0].code, "PROVIDER_DISABLED")
+        self.assertEqual(result.provider_diagnostics[0].provider, "openai")
+        self.assertNotIn("sk-hidden", str(result.model_dump()))
+
+    async def test_pipeline_response_includes_safe_diagnostic_for_cap_failure(
+        self,
+    ) -> None:
+        admin = await self._create_user("cap-admin@example.com", role=UserRole.ADMIN)
+        audit = await self._create_audit(admin, providers=["openai"])
+        pipeline_summary = AuditPipelineSummary(
+            audit_id=audit.id,
+            scheduling=AuditSchedulingSummary(
+                audit_id=audit.id,
+                fatal_error="Real-provider audit exceeds max queries cap with sk-hidden.",
+            ),
+            final_audit_status="failed",
+        )
+
+        async with self.session_factory() as session:
+            with (
+                patch.dict("os.environ", AUTH_ENV, clear=True),
+                patch(
+                    "apps.api.main.run_audit_pipeline",
+                    new=AsyncMock(return_value=pipeline_summary),
+                ),
+            ):
+                result = await run_audit_pipeline_dev(
+                    audit_id=audit.id,
+                    request=self._authenticated_request(admin),
+                    session=session,
+                )
+
+        self.assertEqual(result.provider_diagnostics[0].code, "CONFIGURATION_ERROR")
+        self.assertEqual(result.provider_diagnostics[0].provider, "openai")
+        self.assertNotIn("sk-hidden", str(result.model_dump()))
+
     async def test_admin_can_inspect_stored_successful_raw_response_with_redaction(
         self,
     ) -> None:

@@ -182,7 +182,8 @@ class AuditExecutionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary.errors, [])
         assert raw_response is not None
         self.assertEqual(raw_response.provider_status, "error")
-        self.assertEqual(raw_response.error_object["code"], "mock_error")
+        self.assertEqual(raw_response.error_object["code"], "PROVIDER_REQUEST_FAILED")
+        self.assertEqual(raw_response.error_object["provider"], "mock")
 
     async def test_provider_exception_is_normalized_by_existing_worker_path(self) -> None:
         audit, _job = await self._create_audit_with_job()
@@ -199,7 +200,7 @@ class AuditExecutionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary.jobs_executed, 1)
         self.assertEqual(summary.error_count, 1)
         assert raw_response is not None
-        self.assertEqual(raw_response.error_object["code"], "provider_exception")
+        self.assertEqual(raw_response.error_object["code"], "UNKNOWN_PROVIDER_ERROR")
         self.assertNotIn("sk-hidden", raw_response.error_object["message"])
 
     async def test_execution_summary_reports_job_factory_errors_safely(self) -> None:

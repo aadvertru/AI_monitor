@@ -8,6 +8,7 @@ import { getAuditResults } from "../../lib/api/client";
 import type { AuditResultRow, RunStatus } from "../../lib/api/types";
 import { AuditBreadcrumbs } from "./AuditBreadcrumbs";
 import { AuditViewTabs } from "./AuditViewTabs";
+import { ProviderIssueText } from "./ProviderDiagnostics";
 import { RunStatusBadge } from "./RunStatusBadge";
 
 type VisibilityFilter = "all" | "visible" | "not_visible" | "unknown";
@@ -221,6 +222,7 @@ export function AuditResultsPage() {
                       {row.error_message ? (
                         <p className="mt-1 text-xs text-red-700">{row.error_message}</p>
                       ) : null}
+                      <ProviderIssueText diagnostic={row.provider_error} />
                     </td>
                     <td className="px-3 py-3 text-subtle">{row.provider}</td>
                     <td className="px-3 py-3 text-subtle">#{row.run_number}</td>

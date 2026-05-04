@@ -5,9 +5,37 @@ from __future__ import annotations
 from typing import Literal
 
 from libs.execution.provider_adapter import BaseProviderAdapter, ProviderResponse
+from libs.execution.provider_errors import (
+    configuration_error,
+    empty_response_error,
+    invalid_response_error,
+    provider_request_failed_error,
+    rate_limit_error,
+    timeout_error,
+    unknown_provider_error,
+    unsupported_l2_error,
+)
 
-MockProviderMode = Literal["success", "error", "empty"]
-ALLOWED_MOCK_MODES = frozenset({"success", "error", "empty"})
+MockProviderMode = Literal[
+    "success",
+    "error",
+    "empty",
+    "invalid_response",
+    "timeout",
+    "rate_limited",
+    "unsupported_l2",
+]
+ALLOWED_MOCK_MODES = frozenset(
+    {
+        "success",
+        "error",
+        "empty",
+        "invalid_response",
+        "timeout",
+        "rate_limited",
+        "unsupported_l2",
+    }
+)
 
 
 class MockProviderAdapter(BaseProviderAdapter):
@@ -43,11 +71,11 @@ class MockProviderAdapter(BaseProviderAdapter):
 
             if mode == "empty":
                 return ProviderResponse(
-                    status="success",
-                    raw_answer="",
-                    citations=[],
+                    status="error",
+                    raw_answer=None,
+                    citations=None,
                     response_time=0.111,
-                    error=None,
+                    error=empty_response_error("mock").to_error_dict(),
                     provider_metadata={"provider": "mock", "mode": "empty"},
                 )
 
@@ -57,8 +85,48 @@ class MockProviderAdapter(BaseProviderAdapter):
                     raw_answer=None,
                     citations=None,
                     response_time=0.111,
-                    error={"code": "mock_error", "message": "Deterministic mock error."},
+                    error=provider_request_failed_error("mock").to_error_dict(),
                     provider_metadata={"provider": "mock", "mode": "error"},
+                )
+
+            if mode == "invalid_response":
+                return ProviderResponse(
+                    status="error",
+                    raw_answer=None,
+                    citations=None,
+                    response_time=0.111,
+                    error=invalid_response_error("mock").to_error_dict(),
+                    provider_metadata={"provider": "mock", "mode": "invalid_response"},
+                )
+
+            if mode == "timeout":
+                return ProviderResponse(
+                    status="timeout",
+                    raw_answer=None,
+                    citations=None,
+                    response_time=0.111,
+                    error=timeout_error("mock").to_error_dict(),
+                    provider_metadata={"provider": "mock", "mode": "timeout"},
+                )
+
+            if mode == "rate_limited":
+                return ProviderResponse(
+                    status="rate_limited",
+                    raw_answer=None,
+                    citations=None,
+                    response_time=0.111,
+                    error=rate_limit_error("mock").to_error_dict(),
+                    provider_metadata={"provider": "mock", "mode": "rate_limited"},
+                )
+
+            if mode == "unsupported_l2":
+                return ProviderResponse(
+                    status="error",
+                    raw_answer=None,
+                    citations=None,
+                    response_time=0.111,
+                    error=unsupported_l2_error("mock").to_error_dict(),
+                    provider_metadata={"provider": "mock", "mode": "unsupported_l2"},
                 )
 
             return ProviderResponse(
@@ -66,22 +134,16 @@ class MockProviderAdapter(BaseProviderAdapter):
                 raw_answer=None,
                 citations=None,
                 response_time=0.111,
-                error={
-                    "code": "mock_invalid_mode",
-                    "message": f"Unsupported mock mode: {mode}",
-                },
+                error=configuration_error("mock").to_error_dict(),
                 provider_metadata={"provider": "mock", "mode": str(mode)},
             )
-        except Exception as exc:
+        except Exception:
             return ProviderResponse(
                 status="error",
                 raw_answer=None,
                 citations=None,
                 response_time=0.111,
-                error={
-                    "code": "mock_internal_error",
-                    "message": f"Mock provider failed: {exc}",
-                },
+                error=unknown_provider_error("mock").to_error_dict(),
                 provider_metadata={"provider": "mock", "mode": str(mode)},
             )
 

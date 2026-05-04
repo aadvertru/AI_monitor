@@ -1,1812 +1,2162 @@
-# TASKS.md
+# TASKS_PHASE_K.md
 
-# Phase J — Seed Query Generation
+# Phase K — OpenAI Stabilization + Provider Diagnostics
 
-This phase adds controlled AI-assisted seed query generation for SCDL audits.
+Phase goal:
 
-Core product decision:
+Stabilize the OpenAI real-provider path before adding Anthropic/Claude.
 
-- Seed query generation is optional.
-- Manual seed query input remains supported.
-- The user must always be able to review, edit, remove, and manually add queries before running an audit.
-- Generated seed queries are suggestions, not automatically persisted audit input.
-- Backend remains the source of truth for validation, limits, ownership, scoring, aggregation, and safe response contracts.
-- Frontend may provide UX validation and defensive soft deduplication, but backend must enforce final validation.
-- Seed query generation must work from unsaved form state on the create audit page.
+This phase should make OpenAI the baseline real provider for the SCDL audit pipeline:
 
-Global implementation constraints:
+```text
+create audit
+→ generate or manually enter typed seed queries
+→ save audit
+→ click Start audit
+→ backend runs full pipeline
+→ UI polls status
+→ terminal status appears
+→ summary/results/sources render
+```
 
-- Do not fix unrelated legacy failures inside feature tasks.
-- Run task-scoped tests.
-- Run ruff/typecheck only for touched files or according to the existing project convention.
-- Do not modify unrelated parser/scoring behavior unless the task explicitly requires it.
-- Do not expose raw AI prompts, raw provider responses, API keys, or secrets in frontend responses.
-- Do not call `/dev/...` endpoints from normal frontend code.
-- Do not make seed query generation part of the audit pipeline.
-- Do not automatically run an audit after generating seed queries.
-- Do not require an audit id for seed query suggestion generation.
-- Do not persist generated suggestions before explicit user confirmation/save.
+No CLI post-processing should be required after the user clicks Start audit.
+
+Claude/Anthropic must not be implemented in Phase K.
 
 ---
 
-# Phase J1 — Generation MVP
+## Phase K Task Order
 
-J1 goal:
-
-The user can generate 10 typed seed query suggestions from current form-state brand domain and/or brand description, review/edit/delete them, deduplicate them, keep the total query count within 20, and persist only the final confirmed query list.
-
-Generation must support both:
-
-- create audit page, where the audit may not exist yet
-- edit audit page, where the audit may already exist
-
-For this reason, generation uses a draft-safe suggestion endpoint that accepts current form values instead of reading only persisted audit data.
+```text
+TASK-K175 — Document provider contract
+TASK-K176 — Add OpenAI one-click verification checklist
+TASK-K177 — Run checklist and capture actual issues
+TASK-K178 — Normalize provider error model
+TASK-K179 — Add provider diagnostics to API
+TASK-K180 — Add provider diagnostics UI
+TASK-K181 — Add provider parity checklist
+TASK-K182 — Stabilize OpenAI one-click happy path based on captured issues
+TASK-K183 — Finalize OpenAI provider baseline and Claude readiness decision
+```
 
 ---
 
-## TASK-J160 — Define Seed Query Generation Contract
+# Global Rules for Phase K
 
-### Goal
-
-Document the backend/frontend contract for seed query generation before implementation.
-
-The contract must define:
-
-- generation input payload
-- generation response shape
-- fixed seed query types
-- limits
-- sync behavior
-- persistence rules
-- domain/description priority rules
-- deduplication responsibilities
-- provider/config behavior
-- backward compatibility rules for manual/legacy queries
-- non-goals
-
-### Suggested documentation location
-
-Add a new document:
-
-```text
-docs/SEED_QUERY_GENERATION.md
-```
-
-or update existing project documentation if that is the current convention:
-
-```text
-docs/PRODUCT_SPEC.md
-docs/ARCHITECTURE.md
-docs/TASKS.md
-```
-
-### Endpoint
-
-Use a draft-safe endpoint:
-
-```http
-POST /audit-seed-query-suggestions
-```
-
-Do not use an audit-id-only endpoint for the MVP generation flow.
-
-Rationale:
-
-- On the create audit page, the audit may not exist yet.
-- Brand domain and description may exist only in unsaved form state.
-- The generation request must use the current visible form values, not stale persisted audit values.
-
-### Request payload
-
-```json
-{
-  "brand_name": "Seopaja",
-  "brand_domain": "seopaja.fi",
-  "brand_description": "SEO services for small businesses in Finland",
-  "use_domain": true,
-  "use_description": true,
-  "count": 10,
-  "existing_queries": [
-    {
-      "text": "What is Seopaja?",
-      "type": "brand_direct",
-      "source": "user"
-    }
-  ]
-}
-```
-
-### Response payload
-
-```json
-{
-  "suggestions": [
-    {
-      "text": "Best SEO agencies for small businesses in Finland",
-      "type": "category_discovery",
-      "source": "ai"
-    }
-  ],
-  "skipped_duplicates": 1,
-  "skipped_limit": 0,
-  "warnings": [
-    "1 duplicate query was skipped."
-  ]
-}
-```
-
-### Fixed seed query types
-
-```text
-brand_direct
-category_discovery
-recommendation
-comparison
-alternative
-problem_solution
-```
-
-### Limits
-
-```text
-default generated count: 10
-max generated count per request: 10
-max total seed queries per audit/form: 20
-count > 10: reject with 422 Unprocessable Entity
-```
-
-### Deduplication responsibilities
-
-Backend must:
-
-- validate incoming `existing_queries`
-- deduplicate generated suggestions internally
-- deduplicate generated suggestions against `existing_queries`
-- enforce available slots based on max total count of 20
-- return skipped duplicate/limit counts and warnings
-- filter invalid/empty/unknown-type provider suggestions
-
-Frontend must:
-
-- pass the current visible form query list as `existing_queries`
-- defensively deduplicate returned suggestions before appending
-- show returned warnings
-- keep total visible query count at or below 20
-
-### Required rules
-
-- Generation is optional.
-- Manual seed query input remains supported.
-- Generation is synchronous for the MVP.
-- Generated suggestions are not persisted automatically.
-- Suggestions are persisted only after user confirmation/save.
-- Description is the primary signal when available.
-- Domain is a weak signal.
-- If both domain and description are selected, description takes priority.
-- Domain may be used for disambiguation, brand identity, and niche hints.
-- Domain must not override clear brand description context.
-- Backend and frontend must both protect against duplicate/invalid suggestions.
-
-### Provider/config behavior
-
-For MVP:
-
-```text
-Seed query generation uses OpenAI only when generation is enabled and OpenAI configuration is available.
-SEED_QUERY_GENERATION_ENABLED=false returns 503 Service Unavailable.
-Production/OpenAI mode with missing OpenAI config returns 503 Service Unavailable.
-Deterministic mock suggestions are allowed only in explicit mock/dev/test mode.
-```
-
-Add or document config settings if they do not already exist:
-
-```text
-SEED_QUERY_GENERATION_ENABLED=true
-SEED_QUERY_GENERATION_PROVIDER=openai
-SEED_QUERY_GENERATION_MODEL=gpt-4.1-mini
-SEED_QUERY_GENERATION_TIMEOUT_SECONDS=30
-```
-
-Use existing project configuration conventions if equivalent settings already exist.
-
-### Backward compatibility
-
-For final saved seed queries:
-
-```text
-seed_query_items:
-- new canonical typed field for final saved seed queries
-- each item carries text/type/source
-
-seed_queries:
-- legacy plain-text list kept for backward compatibility
-- derived from seed_query_items in detail responses
-- accepted in create/update requests for legacy clients
-
-If both seed_queries and seed_query_items are provided in the same create/update request:
-- return 422 Unprocessable Entity
-- do not guess which field is authoritative
-
-source:
-- optional in incoming save payload
-- defaults to "user" if omitted
-
-type:
-- required when source = "ai"
-- optional/nullable when source = "user"
-```
-
-Legacy/manual seed queries must not break.
-
-Detail/list responses may temporarily expose both:
-
-```json
-{
-  "seed_queries": ["What is Seopaja?"],
-  "seed_query_items": [
-    {
-      "text": "What is Seopaja?",
-      "type": "brand_direct",
-      "source": "ai"
-    }
-  ]
-}
-```
-
-`seed_query_items` is canonical. `seed_queries` is compatibility output.
-
-### Acceptance criteria
-
-- The generation contract is documented.
-- The draft-safe endpoint is documented.
-- Request payload includes current brand form data and `existing_queries`.
-- Response payload includes suggestions and warning metadata.
-- Allowed query types are documented.
-- Sync generation behavior is explicit.
-- Persistence rule is explicit: generated suggestions are not saved before user confirmation.
-- Limits are explicit.
-- `count > 10` returns 422.
-- Domain/description priority is explicit.
-- Backend/frontend deduplication responsibilities are explicit.
-- Provider/config behavior is explicit.
-- Backward compatibility rules are explicit.
-- `seed_query_items` is documented as the canonical save/detail field.
-- Sending both `seed_queries` and `seed_query_items` in one save request is documented as 422.
-
-### Non-goals
-
-- No async job system.
-- No query generation history.
-- No automatic audit run after generation.
-- No scoring changes in this task.
-- No audit-id-only generation endpoint for MVP.
+- Do not add Claude/Anthropic.
+- Do not change parser/scoring unless explicitly required by a task.
+- Do not fix unrelated legacy failures.
+- Do not expose raw provider responses, raw prompts, stack traces, request headers, API keys, or secrets.
+- No real provider calls in CI.
+- Use mock providers for automated tests.
+- Real OpenAI verification must be manual/dev-only.
+- Frontend must never call provider APIs directly.
+- Backend remains the source of truth for provider execution, normalization, diagnostics, parser input, scoring input, and safety.
+- Normal frontend code must not call `/dev/...` endpoints.
+- Keep changes task-scoped.
 
 ---
 
-## TASK-J161 — Add Seed Query Type and Source Model Support
+# TASK-K175 — Document Provider Contract
 
-### Goal
+## Goal
 
-Add fixed seed query typing and minimal provenance support without breaking manual or legacy seed query flows.
+Add or confirm a compact, practical provider contract document that defines the normalized interface for real and mock AI providers used by the SCDL audit pipeline.
 
-### Required enums
+This task is documentation-only. Do not change runtime code.
 
-Add a fixed seed query type enum:
+If `docs/PROVIDER_CONTRACT.md` already exists and matches the requirements below, treat this task as completed after a short review/alignment pass.
+
+## File
+
+```text
+docs/PROVIDER_CONTRACT.md
+```
+
+## Requirements
+
+The document must define:
+
+1. Core provider principles
+2. SCDL level behavior:
+   - `L1 = AI answer without web access`
+   - `L2 = AI answer with web access`
+3. Normalized provider input shape
+4. Normalized provider output shape
+5. Normalized source/citation shape
+6. Normalized usage metadata shape
+7. Normalized provider error model
+8. L1/L2 behavior rules
+9. Provider configuration rules
+10. Raw response handling rules
+11. Logging and diagnostics rules
+12. API/frontend diagnostics rules
+13. Testing rules
+14. Provider parity checklist
+15. Rules for adding a new provider
+
+## Acceptance criteria
+
+- `docs/PROVIDER_CONTRACT.md` exists.
+- Document is compact and practical.
+- It defines normalized provider input/output/error/usage/source shapes.
+- It defines L1/L2 behavior.
+- It defines safe frontend diagnostics rules.
+- It defines raw response safety rules.
+- It defines CI/testing rules.
+- It includes provider parity checklist.
+- It explicitly says Anthropic/Claude is future work, not part of this task.
+- No runtime code is changed.
+
+## Non-goals
+
+- Do not implement provider error model yet.
+- Do not change OpenAI adapter.
+- Do not change mock provider.
+- Do not add Claude/Anthropic.
+- Do not change frontend.
+- Do not change audit pipeline.
+- Do not change parser/scoring.
+
+---
+
+# TASK-K176 — Add OpenAI One-Click Verification Checklist
+
+## Goal
+
+Create a practical manual QA checklist for verifying that the OpenAI audit flow works end-to-end from UI without CLI/manual post-processing.
+
+This task is documentation-only. Do not change runtime code.
+
+## File to create
+
+```text
+docs/OPENAI_ONE_CLICK_VERIFICATION.md
+```
+
+## What “one-click” means
+
+The user should be able to complete this flow from UI:
+
+```text
+login/register
+→ create audit
+→ fill brand fields
+→ generate or manually enter typed seed queries
+→ save audit
+→ click Start audit
+→ backend runs full pipeline
+→ UI polls status
+→ terminal status appears
+→ summary/results/sources are visible
+```
+
+No CLI commands should be required after clicking Start audit.
+
+No manual post-processing should be required.
+
+## Required checklist structure
+
+Each scenario should use this format:
+
+```markdown
+## K176-S01 — Scenario title
+
+### Purpose
+What this scenario verifies.
+
+### Preconditions
+- Backend state/config required.
+- Frontend state required.
+- User/account requirements.
+- Provider/env requirements.
+
+### Steps
+1. Step one.
+2. Step two.
+3. Step three.
+
+### Expected result
+- Expected UI result.
+- Expected backend/API behavior if observable.
+- Expected audit status.
+- Expected safety/security behavior.
+
+### Failure notes
+- What to record if the scenario fails.
+```
+
+## Required scenarios
+
+### K176-S01 — Mock L1 one-click audit
+
+Verify complete UI-to-pipeline flow without real provider dependency.
+
+Must cover:
+
+```text
+create audit
+manual seed query or generated query
+SCDL L1
+provider mock
+Start audit from UI
+polling
+terminal status
+summary/results visible
+```
+
+Expected:
+
+```text
+audit reaches completed or known valid terminal status
+no CLI required
+summary/results render
+no raw provider response exposed
+```
+
+### K176-S02 — OpenAI L1 one-click audit
+
+Verify real OpenAI L1 provider path.
+
+Expected:
+
+```text
+OpenAI answer is saved
+post-processing runs automatically
+parsed/scored result appears
+audit reaches completed/partial according to current status semantics
+no web citations expected for L1
+no raw provider response exposed to normal UI
+```
+
+### K176-S03 — OpenAI L2 one-click audit
+
+Verify OpenAI L2 web-enabled path.
+
+Expected:
+
+```text
+web-enabled provider path is used
+audit reaches completed/partial according to current status semantics
+summary/results render
+sources/citations render if provider returns them
+safe empty state if no sources returned
+no raw provider response exposed
+```
+
+### K176-S04 — Typed seed queries survive save/reload/run
+
+Verify that typed seed query data is preserved and used by pipeline.
+
+Expected:
+
+```text
+query text persists
+query type persists for generated typed queries
+source persists as ai for generated queries even after text edit
+manual query persists with source user
+pipeline uses final visible query list
+removed queries are not run
+```
+
+### K176-S05 — Legacy seed_queries compatibility
+
+Verify that old audits or old API payloads using `seed_queries: list[str]` still work.
+
+Expected:
+
+```text
+legacy queries load
+legacy queries are treated as source user
+missing type does not crash UI
+save/reload does not corrupt queries
+pipeline runs successfully
+```
+
+### K176-S06 — Provider disabled error
+
+Precondition example:
+
+```text
+REAL_PROVIDER_ENABLED=false
+PROVIDER_MODE=openai
+```
+
+Expected:
+
+```text
+Start audit does not silently fallback to mock
+audit/run fails or blocks with safe provider diagnostic
+error code should be PROVIDER_DISABLED if implemented
+UI shows safe actionable message
+no raw stack trace
+no secrets
+```
+
+### K176-S07 — Missing OpenAI API key error
+
+Precondition example:
+
+```text
+REAL_PROVIDER_ENABLED=true
+PROVIDER_MODE=openai
+OPENAI_API_KEY unset
+```
+
+Expected:
+
+```text
+Start audit does not silently fallback to mock
+safe provider error is shown or captured
+error code should be NO_API_KEY if implemented
+no raw env/config dump
+no secrets
+```
+
+### K176-S08 — Caps / guardrails behavior
+
+Precondition example:
+
+```text
+REAL_PROVIDER_MAX_PROVIDERS=1
+REAL_PROVIDER_MAX_QUERIES=1
+REAL_PROVIDER_MAX_RUNS_PER_QUERY=1
+REAL_PROVIDER_MAX_TOTAL_RUNS=1
+```
+
+Expected:
+
+```text
+backend enforces cap
+provider is not called for excess runs
+UI shows safe message or audit becomes partial according to current semantics
+no silent overrun
+```
+
+### K176-S09 — Polling and terminal refetch
+
+Verify frontend polling behavior after Start audit.
+
+Expected:
+
+```text
+polling stops on completed/partial/failed
+summary is not stale
+results are not stale
+sources are not stale
+Start button state is correct after terminal status
+```
+
+### K176-S10 — Provider timeout / forced provider failure
+
+Use safest available method:
+
+```text
+very low OPENAI_REQUEST_TIMEOUT_SECONDS
+mock provider forced failure
+or invalid model if timeout is hard to force
+```
+
+Expected:
+
+```text
+safe provider error is recorded
+audit reaches failed or partial according to current status semantics
+UI displays safe error
+no raw provider response
+no stack trace
+no secrets
+```
+
+### K176-S11 — Mobile one-click flow smoke test
+
+Expected:
+
+```text
+no hidden hover-only controls required
+Start audit is accessible
+seed query rows are editable/removable
+status and diagnostics are readable
+```
+
+### K176-S12 — Old mock Query expansion control is gone
+
+Expected:
+
+```text
+only one seed query generation control is visible
+no "Query expansion · 15 tokens" mock control remains
+generation calls backend endpoint
+no fake token-cost UI is shown
+```
+
+## Required result table
+
+At the end of the checklist, include a result table:
+
+```markdown
+| Scenario | Status | Notes | Issue ID |
+|---|---|---|---|
+| K176-S01 | Not run |  |  |
+| K176-S02 | Not run |  |  |
+| K176-S03 | Not run |  |  |
+```
+
+Allowed statuses:
+
+```text
+Not run
+Pass
+Fail
+Blocked
+Partial
+```
+
+## Required issue capture section
+
+Add a section:
+
+```markdown
+# Captured Issues
+```
+
+With this template:
+
+```markdown
+## ISSUE-K176-001 — Short title
+
+### Scenario
+K176-Sxx
+
+### Severity
+Blocker | Major | Minor | Cosmetic
+
+### Actual result
+What happened.
+
+### Expected result
+What should have happened.
+
+### Evidence
+Screenshot/log/API response if available.
+
+### Suggested next step
+Fix now / defer / needs investigation.
+```
+
+## Acceptance criteria
+
+- `docs/OPENAI_ONE_CLICK_VERIFICATION.md` exists.
+- It contains all required scenarios K176-S01 through K176-S12.
+- Each scenario has purpose, preconditions, steps, expected result, and failure notes.
+- It includes a result table.
+- It includes a captured issues template.
+- It clearly states that no CLI/manual post-processing should be required after clicking Start audit.
+- It clearly states that no raw provider responses, raw prompts, stack traces, or secrets should be exposed in normal UI.
+- No runtime code is changed.
+
+## Non-goals
+
+- Do not run the checklist in this task.
+- Do not fix OpenAI bugs in this task.
+- Do not add Claude/Anthropic.
+- Do not change provider adapters.
+- Do not change frontend behavior.
+- Do not change backend runtime code.
+- Do not change scoring/parser logic.
+
+---
+
+# TASK-K177 — Run OpenAI One-Click Verification and Capture Actual Issues
+
+## Goal
+
+Run the manual verification checklist from:
+
+```text
+docs/OPENAI_ONE_CLICK_VERIFICATION.md
+```
+
+Capture actual pass/fail results and create a concrete issue list for stabilization.
+
+This task is primarily verification/documentation. Do not fix bugs unless they are tiny test/setup corrections explicitly required to complete verification.
+
+## Files to update/create
+
+Update:
+
+```text
+docs/OPENAI_ONE_CLICK_VERIFICATION.md
+```
+
+Optional, if the team prefers separate result logs:
+
+```text
+docs/OPENAI_ONE_CLICK_VERIFICATION_RESULTS.md
+```
+
+## Required scenarios to run
+
+Run all scenarios from `docs/OPENAI_ONE_CLICK_VERIFICATION.md`:
+
+```text
+K176-S01 — Mock L1 one-click audit
+K176-S02 — OpenAI L1 one-click audit
+K176-S03 — OpenAI L2 one-click audit
+K176-S04 — Typed seed queries survive save/reload/run
+K176-S05 — Legacy seed_queries compatibility
+K176-S06 — Provider disabled error
+K176-S07 — Missing OpenAI API key error
+K176-S08 — Caps / guardrails behavior
+K176-S09 — Polling and terminal refetch
+K176-S10 — Provider timeout / forced provider failure
+K176-S11 — Mobile one-click flow smoke test
+K176-S12 — Old mock Query expansion control is gone
+```
+
+If a scenario cannot be run, mark it as:
+
+```text
+Blocked
+```
+
+and explain why.
+
+## Issue capture format
+
+For every failed, partial, or blocked scenario, add an issue using this format:
+
+```markdown
+## ISSUE-K177-001 — Short title
+
+### Scenario
+K176-Sxx
+
+### Severity
+Blocker | Major | Minor | Cosmetic
+
+### Actual result
+What happened.
+
+### Expected result
+What should have happened.
+
+### Evidence
+Screenshot/log/API response if available.
+
+### Suggested next step
+Fix now / defer / needs investigation.
+```
+
+## Acceptance criteria
+
+- All K176 scenarios are marked as `Pass`, `Fail`, `Blocked`, or `Partial`.
+- Every non-pass scenario has a captured issue.
+- Issues include severity, actual result, expected result, evidence, and suggested next step.
+- The document clearly states whether OpenAI one-click flow is ready for stabilization or blocked by setup.
+- No secrets/API keys are committed.
+- No runtime code changes are made, unless a tiny setup/doc correction is necessary and explicitly documented.
+- No unrelated bugs are fixed.
+
+## Non-goals
+
+- Do not fix the captured issues in this task.
+- Do not add provider diagnostics yet.
+- Do not add provider parity checklist yet.
+- Do not add Claude/Anthropic.
+- Do not change scoring/parser.
+- Do not change the pipeline design.
+
+---
+
+# TASK-K178 — Normalize Provider Error Model
+
+## Goal
+
+Implement a normalized backend provider error model based on:
+
+```text
+docs/PROVIDER_CONTRACT.md
+```
+
+Provider errors from mock/OpenAI/current provider execution must be converted into safe, structured, frontend-safe error objects.
+
+This task should not add UI diagnostics yet. It prepares the backend error layer for API/UI diagnostics in later tasks.
+
+## Required implementation
+
+### 0. Normalize provider setup and selection failures
+
+Provider failures are not limited to `adapter.query()` exceptions.
+
+Normalize provider-related failures that happen before the provider call as well:
+
+```text
+provider factory errors
+provider disabled/config errors
+missing provider API key
+pilot policy/cap errors
+unsupported provider/mode errors
+unsupported SCDL level errors
+```
+
+These failures must use the same normalized provider error model and must remain safe for API/UI exposure.
+
+### 1. Add normalized error code enum
+
+Add a backend enum equivalent to:
 
 ```python
-class SeedQueryType(str, Enum):
-    brand_direct = "brand_direct"
-    category_discovery = "category_discovery"
-    recommendation = "recommendation"
-    comparison = "comparison"
-    alternative = "alternative"
-    problem_solution = "problem_solution"
+class ProviderErrorCode(str, Enum):
+    PROVIDER_DISABLED = "PROVIDER_DISABLED"
+    NO_API_KEY = "NO_API_KEY"
+    INVALID_API_KEY = "INVALID_API_KEY"
+    INVALID_MODEL = "INVALID_MODEL"
+    UNSUPPORTED_L2 = "UNSUPPORTED_L2"
+    TIMEOUT = "TIMEOUT"
+    RATE_LIMIT = "RATE_LIMIT"
+    EMPTY_RESPONSE = "EMPTY_RESPONSE"
+    INVALID_RESPONSE = "INVALID_RESPONSE"
+    PROVIDER_UNAVAILABLE = "PROVIDER_UNAVAILABLE"
+    PROVIDER_REQUEST_FAILED = "PROVIDER_REQUEST_FAILED"
+    CONFIGURATION_ERROR = "CONFIGURATION_ERROR"
+    UNKNOWN_PROVIDER_ERROR = "UNKNOWN_PROVIDER_ERROR"
 ```
 
-Add a seed query source enum:
+Use the project’s existing enum/schema conventions if they differ.
+
+### 2. Add normalized provider error DTO/model
+
+Add a backend model equivalent to:
 
 ```python
-class SeedQuerySource(str, Enum):
-    user = "user"
-    ai = "ai"
+class NormalizedProviderError(BaseModel):
+    code: ProviderErrorCode
+    message: str
+    provider: str
+    model: str | None = None
+    level: Literal["L1", "L2"] | None = None
+    retryable: bool = False
+    details: dict[str, Any] = Field(default_factory=dict)
 ```
 
-### Required behavior
-
-- Manual queries get `source = "user"` when source is omitted.
-- AI-generated suggestions get `source = "ai"` after the user confirms/saves them.
-- `type` must be valid if provided.
-- Generated/AI queries must always have a valid `type`.
-- Manual queries must remain supported even when they do not have a type.
-- If the current legacy model stores seed queries as strings, extend the schema carefully without breaking existing audit creation/editing flows.
-
-### Storage and migration
-
-Add an Alembic migration in this task.
-
-If seed queries are stored as individual rows, add:
+Rules:
 
 ```text
-queries.query_type nullable
-queries.source not null default "user"
+message must be safe for frontend display
+details must be secret-free
+details must not include raw provider response bodies
+details must not include raw prompts
+details must not include request headers
+details must not include API keys
+details must not include stack traces
 ```
 
-If the project stores seed queries as JSON/list in another table, migrate toward a structure that can store:
+### 3. Add error normalization helpers
 
-```json
-{
-  "text": "What is Seopaja?",
-  "type": "brand_direct",
-  "source": "ai"
-}
-```
+Add helper functions/classes to convert common provider failures to normalized errors.
 
-without breaking existing `list[str]` create/edit flows.
-
-Existing persisted queries become:
-
-```text
-source = "user"
-query_type = null
-```
-
-Do not require a cleanup/backfill migration that invents query types for legacy rows.
-
-### Backward compatibility rules
-
-For incoming final saved seed query payloads:
-
-```text
-seed_query_items is the canonical typed field
-seed_queries remains accepted as a legacy plain-text list
-if both seed_queries and seed_query_items are provided -> 422
-```
-
-```text
-source omitted → default to "user"
-source = "user" → type may be valid enum or null/omitted
-source = "ai" → type is required and must be valid enum
-```
-
-For legacy persisted data:
-
-```text
-missing source → treat as "user"
-missing type → allowed for user/manual/legacy query
-```
-
-### Migration nuance
-
-If existing audits have untyped seed queries, do not break them.
-
-Acceptable options:
-
-- allow nullable `type` for legacy/manual rows
-- default source to `user` when omitted
-- avoid backfilling type unless the project has a clear migration rule
-
-Generated AI queries must not be nullable by contract.
-
-### Important nuance
-
-If the user edits an AI-generated suggestion before saving, `source` remains `ai`.
-
-`source` represents provenance, not legal ownership of the final text.
-
-### Acceptance criteria
-
-- Fixed query type enum exists.
-- Source enum exists.
-- Generated queries can carry `type` and `source`.
-- Alembic migration adds storage support for query type/source.
-- Source defaults to `user` when omitted in final save payloads.
-- Type is required only for `source = "ai"`.
-- Manual queries remain supported with nullable/omitted type.
-- Existing audit creation flow does not break.
-- `seed_query_items` is accepted as canonical input.
-- Legacy `seed_queries: list[str]` input still works.
-- Sending both `seed_queries` and `seed_query_items` returns 422.
-- Existing persisted queries are treated as `source="user"` and `query_type=null`.
-
-### Tests
-
-- Known seed query types are accepted.
-- Unknown seed query type is rejected.
-- Unknown source is rejected.
-- AI-generated query without type is rejected.
-- Manual query with omitted source defaults to `user`.
-- Manual query with omitted type is accepted.
-- Legacy-style query payload still works according to current product behavior.
-- Canonical `seed_query_items` payload saves text/type/source.
-- Sending both legacy and canonical seed query fields is rejected.
-- Migration test verifies query type/source columns and defaults.
-
-### Non-goals
-
-- No scoring logic.
-- No UI diagnostics.
-- No cleanup migration for old query data unless required by the schema change.
-
----
-
-## TASK-J162 — Add Backend Validation for Seed Query Limits
-
-### Goal
-
-Make the backend the source of truth for final saved seed query limits and validity.
-
-### Validation rules
-
-For final saved audit seed queries:
-
-```text
-seed_query_items is the canonical typed save field
-seed_queries remains accepted as a legacy plain-text list
-if both seed_queries and seed_query_items are provided -> 422
-max total seed queries per audit: 20
-query text is required
-query text cannot be whitespace-only
-query type must be valid if provided
-generated/ai query type is required
-query source must be user or ai if provided
-query source defaults to user if omitted
-```
-
-### Recommended text limits
-
-Add reasonable limits if no project-wide limits exist yet:
-
-```text
-min query length: 3 characters after trim
-max query length: 300 characters
-```
-
-Rationale:
-
-300 characters is enough for a realistic AI/search prompt and prevents users from pasting whole paragraphs into seed queries.
-
-### Normalization
-
-Before saving:
-
-```text
-trim leading/trailing whitespace
-collapse excessive internal whitespace if consistent with existing project style
-```
-
-Do not aggressively rewrite user input.
-
-### Backend error behavior
-
-If validation fails, use existing project conventions.
-
-Recommended:
-
-```http
-422 Unprocessable Entity
-```
-
-### Acceptance criteria
-
-- Backend rejects more than 20 seed queries.
-- Backend rejects empty queries.
-- Backend rejects whitespace-only queries.
-- Backend validates query type enum.
-- Backend validates source enum.
-- Backend defaults omitted source to `user`.
-- Backend requires type only when source is `ai`.
-- Backend accepts `seed_query_items` as canonical input.
-- Backend still accepts legacy `seed_queries: list[str]`.
-- Backend rejects requests containing both `seed_queries` and `seed_query_items`.
-- Existing manual seed query flow still works.
-
-### Tests
-
-- 20 queries are accepted.
-- 21 queries are rejected.
-- Empty query is rejected.
-- Whitespace-only query is rejected.
-- Unknown type is rejected.
-- Unknown source is rejected.
-- Omitted source defaults to `user`.
-- Valid manual query without type is accepted.
-- Valid AI-generated query with type is accepted.
-- AI-generated query without type is rejected.
-- Legacy `seed_queries: list[str]` is accepted and stored as user/null type.
-- Canonical `seed_query_items` is accepted and stores text/type/source.
-- Sending both seed query fields returns 422.
-
-### Non-goals
-
-- No AI generation.
-- No frontend work.
-- No scoring changes.
-
----
-
-## TASK-J163 — Add AI Seed Query Generation Service
-
-### Goal
-
-Add a backend service that synchronously generates typed seed query suggestions from current form-state brand domain and/or brand description.
-
-The service must not require an existing audit id.
-
-### Suggested location
-
-Use the existing service layout if one already exists.
-
-Possible location:
-
-```text
-apps/api/services/seed_query_generation.py
-```
-
-### Service input
+Recommended helpers:
 
 ```python
-GenerateSeedQueriesInput(
-    brand_name: str | None,
-    brand_domain: str | None,
-    brand_description: str | None,
-    use_domain: bool,
-    use_description: bool,
-    count: int = 10,
-    existing_queries: list[SeedQueryDraft] = [],
-)
+provider_disabled_error(provider: str, model: str | None, level: str | None) -> NormalizedProviderError
+no_api_key_error(provider: str, model: str | None, level: str | None) -> NormalizedProviderError
+invalid_model_error(provider: str, model: str | None, level: str | None) -> NormalizedProviderError
+unsupported_l2_error(provider: str, model: str | None) -> NormalizedProviderError
+timeout_error(provider: str, model: str | None, level: str | None) -> NormalizedProviderError
+rate_limit_error(provider: str, model: str | None, level: str | None) -> NormalizedProviderError
+empty_response_error(provider: str, model: str | None, level: str | None) -> NormalizedProviderError
+invalid_response_error(provider: str, model: str | None, level: str | None) -> NormalizedProviderError
+provider_request_failed_error(provider: str, model: str | None, level: str | None) -> NormalizedProviderError
+unknown_provider_error(provider: str, model: str | None, level: str | None) -> NormalizedProviderError
 ```
 
-### Service output
+Exact structure may vary, but the mapping layer should be explicit and reusable.
+
+### 4. Map existing provider statuses/errors
+
+If current provider response uses statuses like:
 
 ```python
-GeneratedSeedQueriesResult(
-    suggestions=[
-        GeneratedSeedQuerySuggestion(
-            text="Best SEO agencies in Finland",
-            type="category_discovery",
-            source="ai",
-        )
-    ],
-    skipped_duplicates=1,
-    skipped_limit=0,
-    warnings=["1 duplicate query was skipped."],
-)
+ProviderStatus = Literal["success", "error", "timeout", "rate_limited"]
 ```
 
-### Input validation
-
-- `count` defaults to 10.
-- `count` max is 10.
-- `count > 10` is rejected with 422 Unprocessable Entity.
-- At least one of `use_domain` or `use_description` must be true.
-- If `use_domain = true`, `brand_domain` must be present and valid.
-- If `use_description = true`, `brand_description` must be present and non-empty.
-- `existing_queries` must be normalized/validated enough to support deduplication and limit checks.
-- If `existing_queries` already has 20 or more valid queries, return no suggestions and a soft warning.
-
-### Domain/description priority rules
-
-If `use_description = true`:
+Map them as follows:
 
 ```text
-Brand description is the primary semantic signal.
+timeout      -> TIMEOUT
+rate_limited -> RATE_LIMIT
+error        -> PROVIDER_REQUEST_FAILED or more specific code if available
+success with empty/blank raw_answer -> EMPTY_RESPONSE
+invalid/unparseable provider response -> INVALID_RESPONSE
 ```
 
-If both domain and description are selected:
+If existing error dict already contains a known code, preserve it only if it is in `ProviderErrorCode`.
+
+Otherwise map to `PROVIDER_REQUEST_FAILED` or `UNKNOWN_PROVIDER_ERROR`.
+
+### 5. Normalize OpenAI adapter errors
+
+Update OpenAI provider adapter error handling so common failures become normalized errors.
+
+Minimum expected mapping:
 
 ```text
-Use domain only for disambiguation, brand identity, and niche hints.
-Do not overfit generated queries to the domain string.
-Do not let domain override clear description context.
+missing OPENAI_API_KEY      -> NO_API_KEY
+provider disabled/config off -> PROVIDER_DISABLED
+timeout                     -> TIMEOUT
+rate limit                  -> RATE_LIMIT
+invalid model/config         -> INVALID_MODEL or CONFIGURATION_ERROR
+empty answer                 -> EMPTY_RESPONSE
+invalid response shape       -> INVALID_RESPONSE
+other provider request error -> PROVIDER_REQUEST_FAILED
+unknown exception            -> UNKNOWN_PROVIDER_ERROR
 ```
 
-If only domain is selected:
+Do not leak OpenAI raw error payloads to frontend-safe error fields.
+
+### 6. Normalize mock adapter errors
+
+Mock provider should be able to produce deterministic normalized failures for tests.
+
+Examples:
 
 ```text
-Generate conservative suggestions based only on the domain and brand name.
-Do not infer unsupported product claims.
+mock timeout -> TIMEOUT
+mock rate limit -> RATE_LIMIT
+mock empty response -> EMPTY_RESPONSE
+mock unsupported L2 -> UNSUPPORTED_L2
 ```
 
-### Required AI output schema
+Do not break existing deterministic mock success behavior.
 
-The provider must be prompted to return JSON matching this shape:
+### 7. Keep API shape changes minimal
 
-```json
-{
-  "queries": [
-    {
-      "text": "string",
-      "type": "brand_direct"
-    }
-  ]
-}
-```
+This task is backend error model preparation.
 
-Allowed `type` values:
+Do not redesign public API response DTOs yet unless required internally.
+
+Detailed API exposure is for:
 
 ```text
-brand_direct
-category_discovery
-recommendation
-comparison
-alternative
-problem_solution
+TASK-K179 — Add provider diagnostics to API
 ```
 
-### Provider output validation
+However, internal models should be ready for API exposure.
 
-After receiving provider output:
+## Safety requirements
 
-- parse JSON strictly
-- reject/handle output if top-level object is invalid
-- require top-level `queries` array
-- reject item if `text` is missing, empty, or whitespace-only
-- reject item if `type` is not in enum
-- trim text
-- normalize text for deduplication
-- deduplicate generated suggestions internally
-- deduplicate generated suggestions against `existing_queries`
-- enforce available slots based on max total count of 20
-- return fewer than `count` suggestions if validation/dedup/limit removes items
-- return safe warnings when fewer suggestions are returned
-
-### Prompt constraints
-
-The prompt must require:
-
-- JSON-only output
-- exactly `count` items if possible
-- fixed query types only
-- no markdown
-- no explanations
-- no duplicate or near-duplicate queries
-- realistic user prompts
-- not only branded queries
-- multiple intent coverage
-
-### Recommended distribution for 10 generated queries
+Normalized provider errors must not include:
 
 ```text
-brand_direct: 1
-category_discovery: 2
-recommendation: 2
-comparison: 2
-alternative: 1
-problem_solution: 2
+API keys
+authorization headers
+request headers
+raw prompts
+raw provider responses
+stack traces
+environment dumps
+full exception repr if it contains sensitive data
 ```
 
-This does not need to be mathematically rigid, but the prompt should request this coverage.
+## Tests to add/update
 
-### Provider/API rules
+Add task-scoped backend tests.
 
-- Use the existing provider/config infrastructure if available.
-- If a separate generation provider does not exist yet, the MVP may use the existing OpenAI Responses API integration.
-- Do not use Chat Completions unless the project has explicitly changed the provider decision.
-- Do not expose raw prompts or raw provider responses to frontend responses.
-- Do not log secrets.
+### Unit tests for error DTO/helpers
 
-### Provider/config behavior
-
-For MVP:
+Test:
 
 ```text
-Seed query generation uses OpenAI only when generation is enabled and OpenAI configuration is available.
-SEED_QUERY_GENERATION_ENABLED=false returns 503 Service Unavailable.
-Production/OpenAI mode with missing OpenAI config returns 503 Service Unavailable.
-Deterministic mock suggestions are allowed only in explicit mock/dev/test mode.
+each ProviderErrorCode exists
+helper returns expected code/message/provider/retryable
+details are optional and default to {}
+serialization is JSON-safe
 ```
 
-Add or document config settings if they do not already exist:
+### Provider status mapping tests
+
+Test:
 
 ```text
-SEED_QUERY_GENERATION_ENABLED=true
-SEED_QUERY_GENERATION_PROVIDER=openai
-SEED_QUERY_GENERATION_MODEL=gpt-4.1-mini
-SEED_QUERY_GENERATION_TIMEOUT_SECONDS=30
+timeout status -> TIMEOUT
+rate_limited status -> RATE_LIMIT
+generic error status -> PROVIDER_REQUEST_FAILED
+success with empty answer -> EMPTY_RESPONSE
+unknown error code -> PROVIDER_REQUEST_FAILED or UNKNOWN_PROVIDER_ERROR
 ```
 
-Use existing project configuration conventions if equivalent settings already exist.
+### OpenAI adapter error tests
 
-### Safe failure behavior
+Mock the OpenAI client; do not make real calls.
 
-If provider output is invalid or unavailable, handle it safely.
-
-Preferred service-level result:
-
-```json
-{
-  "suggestions": [],
-  "skipped_duplicates": 0,
-  "skipped_limit": 0,
-  "warnings": ["Seed query generation is currently unavailable."]
-}
-```
-
-or raise a safe application error according to existing project conventions.
-
-### Acceptance criteria
-
-- Service accepts current form-state domain, description, or both.
-- Service does not require an existing audit id.
-- Service accepts `existing_queries`.
-- Service returns typed suggestions.
-- Service validates strict provider JSON output.
-- Service filters invalid/empty/unknown-type items.
-- Service deduplicates generated suggestions internally.
-- Service deduplicates against `existing_queries`.
-- Service enforces max total query count of 20.
-- Service does not persist suggestions.
-- Service handles invalid provider output safely.
-- Service does not leak raw prompts, raw provider responses, or secrets.
-
-### Tests
-
-Use a mocked provider.
-
-- Valid provider JSON returns structured suggestions.
-- Invalid JSON is handled safely.
-- Missing top-level `queries` is handled safely.
-- Missing query text is filtered/rejected safely.
-- Unknown query type is filtered/rejected safely.
-- Duplicate provider suggestions are deduplicated.
-- Duplicate suggestions against `existing_queries` are skipped.
-- Existing query count near 20 limits returned suggestions.
-- Provider timeout/error is handled safely.
-- Generated suggestions are not persisted.
-
-### Non-goals
-
-- No frontend.
-- No API endpoint.
-- No async job.
-- No scoring.
-
----
-
-## TASK-J164 — Add Draft-Safe Seed Query Suggestion API Endpoint
-
-### Goal
-
-Add an authenticated draft-safe endpoint for synchronous seed query suggestion generation.
-
-This endpoint must work before an audit exists.
-
-### Endpoint
-
-```http
-POST /audit-seed-query-suggestions
-```
-
-### Request payload
-
-```json
-{
-  "brand_name": "Seopaja",
-  "brand_domain": "seopaja.fi",
-  "brand_description": "SEO services for small businesses in Finland",
-  "use_domain": true,
-  "use_description": true,
-  "count": 10,
-  "existing_queries": [
-    {
-      "text": "What is Seopaja?",
-      "type": "brand_direct",
-      "source": "user"
-    }
-  ]
-}
-```
-
-### Response payload
-
-```json
-{
-  "suggestions": [
-    {
-      "text": "Best SEO agencies for small businesses in Finland",
-      "type": "category_discovery",
-      "source": "ai"
-    }
-  ],
-  "skipped_duplicates": 1,
-  "skipped_limit": 0,
-  "warnings": [
-    "1 duplicate query was skipped."
-  ]
-}
-```
-
-### Validation
-
-- User must be authenticated.
-- `count` defaults to 10.
-- `count` max is 10.
-- `count > 10` returns 422 Unprocessable Entity.
-- At least one of `use_domain` or `use_description` must be true.
-- If `use_domain = true`, `brand_domain` must be present and valid.
-- If `use_description = true`, `brand_description` must be present and non-empty.
-- `existing_queries` must be accepted from current form state.
-- If `existing_queries` already has 20 or more valid queries, return no suggestions and a soft warning.
-- If brand domain validation exists elsewhere, reuse the same validation rules.
-
-### Ownership/security nuance
-
-This endpoint does not take `audit_id`, so audit ownership cannot be checked.
-
-It still must:
-
-- require authentication
-- avoid exposing raw prompts/provider responses/secrets
-- avoid persisting suggestions
-- validate input strictly
-- apply provider/cost guardrails
-
-If the product later adds an audit-specific generation endpoint, that endpoint must enforce audit ownership.
-
-### Provider/config behavior
+Test:
 
 ```text
-SEED_QUERY_GENERATION_ENABLED=false -> 503
-PROVIDER_MODE=openai or SEED_QUERY_GENERATION_PROVIDER=openai without OpenAI config -> 503
-PROVIDER_MODE=mock or SEED_QUERY_GENERATION_PROVIDER=mock -> deterministic mock suggestions allowed for dev/test
+missing key -> NO_API_KEY
+timeout exception -> TIMEOUT
+rate limit exception -> RATE_LIMIT
+invalid model/config -> INVALID_MODEL or CONFIGURATION_ERROR
+empty answer -> EMPTY_RESPONSE
+invalid response shape -> INVALID_RESPONSE
+generic OpenAI request failure -> PROVIDER_REQUEST_FAILED
+unknown exception -> UNKNOWN_PROVIDER_ERROR
 ```
 
-### Suggested HTTP behavior
+### Mock provider tests
 
-Use existing project conventions if they differ.
-
-For this phase, `count > 10` is explicitly a `422 Unprocessable Entity`.
-
-Recommended:
+Test deterministic mock failures if the mock provider supports/gets failure modes.
 
 ```text
-401 — unauthenticated
-422 — invalid request
-429 — generation limit/rate limit exceeded, if guardrails exist
-503 — provider not configured or unavailable
+mock timeout -> TIMEOUT
+mock rate limit -> RATE_LIMIT
+mock empty response -> EMPTY_RESPONSE
+mock unsupported L2 -> UNSUPPORTED_L2
 ```
 
-### Persistence rule
+### Safety tests
 
-This endpoint must return suggestions only.
-
-It must not save generated suggestions as final audit seed queries.
-
-### Acceptance criteria
-
-- Endpoint exists.
-- Endpoint enforces auth.
-- Endpoint works without an audit id.
-- Endpoint accepts current form-state brand data.
-- Endpoint accepts `existing_queries`.
-- Endpoint validates inputs.
-- Endpoint returns safe structured suggestions and warning metadata.
-- Endpoint does not persist suggestions.
-- Frontend receives no raw prompt or raw provider response.
-
-### Tests
-
-- Unauthenticated request is rejected.
-- Authenticated request is accepted.
-- No selected source is rejected.
-- Missing selected description is rejected.
-- Missing selected domain is rejected.
-- Invalid domain is rejected when `use_domain=true`.
-- Count above 10 is rejected with 422.
-- Existing query count of 20 returns no suggestions and warning.
-- Suggestions are deduplicated against existing queries.
-- Suggestions are not persisted.
-- Provider error returns a safe response.
-
-### Non-goals
-
-- No audit-id endpoint.
-- No UI.
-- No scoring.
-- No automatic addition to audit.
-- No audit ownership check because no audit id is used.
-
----
-
-## TASK-J165 — Add Frontend API Client Method
-
-### Goal
-
-Add a typed frontend API client method for draft-safe seed query suggestion generation.
-
-### Method
-
-```ts
-generateSeedQuerySuggestions(payload: {
-  brandName?: string | null
-  brandDomain?: string | null
-  brandDescription?: string | null
-  useDomain: boolean
-  useDescription: boolean
-  count?: number
-  existingQueries: SeedQueryDraft[]
-}): Promise<GenerateSeedQuerySuggestionsResponse>
-```
-
-### Types
-
-```ts
-type SeedQueryType =
-  | "brand_direct"
-  | "category_discovery"
-  | "recommendation"
-  | "comparison"
-  | "alternative"
-  | "problem_solution"
-
-type SeedQuerySource = "user" | "ai"
-
-type SeedQueryDraft = {
-  text: string
-  type?: SeedQueryType | null
-  source?: SeedQuerySource
-}
-
-type GeneratedSeedQuerySuggestion = {
-  text: string
-  type: SeedQueryType
-  source: "ai"
-}
-
-type GenerateSeedQuerySuggestionsResponse = {
-  suggestions: GeneratedSeedQuerySuggestion[]
-  skippedDuplicates?: number
-  skippedLimit?: number
-  warnings?: string[]
-}
-```
-
-### Endpoint
-
-```http
-POST /audit-seed-query-suggestions
-```
-
-### Requirements
-
-- Keep naming consistent with existing frontend API client conventions.
-- Do not call `/dev/...`.
-- Do not require audit id.
-- Send current visible form values.
-- Send current visible seed query list as `existingQueries`.
-- Map frontend camelCase fields to the backend snake_case payload.
-- Do not persist suggestions automatically.
-- Do not trigger audit run.
-
-### Acceptance criteria
-
-- API client method exists.
-- Method does not require an audit id.
-- Method sends current brand form data.
-- Method sends `existingQueries`.
-- Types are exported or reused where needed.
-- Errors are handled consistently with existing API client behavior.
-
-### Tests
-
-- API client sends the correct payload.
-- API client calls `/audit-seed-query-suggestions`.
-- API client parses suggestions and warning metadata.
-- API client propagates errors safely.
-
-### Non-goals
-
-- No UI.
-- No scoring.
-
----
-
-## TASK-J166 — Add Controlled Generation UI
-
-### Goal
-
-Add UI for controlled seed query generation based on current form-state brand domain and/or brand description.
-
-### Suggested placement
-
-Place the control near the seed query section on the create/edit audit page.
-
-Replace the old frontend-only mock `Query expansion · 15 tokens` control. There must be only one seed query generation UX.
-
-The UI may be:
-
-- dialog
-- popover
-- inline panel
-- drawer
-
-For the MVP, use a dialog or inline panel unless the existing design system suggests otherwise.
-
-### UI elements
+Test that normalized frontend-safe error serialization does not include obvious sensitive fields:
 
 ```text
-Generate seed queries
-
-[ ] Use brand domain
-[ ] Use brand description
-
-Generate 10 queries
+api_key
+authorization
+headers
+raw_response
+prompt
+stack_trace
+traceback
 ```
 
-Do not show fake token costs in this MVP. Use neutral UI text such as:
-
-```text
-Generate 10 queries
-```
-
-User-facing generation cost/usage limits can be added in a later dedicated task.
-
-### Seed query editor
-
-Replace the seed query textarea with a row-based seed query editor.
-
-MVP row:
-
-```text
-[text input] [type badge/select] [remove button]
-```
-
-Generated suggestions are inserted as rows in the same list as manual queries, not as a separate persisted block.
-
-Manual rows:
-
-```text
-source = user
-type = optional/null unless the user selects a type
-```
-
-Generated rows:
-
-```text
-source = ai
-type = required
-source remains ai even if the user edits the generated text
-```
-
-A bulk paste helper can be added later, but it is not required for the MVP.
-
-### Source values
-
-Use current form state, not only persisted audit data:
-
-```text
-brand_name: current form value
-brand_domain: current form value
-brand_description: current form value
-existing_queries: current visible form query list
-```
-
-### Default selections
-
-- If both domain and description are available in current form state, select both by default.
-- If only description is available, select description by default.
-- If only domain is available, select domain by default.
-- If neither is available, disable the Generate button.
-
-### Loading state
-
-During generation:
-
-```text
-Generate button disabled
-loading spinner or "Generating..."
-form remains stable
-```
-
-### Error state
-
-Show a safe error:
-
-```text
-Could not generate seed queries. Please try again or enter queries manually.
-```
-
-Do not show raw provider output.
-
-### UX rule
-
-Manual input must remain available at all times.
-
-### Acceptance criteria
-
-- User can open controlled generation UI.
-- User can select domain and/or description sources.
-- Old mock Query expansion control is removed or replaced.
-- Seed queries are edited as rows, not as a plain textarea.
-- UI uses current unsaved form values.
-- Generate calls the draft-safe backend endpoint.
-- Loading state works.
-- Error state works.
-- Backend warnings are displayed.
-- No generated query is saved automatically.
-- Manual editing remains possible.
-
-### Tests
-
-- Generation UI opens.
-- Generate is disabled if no source is selected.
-- Generate is disabled if selected source data is unavailable in current form state.
-- Request uses current unsaved form values.
-- Request includes current visible `existingQueries`.
-- Loading state is shown during request.
-- Error is displayed on failed request.
-- Backend warnings are displayed on success.
-- Success response is handed to append logic.
-- Generated suggestions appear as editable seed query rows.
-
-### Non-goals
-
-- No scoring.
-- No coverage UI.
-- No async polling.
-
----
-
-## TASK-J167 — Add Frontend Defensive Deduplication and Append Behavior
-
-### Goal
-
-After generation, add returned suggestions to the end of the current visible seed query list while defensively maintaining deduplication and total limit of 20.
-
-Backend should already deduplicate suggestions, but frontend must still protect the visible form state.
-
-The visible seed query list is the row-based editor introduced in TASK-J166, not the old textarea.
-
-### Deduplication normalization
-
-Compare returned suggestions against the current visible seed query list.
-
-Minimum normalization:
-
-```ts
-query.trim().toLowerCase().replace(/\s+/g, " ")
-```
-
-Optional safe normalization:
-
-```text
-remove trailing punctuation if this does not create false positives
-```
-
-Do not use semantic/AI deduplication in this task.
-
-### Behavior
-
-- Exact normalized duplicate is skipped.
-- Unique generated suggestion is appended to the end as a row with text/type/source.
-- Existing manually entered queries remain unchanged.
-- Existing generated queries remain unchanged.
-- Generated rows keep `source = "ai"` even if the text is edited later.
-- Total visible query count must not exceed 20.
-- If returned suggestions exceed available slots, add only the available number.
-- Show backend warnings.
-- Show frontend defensive warnings if additional duplicates/limit truncation are detected.
-
-### Soft warning examples
-
-```text
-3 duplicate queries were skipped.
-Only 4 queries were added because the audit limit is 20 seed queries.
-```
-
-### Important nuance
-
-Backend is responsible for primary validation/deduplication.
-
-Frontend defensive deduplication is still required because visible form state can change between request start and response.
-
-### Acceptance criteria
-
-- Returned unique suggestions append to the end.
-- Duplicates are skipped defensively.
-- Total query count does not exceed 20.
-- Backend warnings are displayed.
-- Frontend warning appears when duplicates are skipped defensively.
-- Frontend warning appears when max limit prevents adding all returned suggestions.
-- Append behavior does not replace the existing list.
-
-### Tests
-
-- Adds unique suggestions.
-- Skips duplicates.
-- Respects max total count of 20.
-- Appends rather than replaces.
-- Existing manual queries remain unchanged.
-- Displays backend warnings.
-- Displays frontend warning for defensive duplicate skip.
-- Displays frontend warning for defensive limit truncation.
-
-### Non-goals
-
-- No semantic deduplication.
-- No scoring.
-
----
-
-## TASK-J168 — Add Query Type Support in Seed Query UI
-
-### Goal
-
-Display and preserve query type for seed queries.
-
-### UI behavior
-
-For generated queries:
-
-- show a small badge or select with the query type
-- user can edit query text
-- type remains attached when text is edited
-- source remains `ai` when generated text is edited
-- optional: user can change the type through a select
-
-For MVP, a readonly badge is acceptable.
-
-If the existing form structure makes it simple, prefer an editable select.
-
-### User-facing labels
-
-Map internal values to readable labels:
-
-```text
-brand_direct → Brand direct
-category_discovery → Category discovery
-recommendation → Recommendation
-comparison → Comparison
-alternative → Alternative
-problem_solution → Problem-solution
-```
-
-Use enum values in payloads and storage, not labels.
-
-### Manual queries
-
-Preferred behavior:
-
-- manual queries may optionally have a type
-- if a default type is required, use `category_discovery`
-
-Alternative acceptable behavior:
-
-- manual queries may have nullable type if this is required for backward compatibility
-
-### Acceptance criteria
-
-- Generated queries show query type.
-- Type is included when confirmed seed queries are saved.
-- Type persists when query text is edited.
-- Existing manual query UX remains usable.
-- Invalid type cannot be selected from UI.
-- Manual queries remain possible without forcing the user to understand query types.
-
-### Tests
-
-- Generated query displays correct type.
-- Type persists through text edit.
-- Source remains `ai` through text edit.
-- Type is included in save payload.
-- Manual query still works.
-- Invalid type cannot be selected from UI.
-
-### Non-goals
-
-- No scoring.
-- No diagnostics.
-- No weighted score.
-
----
-
-## TASK-J169 — Verify Generation Has No Persistence Side Effects
-
-### Goal
-
-Guarantee through tests and focused code review that AI-generated suggestions are persisted only after the user confirms/saves the final query list.
-
-This is a verification/hardening task, not a new feature task.
-
-### Correct flow
-
-```text
-Generate
-→ backend returns suggestions
-→ frontend deduplicates and appends suggestions to visible form state
-→ user reviews/edits/deletes queries
-→ user saves audit
-→ backend persists the final visible list
-```
-
-### Explicitly forbidden behavior
-
-- Do not save suggestions inside the suggestion endpoint.
-- Do not create audit runs after generation.
-- Do not change audit status after generation.
-- Do not start the audit pipeline after generation.
-- Do not write raw provider response as an audit result.
-- Do not require an audit id for generation.
-
-### Backend verification
-
-Check that:
-
-```http
-POST /audit-seed-query-suggestions
-```
-
-does not write to audit execution/result tables, such as:
-
-```text
-seed_queries
-audit_queries
-audit_runs
-raw_responses
-parsed_results
-scores
-```
-
-or their project-specific equivalents.
-
-### Frontend behavior
-
-Generated suggestions live only in form state before save.
-
-If the user closes the page without saving, generated suggestions are lost.
-
-This is acceptable for the MVP.
-
-If the user edits a generated suggestion before saving, `source` remains `ai`; source is provenance, not a claim that the final text was never edited.
-
-### Acceptance criteria
-
-- Suggestion endpoint is generate-only.
-- Generated suggestions are not persisted before save.
-- Save persists only the final edited visible list.
-- Removed generated suggestions are not persisted.
-- Edited generated suggestions are persisted with `source = "ai"` and their valid query type.
-- Audit status is unchanged by generation.
-- No audit runs are created by generation.
-
-### Tests
-
-Backend:
-
-- Before generation: N seed queries or no audit exists.
-- After suggestion endpoint call: no seed queries are persisted.
-- After user save: final visible list is persisted through the existing save flow.
-- Audit status is unchanged by suggestion generation.
-- Audit runs are not created by suggestion generation.
-
-Frontend:
-
-- Generate without save does not call the save endpoint.
-- User can remove generated suggestion before save.
-- Removed suggestion is not included in final save payload.
-
-### Non-goals
-
-- No draft autosave.
-- No generation history.
-- No async recovery after page refresh.
-
----
-
-## TASK-J170 — Add Backend Tests for Generation Flow
-
-### Goal
-
-Add task-scoped backend tests for the seed query generation flow.
-
-### Required test groups
-
-#### Auth
-
-- unauthenticated user is rejected
-- authenticated user is accepted
-
-#### Payload validation
-
-- `use_domain=false` and `use_description=false` is rejected
-- missing domain is rejected when `use_domain=true`
-- invalid domain is rejected when `use_domain=true`
-- missing description is rejected when `use_description=true`
-- `count=10` is accepted
-- `count>10` is rejected with 422
-- `existing_queries` with 20 valid items returns no suggestions and warning
-
-#### Provider behavior
-
-- valid provider JSON returns suggestions
-- invalid JSON is handled safely
-- missing top-level `queries` is handled safely
-- unknown query type is filtered or rejected safely
-- empty query text is filtered or rejected safely
-- duplicate provider suggestions are deduplicated
-- duplicate suggestions against `existing_queries` are skipped
-- provider error returns a safe error
-- disabled generation returns 503
-- OpenAI mode without required OpenAI config returns 503
-- deterministic mock suggestions work only in explicit mock/dev/test mode
-
-#### Persistence
-
-- generation does not persist suggestions
-- generation does not create runs
-- generation does not change audit status
-- generation works without audit id
-
-#### Safety
-
-- response does not include raw prompt
-- response does not include raw provider response
-- response does not include secrets
-
-### Acceptance criteria
-
+## Acceptance criteria
+
+- `ProviderErrorCode` exists.
+- Normalized provider error DTO/model exists.
+- Reusable error normalization helpers exist.
+- Current provider statuses/errors map to normalized codes.
+- OpenAI common errors normalize to safe provider errors.
+- Mock provider can produce deterministic normalized failure outputs for tests.
+- Empty successful answers become `EMPTY_RESPONSE`.
+- No raw provider response, raw prompt, stack trace, API key, or request headers appear in normalized frontend-safe errors.
 - Task-scoped backend tests pass.
-- No unrelated legacy failures are fixed inside this task.
 - Touched-file ruff passes.
 
-### Non-goals
+## Non-goals
 
-- No full test suite cleanup.
-- No frontend tests.
+- Do not add provider diagnostics UI.
+- Do not expose a new diagnostics block in frontend yet unless required internally.
+- Do not add Claude/Anthropic.
+- Do not redesign provider adapter architecture beyond what is necessary for normalized errors.
+- Do not change parser/scoring behavior.
+- Do not change audit status semantics unless current code cannot represent normalized provider failures.
+- Do not fix unrelated legacy failures.
 
 ---
 
-## TASK-J171 — Add Frontend Tests for Generation Flow
+# TASK-K179 — Add Provider Diagnostics to API
 
-### Goal
+## Goal
 
-Add frontend tests for the seed query generation UI flow.
+Expose normalized provider diagnostics through backend API responses in a safe, structured way.
 
-### Required tests
+This task builds on:
 
-- Generate control appears near the seed query section.
-- User can select domain/description.
-- Generate is disabled when no source is selected.
-- Generate is disabled when selected source data is unavailable in current form state.
-- Generate sends current unsaved brand form values.
-- Generate sends current visible `existingQueries`.
-- Generate shows loading state.
-- Successful generation appends suggestions.
-- Duplicate suggestions are skipped defensively.
-- Max total count of 20 is respected.
-- Backend warnings are displayed.
-- Frontend soft warning appears for defensive duplicates.
-- Frontend soft warning appears for max-limit truncation.
-- User can edit generated query text before saving.
-- Edited generated query keeps `source = "ai"`.
-- User can remove generated query before saving.
-- Save sends the final edited query list.
+```text
+TASK-K178 — Normalize provider error model
+docs/PROVIDER_CONTRACT.md
+```
 
-### Mocking
+The goal is to make provider failures visible to frontend and users without exposing raw provider responses, prompts, stack traces, request headers, API keys, or secrets.
 
-Mock the frontend API client method:
+Do not implement UI rendering in this task. UI work belongs to `TASK-K180`.
+
+## API surfaces to update
+
+Add provider diagnostics where provider execution failures are visible or actionable.
+
+Minimum targets:
+
+```text
+POST /audits/{id}/run-pipeline
+GET /audits/{id}/status
+GET /audits/{id}/results
+GET /audits/{id}/summary
+```
+
+If the project has run-level detail endpoints, include diagnostics there too.
+
+Do not expose diagnostics on unrelated endpoints.
+
+## Diagnostic DTO
+
+Add a frontend-safe API DTO equivalent to:
+
+```python
+class ProviderDiagnosticDTO(BaseModel):
+    code: str
+    message: str
+    provider: str
+    model: str | None = None
+    level: Literal["L1", "L2"] | None = None
+    retryable: bool = False
+```
+
+Optional fields if already useful:
+
+```python
+run_id: int | str | None = None
+query_id: int | str | None = None
+```
+
+Avoid exposing `details` by default unless project policy explicitly allows a safe allowlist.
+
+## Response shape
+
+Use the project’s existing DTO style.
+
+For single failure response:
+
+```json
+{
+  "provider_error": {
+    "code": "NO_API_KEY",
+    "message": "OpenAI API key is not configured.",
+    "provider": "openai",
+    "model": "gpt-4.1-mini",
+    "level": "L1",
+    "retryable": false
+  }
+}
+```
+
+For audit status / summary with multiple runs:
+
+```json
+{
+  "provider_diagnostics": [
+    {
+      "code": "TIMEOUT",
+      "message": "OpenAI request timed out.",
+      "provider": "openai",
+      "model": "gpt-4.1-mini",
+      "level": "L2",
+      "retryable": true,
+      "run_id": 123,
+      "query_id": 45
+    }
+  ]
+}
+```
+
+For result rows:
+
+```json
+{
+  "query": "Best SEO agencies in Finland",
+  "status": "failed",
+  "provider_error": {
+    "code": "TIMEOUT",
+    "message": "OpenAI request timed out.",
+    "provider": "openai",
+    "model": "gpt-4.1-mini",
+    "level": "L2",
+    "retryable": true
+  }
+}
+```
+
+## Required behavior
+
+### Pipeline run endpoint
+
+`POST /audits/{id}/run-pipeline` should return safe diagnostics if provider execution fails.
+
+If the pipeline completes with partial usable data:
+
+```text
+return current successful response shape
+include provider_diagnostics if relevant
+audit status may be partial according to current status semantics
+```
+
+If the pipeline fails due to provider configuration/error:
+
+```text
+return safe error response or normal pipeline response with failed status
+include provider_error/provider_diagnostics
+do not expose raw exception
+```
+
+Use current project error-handling style if it already has a clear convention.
+
+### Audit status endpoint
+
+`GET /audits/{id}/status` should include provider diagnostics when audit is:
+
+```text
+failed
+partial
+running with failed runs already recorded, if applicable
+```
+
+### Results endpoint
+
+`GET /audits/{id}/results` should expose per-result or per-run provider diagnostics for failed/partial runs.
+
+Rules:
+
+```text
+successful result rows should not need provider_error
+failed result rows should include provider_error if available
+legacy failed rows without normalized error should show safe generic diagnostic
+```
+
+Generic fallback:
+
+```json
+{
+  "code": "UNKNOWN_PROVIDER_ERROR",
+  "message": "Provider request failed.",
+  "provider": "openai",
+  "retryable": false
+}
+```
+
+### Summary endpoint
+
+`GET /audits/{id}/summary` should include aggregate provider diagnostics if relevant.
+
+If multiple runs fail with the same error, deduplicate diagnostics where reasonable.
+
+Do not let diagnostic aggregation break existing summary response.
+
+## Safety requirements
+
+API diagnostics must not include:
+
+```text
+API keys
+authorization headers
+request headers
+raw prompts
+raw provider responses
+stack traces
+tracebacks
+environment dumps
+full exception repr if it contains sensitive data
+```
+
+Allowed fields:
+
+```text
+code
+message
+provider
+model
+level
+retryable
+run_id
+query_id
+```
+
+Only include `details` if an explicit allowlist is implemented.
+
+## Storage/source-of-truth rule
+
+Prefer deriving provider diagnostics from existing execution storage:
+
+```text
+raw_responses.error_object
+raw_responses.provider_metadata
+runs.status
+jobs/audit pipeline summary where applicable
+```
+
+Do not add new database columns/tables unless diagnostics cannot be derived from existing storage.
+
+If new storage is required:
+
+```text
+add an Alembic migration
+document why existing storage is insufficient
+keep the migration task-scoped
+```
+
+## Backward compatibility
+
+Do not break existing frontend contracts.
+
+Rules:
+
+```text
+existing fields remain available
+diagnostic fields are additive
+legacy audits without normalized provider errors still load
+legacy failed runs get generic safe diagnostic if needed
+successful audits without provider errors should behave as before
+```
+
+## Tests to add/update
+
+Add task-scoped backend/API tests.
+
+### Pipeline endpoint tests
+
+Test:
+
+```text
+provider config error returns/exposes safe provider_error
+provider timeout returns/exposes safe provider_error
+partial audit response can include provider_diagnostics
+successful audit response does not include unsafe diagnostic data
+```
+
+### Status endpoint tests
+
+Test:
+
+```text
+failed audit includes provider_diagnostics
+partial audit includes provider_diagnostics
+successful audit has empty/omitted provider_diagnostics according to chosen DTO style
+legacy failed audit does not crash
+```
+
+### Results endpoint tests
+
+Test:
+
+```text
+failed run row includes provider_error
+successful row does not include provider_error or has null according to chosen style
+legacy failed run gets safe generic diagnostic
+no raw provider response in result DTO
+```
+
+### Summary endpoint tests
+
+Test:
+
+```text
+summary includes aggregate provider_diagnostics for failed provider runs
+duplicate diagnostics are deduplicated if implemented
+summary remains backward-compatible
+no raw provider response/prompt/secrets included
+```
+
+### Safety tests
+
+Assert serialized API response does not contain obvious sensitive keys:
+
+```text
+api_key
+authorization
+headers
+raw_response
+raw_prompt
+prompt
+stack_trace
+traceback
+OPENAI_API_KEY
+sk-
+```
+
+## Acceptance criteria
+
+- Provider diagnostics DTO exists for API responses.
+- Pipeline run endpoint can expose safe provider error/diagnostics.
+- Audit status endpoint can expose safe provider diagnostics.
+- Results endpoint can expose per-run provider error where relevant.
+- Summary endpoint can expose aggregate provider diagnostics where relevant.
+- Existing API fields remain backward-compatible.
+- Legacy failed provider runs do not crash diagnostics serialization.
+- No raw provider responses, raw prompts, stack traces, request headers, API keys, or secrets appear in API diagnostics.
+- Task-scoped backend/API tests pass.
+- Touched-file ruff passes.
+
+## Non-goals
+
+- Do not implement frontend UI rendering.
+- Do not add Claude/Anthropic.
+- Do not change provider adapter architecture beyond using normalized errors from K178.
+- Do not redesign audit status semantics.
+- Do not change parser/scoring behavior.
+- Do not expose raw provider response inspection in user-facing APIs.
+- Do not fix unrelated legacy failures.
+
+---
+
+# TASK-K180 — Add Provider Diagnostics UI
+
+## Goal
+
+Display safe provider diagnostics in the frontend UI using the provider diagnostic fields added in:
+
+```text
+TASK-K179 — Add Provider Diagnostics to API
+```
+
+The UI should make provider failures understandable to users without exposing raw provider responses, prompts, stack traces, request headers, API keys, or secrets.
+
+## Required UI surfaces
+
+Add provider diagnostic display to these areas if they exist:
+
+```text
+Audit detail/status page
+Audit summary page
+Audit results table
+Pipeline start/run action feedback
+```
+
+Optional, if already easy:
+
+```text
+Audit list/dashboard row status
+```
+
+## Frontend types
+
+Add or update frontend API types to include provider diagnostics.
+
+Suggested types:
 
 ```ts
-generateSeedQuerySuggestions()
+export type ProviderDiagnosticCode =
+  | "PROVIDER_DISABLED"
+  | "NO_API_KEY"
+  | "INVALID_API_KEY"
+  | "INVALID_MODEL"
+  | "UNSUPPORTED_L2"
+  | "TIMEOUT"
+  | "RATE_LIMIT"
+  | "EMPTY_RESPONSE"
+  | "INVALID_RESPONSE"
+  | "PROVIDER_UNAVAILABLE"
+  | "PROVIDER_REQUEST_FAILED"
+  | "CONFIGURATION_ERROR"
+  | "UNKNOWN_PROVIDER_ERROR"
+
+export type ProviderDiagnostic = {
+  code: ProviderDiagnosticCode
+  message: string
+  provider: string
+  model?: string | null
+  level?: "L1" | "L2" | null
+  retryable?: boolean
+  runId?: string | number | null
+  queryId?: string | number | null
+}
 ```
 
-Do not call a real provider from frontend tests.
+Use existing frontend naming conventions if different.
 
-### Acceptance criteria
+## Display rules
 
-- Frontend task-scoped tests pass.
+Show backend-provided safe `message`.
+
+Do not derive low-level messages from raw errors.
+
+Do not display diagnostic `details` unless backend exposes a strict safe allowlist.
+
+Recommended pattern:
+
+```text
+Alert / Card
+Title: Provider issue
+Body: backend-safe message
+Meta: provider, level, model, retryable
+```
+
+## Required behavior by page
+
+### Audit detail/status page
+
+If status response includes `provider_diagnostics`, display a diagnostics block.
+
+Show it when:
+
+```text
+audit status is failed
+audit status is partial
+audit status is running and failed run diagnostics already exist
+```
+
+If no diagnostics exist, do not show an empty block.
+
+### Pipeline start action feedback
+
+When the user clicks `Start audit` and the pipeline response includes `provider_error` or `provider_diagnostics`, show the message near the start/action area.
+
+Do not show raw API error bodies.
+
+The Start button state must remain correct after error/terminal status.
+
+### Summary page
+
+If summary response includes aggregate `provider_diagnostics`, show a compact provider diagnostics card.
+
+If there are multiple diagnostics:
+
+- display unique diagnostics by `code + provider + level + model`
+- show count if available or derivable from identical diagnostics
+- keep the card compact
+
+Do not let provider diagnostics break existing summary cards/charts.
+
+### Results table
+
+If a result row includes `provider_error`, show it inline for that failed row.
+
+Suggested display:
+
+```text
+Status: failed
+Provider issue: OpenAI request timed out.
+```
+
+If successful row has no diagnostic, show nothing extra.
+
+## Safety requirements
+
+Frontend must not display any field containing:
+
+```text
+api_key
+authorization
+headers
+raw_response
+raw_prompt
+prompt
+stack_trace
+traceback
+OPENAI_API_KEY
+ANTHROPIC_API_KEY
+sk-
+```
+
+If such fields appear unexpectedly in an API response, frontend should ignore them.
+
+Frontend rendering must be whitelist-based. Render only these diagnostic fields:
+
+```text
+code
+message
+provider
+model
+level
+retryable
+runId
+queryId
+```
+
+All other diagnostic fields must be ignored by UI components.
+
+Do not add UI for raw response inspection in this task.
+
+## Backward compatibility
+
+Existing API responses without diagnostics must still render normally.
+
+Rules:
+
+```text
+provider_diagnostics missing -> no diagnostics block
+provider_diagnostics empty -> no diagnostics block
+provider_error missing/null -> no diagnostics block
+legacy failed audit without diagnostics -> existing UI behavior continues
+```
+
+## Tests to add/update
+
+Add task-scoped frontend tests.
+
+### Type/API tests
+
+If frontend has API/client tests:
+
+```text
+parses provider_error
+parses provider_diagnostics
+handles missing diagnostics
+handles empty diagnostics
+```
+
+### Audit detail/status UI tests
+
+Test:
+
+```text
+renders diagnostics block when provider_diagnostics exists
+does not render diagnostics block when missing/empty
+shows provider/message/level/model/retryable
+does not show unsafe fields if present
+```
+
+### Pipeline action tests
+
+Test:
+
+```text
+Start audit response with provider_error shows safe message
+Start audit response with provider_diagnostics shows safe message
+Start button state remains usable/correct after provider error
+```
+
+### Summary UI tests
+
+Test:
+
+```text
+summary diagnostics card renders aggregate diagnostics
+summary without diagnostics renders normally
+multiple diagnostics render compactly
+```
+
+### Results table tests
+
+Test:
+
+```text
+failed row with provider_error displays message
+successful row without provider_error does not show provider issue
+unsafe fields are ignored
+```
+
+## Acceptance criteria
+
+- Frontend types support `provider_error` and `provider_diagnostics`.
+- Audit detail/status page displays provider diagnostics safely.
+- Pipeline start action displays provider errors safely.
+- Summary page displays aggregate diagnostics safely.
+- Results table displays row-level provider errors safely.
+- Existing successful/legacy audits without diagnostics render as before.
+- Unsafe fields are not rendered.
+- No raw provider responses, raw prompts, stack traces, request headers, API keys, or secrets are displayed.
+- Task-scoped frontend tests pass.
 - TypeScript passes for touched files.
-- Existing happy-path audit creation flow still works.
 
-### Non-goals
+## Non-goals
 
-- No E2E real provider test.
-- No scoring UI.
-- No coverage diagnostics.
-
----
-
-# Phase J2 — Evaluation by Query Type
-
-J2 goal:
-
-Audit summaries can show visibility by query intent and calculate a weighted visibility score based on query type.
-
-Important gate:
-
-Do not implement J2 until J1 is merged, verified through UI, and at least one typed-query audit has been run successfully through the normal audit pipeline.
-
-J2 depends on real stored query type data from confirmed seed queries.
+- Do not add Claude/Anthropic.
+- Do not change backend API contracts beyond consuming K179 fields.
+- Do not implement raw response inspection UI.
+- Do not change scoring/parser behavior.
+- Do not redesign audit status semantics.
+- Do not add retry buttons unless already supported by backend.
+- Do not fix unrelated frontend bugs.
 
 ---
 
-## TASK-J172 — Add Query-Type Coverage Metrics
+# TASK-K181 — Add Provider Parity Checklist
 
-### Goal
+## Goal
 
-Add backend aggregation by query type so the summary can show brand visibility across different query intents.
+Create a provider parity checklist document that defines the minimum support matrix and verification criteria for each AI provider.
 
-### Metrics
+This checklist will be used before adding Anthropic/Claude and before marking any real provider as supported.
 
-For each query type, return data similar to:
+This task is documentation-only. Do not change runtime code.
 
-```json
-{
-  "type": "recommendation",
-  "total_queries": 2,
-  "processed_runs": 2,
-  "failed_runs": 0,
-  "brand_found_count": 1,
-  "brand_found_rate": 0.5,
-  "average_score": 0.42
-}
+## File to create
+
+```text
+docs/PROVIDER_PARITY.md
 ```
 
-Adapt exact field names to the current scoring/summary model.
+## Required document structure
 
-### Data sources
+### 1. Purpose
 
-Use backend data only:
+Explain that this checklist is used to:
 
-- confirmed seed query type
-- parsed result
-- score
-- run status
+```text
+- compare provider capabilities
+- prevent provider-specific behavior from leaking into parser/scoring/frontend
+- confirm L1/L2 support status
+- confirm normalized output/error/usage/source behavior
+- define readiness before marking a provider as supported
+```
 
-Frontend must not calculate these metrics.
+### 2. Provider support matrix
 
-### Terminal statuses
+Create a table like:
 
-Use only terminal/accounted-for runs.
+```markdown
+| Provider | Status | L1 | L2 | Notes |
+|---|---|---|---|---|
+| mock | supported for tests/dev | yes | configurable/mock only | deterministic; no real calls |
+| openai | active real provider | yes | yes | via Responses API web tools |
+| anthropic | planned | planned | not assumed | initial target: L1 only |
+```
 
-Recommended handling:
+Use actual project status if it differs.
 
-- processed successful runs contribute to score/rate denominator
-- failed/skipped runs are reported separately as `failed_runs` or equivalent
-- do not silently hide failed/skipped runs if they affect interpretation
+### 3. Required parity checklist
 
-### Legacy behavior
+Add a checklist template that every provider must satisfy.
 
-Old audits without query type must not break summary.
+```markdown
+## Provider: <provider_name>
 
-Acceptable handling:
+### Capability
+- [ ] Adapter implemented
+- [ ] L1 supported
+- [ ] L2 supported or explicitly unsupported
+- [ ] Unsupported L2 returns `UNSUPPORTED_L2`
+- [ ] No silent fallback from L2 to L1
+- [ ] No silent fallback from real provider to mock
+- [ ] Configured model is used; no silent model replacement
 
-- group them under `unknown`
-- or assign neutral behavior with `type = null`
+### Normalized output
+- [ ] Successful response maps to normalized answer text
+- [ ] Empty answer maps to `EMPTY_RESPONSE`
+- [ ] Raw response is internally storable if needed
+- [ ] Raw response is not exposed to normal frontend endpoints
+- [ ] Sources/citations normalize to provider source shape
+- [ ] Missing sources are handled safely
+- [ ] Usage normalizes when available
+- [ ] Missing usage does not fail the run
 
-Choose the option that best matches the existing API style.
+### Normalized errors
+- [ ] Provider disabled maps to `PROVIDER_DISABLED`
+- [ ] Missing API key maps to `NO_API_KEY`
+- [ ] Invalid API key maps to `INVALID_API_KEY`
+- [ ] Invalid model/config maps to `INVALID_MODEL` or `CONFIGURATION_ERROR`
+- [ ] Timeout maps to `TIMEOUT`
+- [ ] Rate limit maps to `RATE_LIMIT`
+- [ ] Invalid provider response maps to `INVALID_RESPONSE`
+- [ ] Provider request failure maps to `PROVIDER_REQUEST_FAILED`
+- [ ] Unknown exception maps to `UNKNOWN_PROVIDER_ERROR`
+- [ ] Retryable errors are marked correctly
 
-### Acceptance criteria
+### Safety
+- [ ] No API keys in API responses
+- [ ] No request headers in API responses
+- [ ] No raw prompts in frontend-safe responses
+- [ ] No raw provider responses in frontend-safe responses
+- [ ] No stack traces in frontend-safe responses
+- [ ] No secrets in logs/snapshots
+- [ ] Provider metadata is JSON-serializable and secret-free
 
-- Summary endpoint returns query-type coverage data.
-- Existing summary fields remain backward-compatible.
-- Missing query type is handled safely.
-- Old audits without query types do not break summary.
-- Frontend still does not calculate these metrics.
+### Testing
+- [ ] Unit tests use mocked provider/client calls
+- [ ] CI does not call real provider APIs
+- [ ] L1 success test exists
+- [ ] L2 success test exists if supported
+- [ ] Unsupported L2 test exists if unsupported
+- [ ] Timeout test exists
+- [ ] Rate-limit test exists
+- [ ] Missing key test exists
+- [ ] Invalid model/config test exists
+- [ ] Empty response test exists
+- [ ] Invalid response test exists
+- [ ] Source normalization test exists if provider can return sources
+- [ ] Usage normalization test exists if provider returns usage
+- [ ] No-secret-leakage test exists
 
-### Tests
+### Manual verification
+- [ ] One-query L1 audit verified manually
+- [ ] One-query L2 audit verified manually if supported
+- [ ] Unsupported L2 verified manually if not supported
+- [ ] Provider disabled scenario verified
+- [ ] Missing key scenario verified
+- [ ] Timeout/failure scenario verified if feasible
+- [ ] Summary/results render after execution
+- [ ] Sources/citations render or safe empty state appears
+- [ ] Provider diagnostics render safely in UI
+```
 
-- Aggregates by query type correctly.
-- Handles brand found.
-- Handles brand not found.
-- Handles failed runs.
-- Handles unknown/null legacy type.
-- Existing summary tests still pass.
+### 4. Mock provider checklist
 
-### Non-goals
+Add an initial section for `mock`.
 
-- No frontend UI.
-- No weighted scoring.
-- No diagnostic prose generation.
+Expected status:
+
+```text
+Mock provider is required for deterministic local/test execution.
+Mock provider is not a real visibility source.
+Mock provider must never be silently used as fallback when a real provider is configured.
+```
+
+Checklist should mark or state:
+
+```text
+L1: supported for tests/dev
+L2: supported only as deterministic simulation if implemented
+Real calls: never
+CI: yes, allowed
+```
+
+### 5. OpenAI provider checklist
+
+Add an initial section for `openai`.
+
+Expected status:
+
+```text
+OpenAI is the first active real provider.
+L1 is supported.
+L2 is supported through Responses API web/search tools.
+```
+
+Use statuses:
+
+```text
+Done
+Partial
+Not verified
+Not supported
+Planned
+```
+
+Do not pretend unknown items are done.
+
+### 6. Anthropic/Claude future checklist
+
+Add a future section for `anthropic`.
+
+Expected status:
+
+```text
+Anthropic is future work.
+Initial target is L1 only.
+L2 is not assumed.
+Unsupported L2 must return UNSUPPORTED_L2 until explicitly implemented and verified.
+```
+
+### 7. Provider readiness definition
+
+A provider may be marked as supported only if:
+
+```text
+- adapter is implemented
+- supported SCDL levels are explicit
+- unsupported levels return normalized errors
+- output normalization is implemented
+- error normalization is implemented
+- no silent fallback exists
+- safety/no-secret-leakage tests pass
+- CI uses mock tests only
+- manual one-query verification passes
+- provider diagnostics are visible in API/UI when failures occur
+```
+
+## Acceptance criteria
+
+- `docs/PROVIDER_PARITY.md` exists.
+- It includes purpose and provider support matrix.
+- It includes a reusable checklist template.
+- It includes initial `mock` section.
+- It includes initial `openai` section.
+- It includes future `anthropic` section.
+- It defines provider readiness criteria.
+- It states that Anthropic/Claude is future work and must not be implemented in this task.
+- It states that mock must not be used as silent fallback for real providers.
+- It states that CI must not call real providers.
+- No runtime code is changed.
+
+## Non-goals
+
+- Do not implement Claude/Anthropic.
+- Do not modify OpenAI adapter.
+- Do not modify mock provider.
+- Do not modify frontend.
+- Do not modify backend runtime code.
+- Do not run provider verification.
+- Do not change parser/scoring.
 
 ---
 
-## TASK-J173 — Add Query-Type Diagnostics to Summary UI
+# TASK-K182 — Stabilize OpenAI One-Click Happy Path Based on Captured Issues
 
-### Goal
+## Goal
 
-Add a UI block that displays brand visibility by query type.
-
-### MVP UI
-
-A table or cards are both acceptable.
-
-Example table:
-
-| Query type | Queries | Brand found | Visibility |
-|---|---:|---:|---:|
-| Brand direct | 1 | 1 | 100% |
-| Recommendation | 2 | 0 | 0% |
-| Comparison | 2 | 1 | 50% |
-
-### Optional rule-based diagnostic text
-
-If simple and safe, add rule-based text such as:
+Fix only the concrete OpenAI one-click flow issues captured during:
 
 ```text
-Brand is visible in direct queries, but weak in recommendations.
-Brand appears in comparison queries, but not in category discovery.
+TASK-K177 — Run OpenAI One-Click Verification and Capture Actual Issues
 ```
 
-For MVP, the table/cards are sufficient.
-
-### Important rule
-
-Frontend displays backend-provided summary data.
-
-Frontend must not recalculate score.
-
-### Empty state
-
-If data is missing:
+This task should turn the OpenAI path into a stable UI-driven flow:
 
 ```text
-Query-type diagnostics will appear after the audit has processed typed seed queries.
+create audit
+→ generate or manually enter typed seed queries
+→ save audit
+→ click Start audit
+→ backend runs full pipeline
+→ UI polls status
+→ terminal status appears
+→ summary/results/sources render
 ```
 
-### Acceptance criteria
+No CLI post-processing should be required.
 
-- Summary UI displays query-type metrics.
-- UI handles missing data safely.
-- UI handles partial audits.
-- Existing summary page does not break.
-- No frontend-side scoring is added.
+## Required input
 
-### Tests
+Before starting this task, read:
 
-- Renders metrics when present.
-- Renders empty state when absent.
-- Handles partial/failed type data.
-- Does not crash on legacy audits without query types.
+```text
+docs/OPENAI_ONE_CLICK_VERIFICATION.md
+docs/OPENAI_ONE_CLICK_VERIFICATION_RESULTS.md
+docs/PROVIDER_CONTRACT.md
+docs/PROVIDER_PARITY.md
+```
 
-### Non-goals
+If `docs/OPENAI_ONE_CLICK_VERIFICATION_RESULTS.md` does not exist, use the result table and captured issues section inside:
 
-- No weighted scoring.
-- No AI-generated diagnostic prose.
-- No chart requirement unless Recharts is already convenient.
+```text
+docs/OPENAI_ONE_CLICK_VERIFICATION.md
+```
+
+## Scope rule
+
+Only fix issues explicitly captured in `TASK-K177`.
+
+Do not broaden this task into general refactoring.
+
+Do not fix issues that were not captured in K177 unless they directly block verification of a captured K177 issue.
+If such a blocker appears, document it in the verification results before fixing it.
+
+Allowed issue categories:
+
+```text
+OpenAI one-click pipeline failures
+typed seed query execution issues
+pipeline post-processing not running automatically
+polling/refetch stale state
+provider caps/guardrail bugs
+provider diagnostics not surfaced correctly after K178–K180
+summary/results/sources not updating after terminal status
+Start audit button state bugs
+safe provider error display bugs
+mobile blockers for the one-click path
+```
+
+Not allowed:
+
+```text
+adding Claude/Anthropic
+changing scoring methodology
+redesigning parser
+redesigning audit status model
+rewriting provider architecture
+fixing unrelated legacy failures
+adding new product features
+```
+
+## Functional requirements
+
+### One-click execution
+
+After user clicks `Start audit`:
+
+```text
+backend schedules/executes jobs
+raw responses are saved
+post-processing runs automatically
+parsed results are saved
+scores are saved
+summary/results/sources reflect data
+final audit status is set
+```
+
+No manual commands should be required:
+
+```text
+scripts/process_audit_results.py
+scripts/run_audit_pipeline.py
+```
+
+### Typed seed query compatibility
+
+Verify and fix if needed:
+
+```text
+pipeline uses final saved seed_query_items
+legacy seed_queries list[str] still works
+generated query source remains ai after edit
+manual query source is user
+removed queries are not run
+query type does not break execution
+```
+
+### Provider diagnostics
+
+Verify and fix if needed:
+
+```text
+NO_API_KEY shown safely
+PROVIDER_DISABLED shown safely
+TIMEOUT shown safely
+RATE_LIMIT shown safely if reproducible
+INVALID_MODEL shown safely if reproducible
+no raw prompt exposed
+no raw response exposed
+no stack trace exposed
+no API key exposed
+```
+
+### Polling/refetch
+
+Verify and fix if needed:
+
+```text
+polling starts when audit becomes running
+polling stops on completed/partial/failed
+audit detail refetches after terminal status
+summary refetches after terminal status
+results refetch after terminal status
+sources refetch after terminal status
+audit list/dashboard invalidates if applicable
+Start button state is correct after terminal status
+```
+
+### Status semantics
+
+Do not redesign status semantics.
+
+Use existing project meanings:
+
+```text
+created
+running
+completed
+partial
+failed
+```
+
+Expected behavior:
+
+```text
+completed — all expected runs terminal and processed/accounted for
+partial — usable results exist but some runs/processing failed/skipped
+failed — no usable data or fatal pipeline error
+```
+
+Provider success but parser does not find the brand is not a provider failure.
+
+### Caps/guardrails
+
+Verify and fix if needed:
+
+```text
+REAL_PROVIDER_MAX_PROVIDERS
+REAL_PROVIDER_MAX_QUERIES
+REAL_PROVIDER_MAX_RUNS_PER_QUERY
+REAL_PROVIDER_MAX_TOTAL_RUNS
+```
+
+Rules:
+
+```text
+caps are enforced before provider execution
+excess runs are not sent to real provider
+UI/API gets safe explanation when cap blocks execution
+no silent overrun
+```
+
+## Tests to add/update
+
+Add task-scoped tests based on the specific captured issues.
+
+### Backend
+
+```text
+pipeline endpoint runs execution + post-processing
+OpenAI provider success creates parsed/scored results
+typed seed query items are used by pipeline
+legacy seed_queries are still accepted
+provider config errors return safe diagnostics
+caps prevent excess provider runs
+terminal status set correctly
+```
+
+Use mocked provider calls for automated tests.
+
+No real OpenAI calls in CI.
+
+### Frontend
+
+```text
+Start audit triggers pipeline endpoint
+polling starts and stops correctly
+terminal status invalidates/refetches summary/results/sources
+provider diagnostics render after provider failure
+duplicate Start submissions are prevented
+typed seed query UI works through save/run if relevant
+```
+
+### Safety
+
+Assert API/UI output does not contain:
+
+```text
+api_key
+authorization
+headers
+raw_response
+raw_prompt
+prompt
+stack_trace
+traceback
+OPENAI_API_KEY
+sk-
+```
+
+## Verification after fixes
+
+Re-run relevant failed/partial scenarios from:
+
+```text
+docs/OPENAI_ONE_CLICK_VERIFICATION.md
+```
+
+At minimum re-run all scenarios that were:
+
+```text
+Fail
+Partial
+Blocked
+```
+
+If time allows, re-run:
+
+```text
+K176-S01 — Mock L1 one-click audit
+K176-S02 — OpenAI L1 one-click audit
+K176-S03 — OpenAI L2 one-click audit
+K176-S04 — Typed seed queries survive save/reload/run
+K176-S09 — Polling and terminal refetch
+```
+
+Update the verification results document.
+
+## Acceptance criteria
+
+- All blocker issues from K177 are fixed or explicitly marked blocked by environment/setup.
+- Major one-click path issues are fixed or explicitly deferred with rationale.
+- OpenAI L1 one-click flow works from UI without CLI post-processing.
+- OpenAI L2 one-click flow works from UI or fails safely with normalized diagnostics.
+- Typed seed queries are used correctly by pipeline.
+- Polling/refetch behavior is correct after terminal status.
+- Provider diagnostics render safely where relevant.
+- Caps/guardrails do not silently overrun real provider limits.
+- No raw provider responses, raw prompts, stack traces, request headers, API keys, or secrets are exposed in API/UI.
+- Task-scoped backend/frontend tests pass.
+- Touched-file ruff/typecheck pass.
+- Verification results are updated.
+
+## Non-goals
+
+- Do not add Claude/Anthropic.
+- Do not implement new provider adapters.
+- Do not redesign provider abstraction.
+- Do not redesign scoring/parser.
+- Do not add new query generation features.
+- Do not fix unrelated legacy failures.
+- Do not perform broad UI redesign.
 
 ---
 
-## TASK-J174 — Add Weighted Scoring by Query Type
+# TASK-K183 — Finalize OpenAI Provider Baseline and Claude Readiness Decision
 
-### Goal
+## Goal
 
-Add a weighted visibility score based on query type without breaking the existing general score.
+Finalize Phase K by documenting whether OpenAI is stable enough to be used as the baseline real provider and whether the project is ready to start Anthropic/Claude integration.
 
-### Initial weights
+This is primarily documentation/review. Runtime code changes should be avoided unless they are tiny documentation alignment fixes.
 
-```text
-brand_direct: 1.0
-category_discovery: 1.2
-recommendation: 1.5
-comparison: 1.3
-alternative: 1.2
-problem_solution: 1.4
-```
+## Required input
 
-### Architecture rule
-
-Do not replace the existing score unless the product explicitly decides to do so later.
-
-Add a new field instead, for example:
-
-```json
-{
-  "visibility_score": 0.48,
-  "weighted_visibility_score": 0.56
-}
-```
-
-Use project naming conventions if they differ.
-
-### Formula
-
-Recommended formula:
+Read:
 
 ```text
-weighted_score =
-sum(query_score * query_type_weight) / sum(query_type_weight)
+docs/PROVIDER_CONTRACT.md
+docs/PROVIDER_PARITY.md
+docs/OPENAI_ONE_CLICK_VERIFICATION.md
+docs/OPENAI_ONE_CLICK_VERIFICATION_RESULTS.md
 ```
 
-Only processed runs should contribute to the denominator.
-
-Failed/skipped runs must be handled explicitly and must not silently corrupt the denominator.
-
-### Legacy behavior
-
-If query type is missing:
+Also inspect recent implementation notes from:
 
 ```text
-weight = 1.0
+TASK-K178
+TASK-K179
+TASK-K180
+TASK-K182
 ```
 
-### Calculation location
+## Files to update
 
-Backend scoring/aggregation layer only.
-
-Frontend only displays the returned value.
-
-### Acceptance criteria
-
-- Weighted score is calculated on backend.
-- Existing score remains available.
-- Missing type defaults to weight `1.0`.
-- Failed/skipped runs are handled explicitly.
-- Summary endpoint exposes weighted score safely.
-
-### Tests
-
-- Weighted calculation is correct.
-- Missing type uses weight `1.0`.
-- Different query types produce expected weighted result.
-- Failed runs do not silently corrupt denominator.
-- Existing score tests remain valid.
-
-### Non-goals
-
-- No reprocessing of all historical audits unless required.
-- No UI redesign.
-- No user-editable weights in the MVP.
-
----
-
-# Recommended Implementation Order
-
-## J1 — Generation MVP
-
-Implement first:
+Update:
 
 ```text
-TASK-J160
-TASK-J161
-TASK-J162
-TASK-J163
-TASK-J164
-TASK-J165
-TASK-J166
-TASK-J167
-TASK-J168
-TASK-J169
-TASK-J170
-TASK-J171
+docs/PROVIDER_PARITY.md
+docs/OPENAI_ONE_CLICK_VERIFICATION.md
 ```
 
-Expected outcome:
+Optional new file:
 
 ```text
-User can generate 10 typed seed queries from current form-state domain and/or description, review/edit/delete them, deduplicate them, keep max total count of 20, and save only confirmed queries.
+docs/CLAUDE_READINESS_DECISION.md
 ```
 
-## J2 — Evaluation by Query Type
+## Work items
 
-Implement only after J1 is merged and live-verified:
+### 1. Update OpenAI parity status
+
+In `docs/PROVIDER_PARITY.md`, update the OpenAI section based on actual implementation and verification.
+
+Use statuses:
 
 ```text
-TASK-J172
-TASK-J173
-TASK-J174
+Done
+Partial
+Not verified
+Not supported
+Planned
+Blocked
 ```
 
-Expected outcome:
+Must cover:
 
 ```text
-Audit summary can show visibility by query intent and calculate weighted score.
+Adapter implemented
+L1 supported
+L2 supported
+Unsupported L2 handling
+Normalized answer_text
+Normalized sources
+Normalized usage
+Normalized errors
+API diagnostics
+UI diagnostics
+No secret leakage
+Mock tests only in CI
+Manual one-click verification
+Caps/guardrails
+Typed seed query execution
 ```
 
----
+Do not mark unknown items as `Done`.
 
-# Codex Execution Rules for This Phase
+### 2. Summarize OpenAI baseline readiness
 
-For every task:
+Add a short section:
+
+```markdown
+# OpenAI Baseline Readiness
+```
+
+Include one of:
 
 ```text
-Implement only the requested task scope.
-Do not fix unrelated legacy failures.
-Run task-scoped tests.
-Run touched-file ruff/typecheck or follow the existing project convention.
-Do not expose raw AI prompts, raw provider responses, API keys, or secrets in frontend responses.
-Do not modify unrelated parser/scoring behavior unless the task explicitly requires it.
-Do not call /dev endpoints from normal frontend code.
-Do not require audit id for seed query suggestion generation.
-Do not persist generated suggestions before explicit user confirmation/save.
+Ready
+Ready with known limitations
+Not ready
 ```
+
+Recommended format:
+
+```markdown
+## OpenAI Baseline Readiness
+
+Status: Ready with known limitations
+
+Evidence:
+- OpenAI L1 one-click audit: Pass
+- OpenAI L2 one-click audit: Pass/Partial
+- Provider diagnostics: Pass
+- Typed seed queries through pipeline: Pass
+
+Known limitations:
+- ...
+```
+
+### 3. Decide Claude readiness
+
+Add a section:
+
+```markdown
+# Claude Readiness Decision
+```
+
+Allowed decisions:
+
+```text
+Proceed to Claude L1 adapter
+Do not proceed yet
+Proceed only after specific blockers are fixed
+```
+
+Decision criteria:
+
+Proceed only if:
+
+```text
+OpenAI L1 one-click flow works
+provider errors are normalized
+provider diagnostics are visible in API/UI
+no silent fallback exists
+mock CI path is stable
+provider contract is current
+provider parity checklist exists
+```
+
+Do not require OpenAI L2 perfection if Claude initial target is L1 only, but any known provider-layer blocker must be fixed first.
+
+### 4. Define Claude initial scope if proceeding
+
+If decision is `Proceed to Claude L1 adapter`, define initial scope:
+
+```text
+Anthropic/Claude L1 only
+No L2 web search
+No silent fallback
+No parser/scoring changes
+No frontend redesign
+No raw response exposure
+Mocked tests only in CI
+Manual one-query Claude L1 verification required
+```
+
+Explicitly state:
+
+```text
+Claude L2 is unsupported until designed and verified.
+Claude L2 requests must return UNSUPPORTED_L2.
+```
+
+### 5. Capture blockers if not proceeding
+
+If decision is `Do not proceed yet`, list blockers:
+
+```markdown
+## Blockers Before Claude
+
+| Blocker | Severity | Required fix |
+|---|---|---|
+| ... | Blocker | ... |
+```
+
+## Acceptance criteria
+
+- `docs/PROVIDER_PARITY.md` OpenAI section is updated with actual status.
+- OpenAI baseline readiness is explicitly stated.
+- Claude readiness decision is explicitly stated.
+- If proceeding, Claude initial scope is limited to L1 only.
+- If not proceeding, blockers are listed.
+- No unknown items are marked as done.
+- No runtime code is changed.
+- No Claude/Anthropic adapter is implemented.
+
+## Non-goals
+
+- Do not add Anthropic/Claude.
+- Do not change OpenAI adapter.
+- Do not change provider diagnostics.
+- Do not change frontend.
+- Do not change parser/scoring.
+- Do not fix new bugs in this task.

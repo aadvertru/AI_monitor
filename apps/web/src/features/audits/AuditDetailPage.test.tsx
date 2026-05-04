@@ -8,6 +8,7 @@ import {
   auditStatusFixture,
   auditSummaryFixture,
   currentUserFixture,
+  providerDiagnosticFixture,
 } from "../../test/fixtures";
 import { mockFetchSequence } from "../../test/mockFetch";
 import { renderRoute } from "../../test/render";
@@ -208,6 +209,57 @@ describe("audit detail page", () => {
     expect(await screen.findByText("Completed")).toBeInTheDocument();
   });
 
+  it("shows provider diagnostics returned by pipeline start", async () => {
+    mockFetchSequence([
+      { body: currentUserFixture },
+      { body: auditDetailFixture },
+      { body: auditSummaryFixture },
+      {
+        body: {
+          ...auditPipelineRunFixture,
+          final_audit_status: "failed",
+          provider_diagnostics: [
+            {
+              ...providerDiagnosticFixture,
+              message: "sk-hidden should not render",
+            },
+          ],
+        },
+      },
+      { body: { ...auditDetailFixture, status: "failed" } },
+      { body: { ...auditSummaryFixture, status: "failed" } },
+    ]);
+    const user = userEvent.setup();
+
+    renderRoute("/audits/42");
+
+    await user.click(await screen.findByRole("button", { name: "Start audit" }));
+
+    expect(await screen.findByText("Provider issue")).toBeInTheDocument();
+    expect(screen.getByText("Provider issue details are unavailable.")).toBeInTheDocument();
+    expect(screen.queryByText(/sk-hidden/i)).not.toBeInTheDocument();
+  });
+
+  it("shows provider diagnostics returned by status polling", async () => {
+    mockFetchSequence([
+      { body: currentUserFixture },
+      { body: { ...auditDetailFixture, status: "running" } },
+      { body: { ...auditSummaryFixture, status: "running" } },
+      {
+        body: {
+          ...auditStatusFixture,
+          status: "running",
+          provider_diagnostics: [providerDiagnosticFixture],
+        },
+      },
+    ]);
+
+    renderRoute("/audits/42");
+
+    expect(await screen.findByText("Provider issue")).toBeInTheDocument();
+    expect(screen.getByText("OpenAI request timed out.")).toBeInTheDocument();
+  });
+
   it("disables the start button while pipeline start is pending", async () => {
     const fetchMock = vi.fn();
     fetchMock
@@ -360,7 +412,7 @@ describe("audit detail page", () => {
 
     await new Promise((resolve) => window.setTimeout(resolve, 2100));
 
-    expect(await screen.findByText(statusLabels[terminalStatus])).toBeInTheDocument();
+    expect((await screen.findAllByText(statusLabels[terminalStatus])).length).toBeGreaterThan(0);
     const statusCallsAfterTerminal = fetchMock.mock.calls.filter(([url]) =>
       String(url).endsWith("/audits/42/status"),
     ).length;

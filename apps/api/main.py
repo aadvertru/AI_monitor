@@ -35,6 +35,7 @@ from apps.api.audit_schemas import (
     CriticalQueryItemResponse,
     GeneratedSeedQuerySuggestionResponse,
     GenerateSeedQuerySuggestionsResponse,
+    ProviderDiagnosticResponse,
     QueryTypeCoverageItemResponse,
     RawResponseInspectionResponse,
     SeedQueryItemResponse,
@@ -72,6 +73,15 @@ from libs.execution.pilot_config import (
     validate_audit_against_pilot_config,
 )
 from libs.execution.pipeline import run_audit_pipeline
+from libs.execution.provider_errors import (
+    ProviderErrorCode,
+    configuration_error,
+    no_api_key_error,
+    normalize_provider_error_dict,
+    provider_disabled_error,
+    unknown_provider_error,
+    unsupported_l2_error,
+)
 from libs.storage.models import (
     Audit,
     AuditStatus,
@@ -293,6 +303,10 @@ class AuditCreateRequest(BaseModel):
     def validate_seed_query_fields(self) -> AuditCreateRequest:
         if "seed_queries" in self.model_fields_set and "seed_query_items" in self.model_fields_set:
             raise ValueError("Provide either seed_queries or seed_query_items, not both.")
+        has_legacy_queries = self.seed_queries is not None and len(self.seed_queries) > 0
+        has_typed_queries = self.seed_query_items is not None and len(self.seed_query_items) > 0
+        if not has_legacy_queries and not has_typed_queries:
+            raise ValueError("At least one seed query is required.")
         return self
 
     @field_validator("max_queries")
@@ -910,6 +924,7 @@ async def build_audit_status_response(
         failed_runs=failed_runs,
         completion_ratio=round(completion_ratio, 4),
         updated_at=audit.updated_at,
+        provider_diagnostics=await _provider_diagnostics_for_audit(session, audit),
     )
 
 
@@ -966,8 +981,13 @@ async def validate_audit_pipeline_triggerable(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def build_pipeline_run_response(summary: object) -> AuditPipelineRunResponse:
+def build_pipeline_run_response(
+    summary: object,
+    *,
+    provider_diagnostics: list[ProviderDiagnosticResponse] | None = None,
+) -> AuditPipelineRunResponse:
     safe_summary = _redact_pipeline_summary_value(summary.safe_log_dict())
+    safe_summary["provider_diagnostics"] = provider_diagnostics or []
     return AuditPipelineRunResponse.model_validate(safe_summary)
 
 
@@ -1041,6 +1061,159 @@ def _error_message(error_object: object) -> str | None:
     return None
 
 
+def _provider_model_from_metadata(provider_metadata: object) -> str | None:
+    if isinstance(provider_metadata, dict):
+        model = provider_metadata.get("model")
+        return model if isinstance(model, str) else None
+    return None
+
+
+def _provider_diagnostic_response(
+    *,
+    error_object: object,
+    provider: str,
+    run_status: object,
+    model: str | None,
+    level: str | None,
+    run_id: int | None = None,
+    query_id: int | None = None,
+) -> ProviderDiagnosticResponse | None:
+    run_status_value = _run_status_value(run_status)
+    if run_status_value == RunStatus.SUCCESS.value and error_object is None:
+        return None
+    if run_status_value == RunStatus.PENDING.value and error_object is None:
+        return None
+
+    if isinstance(error_object, dict):
+        diagnostic = normalize_provider_error_dict(
+            error_object,
+            provider=provider,
+            model=model,
+            level=level,
+            fallback_code=ProviderErrorCode.UNKNOWN_PROVIDER_ERROR,
+        )
+    else:
+        diagnostic = unknown_provider_error(provider, model, level).to_error_dict()
+
+    safe_diagnostic = _safe_provider_diagnostic_dict(diagnostic)
+    safe_diagnostic["run_id"] = run_id
+    safe_diagnostic["query_id"] = query_id
+    return ProviderDiagnosticResponse.model_validate(safe_diagnostic)
+
+
+def _safe_provider_diagnostic_dict(diagnostic: dict[str, Any]) -> dict[str, Any]:
+    allowed = {
+        "code",
+        "message",
+        "provider",
+        "model",
+        "level",
+        "retryable",
+    }
+    return {key: diagnostic.get(key) for key in allowed}
+
+
+async def _provider_diagnostics_for_audit(
+    session: AsyncSession,
+    audit: Audit,
+) -> list[ProviderDiagnosticResponse]:
+    stmt = (
+        select(Run, RawResponse)
+        .outerjoin(RawResponse, RawResponse.run_id == Run.id)
+        .where(Run.audit_id == audit.id)
+        .order_by(Run.id)
+    )
+    diagnostics: list[ProviderDiagnosticResponse] = []
+    level = _scdl_level_value(audit.scdl_level)
+    for run, raw_response in (await session.execute(stmt)).all():
+        error_object = raw_response.error_object if raw_response is not None else None
+        provider_metadata = (
+            raw_response.provider_metadata if raw_response is not None else None
+        )
+        diagnostic = _provider_diagnostic_response(
+            error_object=error_object,
+            provider=run.provider,
+            run_status=run.status,
+            model=_provider_model_from_metadata(provider_metadata),
+            level=level,
+            run_id=run.id,
+            query_id=run.query_id,
+        )
+        if diagnostic is not None:
+            diagnostics.append(diagnostic)
+    return diagnostics
+
+
+def _dedupe_provider_diagnostics(
+    diagnostics: list[ProviderDiagnosticResponse],
+) -> list[ProviderDiagnosticResponse]:
+    seen: set[tuple[object, ...]] = set()
+    deduped: list[ProviderDiagnosticResponse] = []
+    for diagnostic in diagnostics:
+        key = (
+            diagnostic.code,
+            diagnostic.message,
+            diagnostic.provider,
+            diagnostic.model,
+            diagnostic.level,
+            diagnostic.retryable,
+            diagnostic.run_id,
+            diagnostic.query_id,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(diagnostic)
+    return deduped
+
+
+def _provider_diagnostic_from_pipeline_error(
+    *,
+    fatal_error: str | None,
+    audit: Audit,
+) -> ProviderDiagnosticResponse | None:
+    if not fatal_error:
+        return None
+
+    provider = (audit.providers or ["unknown"])[0]
+    level = _scdl_level_value(audit.scdl_level)
+    normalized = fatal_error.lower()
+    if "disabled" in normalized:
+        error = provider_disabled_error(provider, level=level)
+    elif "api key" in normalized or "openai_api_key" in normalized:
+        error = no_api_key_error(provider, level=level)
+    elif "l2" in normalized and "unsupported" in normalized:
+        error = unsupported_l2_error(provider)
+    else:
+        error = configuration_error(provider, level=level)
+
+    return ProviderDiagnosticResponse.model_validate(
+        _safe_provider_diagnostic_dict(error.to_error_dict())
+    )
+
+
+async def _pipeline_provider_diagnostics(
+    session: AsyncSession,
+    audit: Audit,
+    summary: object,
+) -> list[ProviderDiagnosticResponse]:
+    diagnostics = await _provider_diagnostics_for_audit(session, audit)
+    fatal_messages = [
+        getattr(summary, "fatal_error", None),
+        getattr(getattr(summary, "scheduling", None), "fatal_error", None),
+        getattr(getattr(summary, "execution", None), "fatal_error", None),
+        getattr(getattr(summary, "post_processing", None), "fatal_error", None),
+    ]
+    for fatal_error in fatal_messages:
+        diagnostic = _provider_diagnostic_from_pipeline_error(
+            fatal_error=fatal_error,
+            audit=audit,
+        )
+        if diagnostic is not None:
+            diagnostics.append(diagnostic)
+    return _dedupe_provider_diagnostics(diagnostics)
+
+
 async def build_audit_results_response(
     session: AsyncSession,
     audit: Audit,
@@ -1064,6 +1237,17 @@ async def build_audit_results_response(
                 _source_item_from_value(value, provider=run.provider)
                 for value in parsed_result.sources
             ]
+        provider_error = _provider_diagnostic_response(
+            error_object=raw_response.error_object if raw_response is not None else None,
+            provider=run.provider,
+            run_status=run.status,
+            model=_provider_model_from_metadata(
+                raw_response.provider_metadata if raw_response is not None else None
+            ),
+            level=_scdl_level_value(audit.scdl_level),
+            run_id=run.id,
+            query_id=query.id,
+        )
 
         rows.append(
             AuditResultRowResponse(
@@ -1100,6 +1284,7 @@ async def build_audit_results_response(
                     if raw_response is not None
                     else None
                 ),
+                provider_error=provider_error,
             )
         )
 
@@ -1108,6 +1293,9 @@ async def build_audit_results_response(
         audit_number=audit_number,
         rows=rows,
         total=len(rows),
+        provider_diagnostics=_dedupe_provider_diagnostics(
+            [row.provider_error for row in rows if row.provider_error is not None]
+        ),
     )
 
 
@@ -1254,6 +1442,7 @@ async def build_audit_summary_response(
         ],
         competitors=_competitor_summary_items(results),
         sources=_source_summary_items(results),
+        provider_diagnostics=results.provider_diagnostics,
     )
 
 
@@ -1587,7 +1776,14 @@ async def run_audit_pipeline_dev(
             raise HTTPException(status_code=403, detail=DEV_PIPELINE_FORBIDDEN_DETAIL)
         audit, _brand = await load_accessible_audit(session, audit_id, current_user)
         summary = await run_audit_pipeline(session, audit.id)
-        return build_pipeline_run_response(summary)
+        return build_pipeline_run_response(
+            summary,
+            provider_diagnostics=await _pipeline_provider_diagnostics(
+                session,
+                audit,
+                summary,
+            ),
+        )
     except HTTPException:
         raise
     except SQLAlchemyError as exc:
@@ -1606,7 +1802,14 @@ async def run_audit_pipeline_owner(
         audit, _brand = await load_accessible_audit(session, audit_id, current_user)
         await validate_audit_pipeline_triggerable(session, audit)
         summary = await run_audit_pipeline(session, audit.id)
-        return build_pipeline_run_response(summary)
+        return build_pipeline_run_response(
+            summary,
+            provider_diagnostics=await _pipeline_provider_diagnostics(
+                session,
+                audit,
+                summary,
+            ),
+        )
     except HTTPException:
         raise
     except SQLAlchemyError as exc:

@@ -25,10 +25,9 @@ class MockProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, "error")
         self.assertIsNone(response.raw_answer)
         self.assertIsNone(response.citations)
-        self.assertEqual(
-            response.error,
-            {"code": "mock_error", "message": "Deterministic mock error."},
-        )
+        assert response.error is not None
+        self.assertEqual(response.error["code"], "PROVIDER_REQUEST_FAILED")
+        self.assertEqual(response.error["provider"], "mock")
 
     async def test_repeated_calls_with_same_input_are_identical(self) -> None:
         adapter = MockProviderAdapter(mode="success")
@@ -43,11 +42,41 @@ class MockProviderTests(unittest.IsolatedAsyncioTestCase):
 
         response = await adapter.query("brand visibility benchmark")
 
-        self.assertEqual(response.status, "success")
-        self.assertEqual(response.raw_answer, "")
-        self.assertEqual(response.citations, [])
-        self.assertIsNone(response.error)
+        self.assertEqual(response.status, "error")
+        self.assertIsNone(response.raw_answer)
+        self.assertIsNone(response.citations)
+        assert response.error is not None
+        self.assertEqual(response.error["code"], "EMPTY_RESPONSE")
         self.assertEqual(response.provider_metadata, {"provider": "mock", "mode": "empty"})
+
+    async def test_invalid_response_mode_returns_invalid_response_error(self) -> None:
+        adapter = MockProviderAdapter(mode="invalid_response")
+
+        response = await adapter.query("brand visibility benchmark")
+
+        self.assertEqual(response.status, "error")
+        assert response.error is not None
+        self.assertEqual(response.error["code"], "INVALID_RESPONSE")
+
+    async def test_timeout_mode_returns_retryable_timeout_error(self) -> None:
+        adapter = MockProviderAdapter(mode="timeout")
+
+        response = await adapter.query("brand visibility benchmark")
+
+        self.assertEqual(response.status, "timeout")
+        assert response.error is not None
+        self.assertEqual(response.error["code"], "TIMEOUT")
+        self.assertTrue(response.error["retryable"])
+
+    async def test_rate_limited_mode_returns_retryable_rate_limit_error(self) -> None:
+        adapter = MockProviderAdapter(mode="rate_limited")
+
+        response = await adapter.query("brand visibility benchmark")
+
+        self.assertEqual(response.status, "rate_limited")
+        assert response.error is not None
+        self.assertEqual(response.error["code"], "RATE_LIMIT")
+        self.assertTrue(response.error["retryable"])
 
 
 if __name__ == "__main__":

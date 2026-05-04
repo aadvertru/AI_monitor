@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import type { AuditStatus, RunStatus, SCDLLevel } from "../lib/api/types";
+import type {
+  AuditStatus,
+  ProviderDiagnosticCode,
+  RunStatus,
+  SCDLLevel,
+} from "../lib/api/types";
 import {
   auditListFixture,
   auditPipelineRunFixture,
@@ -28,6 +33,21 @@ const documentedRunStatuses = new Set<RunStatus>([
   "rate_limited",
 ]);
 const documentedScdlLevels = new Set<SCDLLevel>(["L1", "L2"]);
+const documentedProviderDiagnosticCodes = new Set<ProviderDiagnosticCode>([
+  "PROVIDER_DISABLED",
+  "NO_API_KEY",
+  "INVALID_API_KEY",
+  "INVALID_MODEL",
+  "UNSUPPORTED_L2",
+  "TIMEOUT",
+  "RATE_LIMIT",
+  "EMPTY_RESPONSE",
+  "INVALID_RESPONSE",
+  "PROVIDER_UNAVAILABLE",
+  "PROVIDER_REQUEST_FAILED",
+  "CONFIGURATION_ERROR",
+  "UNKNOWN_PROVIDER_ERROR",
+]);
 
 describe("frontend-backend contract fixtures", () => {
   it("uses documented auth and audit status values only", () => {
@@ -66,6 +86,9 @@ describe("frontend-backend contract fixtures", () => {
     for (const row of auditResultsFixture.rows) {
       expect(documentedRunStatuses.has(row.run_status)).toBe(true);
       expect(documentedScdlLevels.has(row.scdl_level)).toBe(true);
+      if (row.provider_error) {
+        expect(documentedProviderDiagnosticCodes.has(row.provider_error.code)).toBe(true);
+      }
     }
 
     expect(auditSummaryFixture.competitors.length).toBeGreaterThan(0);

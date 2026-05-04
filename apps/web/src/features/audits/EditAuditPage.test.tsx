@@ -74,6 +74,57 @@ describe("edit audit page", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("generates additional seed queries before saving a created audit", async () => {
+    const updatedAudit = {
+      ...auditDetailFixture,
+      seed_queries: ["best ai visibility tools", "best acme alternatives"],
+      seed_query_items: [
+        { text: "best ai visibility tools", type: null, source: "user" },
+        { text: "best acme alternatives", type: "alternative", source: "ai" },
+      ],
+    };
+    const fetchMock = mockFetchSequence([
+      { body: currentUserFixture },
+      { body: auditDetailFixture },
+      {
+        body: {
+          suggestions: [
+            {
+              text: "best acme alternatives",
+              type: "alternative",
+              source: "ai",
+            },
+          ],
+        },
+      },
+      { body: updatedAudit },
+    ]);
+    const user = userEvent.setup();
+
+    renderRoute("/audits/42/edit");
+
+    expect(await screen.findByRole("heading", { name: "Edit audit setup" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Generate seed queries" }));
+    await user.click(screen.getByRole("button", { name: "Generate 10 queries" }));
+    expect(await screen.findByDisplayValue("best acme alternatives")).toBeInTheDocument();
+    expect(screen.getByLabelText("Query type 2")).toHaveValue("alternative");
+    await user.click(screen.getByRole("button", { name: "Save setup" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://localhost:8000/audits/42",
+        expect.objectContaining({ method: "PUT" }),
+      );
+    });
+    const [, request] = fetchMock.mock.calls[3];
+    expect(JSON.parse(String(request?.body))).toMatchObject({
+      seed_query_items: [
+        { text: "best ai visibility tools", type: null, source: "user" },
+        { text: "best acme alternatives", type: "alternative", source: "ai" },
+      ],
+    });
+  });
+
   it("does not render editable form controls for completed audits", async () => {
     mockFetchSequence([
       { body: currentUserFixture },

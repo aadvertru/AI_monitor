@@ -212,7 +212,7 @@ describe("create audit page", () => {
     });
   });
 
-  it("does not include removed generated suggestions in the final save payload", async () => {
+  it("requires at least one seed query before creating an audit", async () => {
     const fetchMock = mockFetchSequence([
       { body: currentUserFixture },
       {
@@ -226,7 +226,6 @@ describe("create audit page", () => {
           ],
         },
       },
-      { body: createAuditResponse },
     ]);
     const user = userEvent.setup();
 
@@ -239,16 +238,8 @@ describe("create audit page", () => {
     await user.click(screen.getByRole("button", { name: "Remove seed query 1" }));
     await user.click(screen.getByRole("button", { name: "Create audit" }));
 
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(
-        "http://localhost:8000/audits",
-        expect.objectContaining({ method: "POST" }),
-      );
-    });
-    const [, , request] = fetchMock.mock.calls;
-    expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({
-      seed_query_items: null,
-    });
+    expect(await screen.findByText("Add at least one seed query.")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("keeps generation disabled when no source is selected or available", async () => {
@@ -463,6 +454,7 @@ describe("create audit page", () => {
     renderRoute("/audits/new");
     await user.type(await screen.findByLabelText("Brand name"), "Acme AI");
     await user.type(screen.getByLabelText("Brand domain"), "acme.ai");
+    await user.type(screen.getByLabelText("Seed query 1"), "best nike shoes");
     await user.click(screen.getByRole("button", { name: "Create audit" }));
 
     await waitFor(() => {
@@ -481,6 +473,7 @@ describe("create audit page", () => {
     renderRoute("/audits/new");
     await user.type(await screen.findByLabelText("Brand name"), "Acme AI");
     await user.type(screen.getByLabelText("Brand domain"), "acme.ai");
+    await user.type(screen.getByLabelText("Seed query 1"), "best nike shoes");
     await user.click(screen.getByRole("button", { name: "Create audit" }));
 
     expect(

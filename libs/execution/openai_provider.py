@@ -13,6 +13,17 @@ from libs.execution.openai_config import (
     load_openai_provider_config,
 )
 from libs.execution.provider_adapter import BaseProviderAdapter, ProviderResponse
+from libs.execution.provider_errors import (
+    configuration_error,
+    empty_response_error,
+    invalid_response_error,
+    no_api_key_error,
+    provider_request_failed_error,
+    rate_limit_error,
+    timeout_error,
+    unknown_provider_error,
+    unsupported_l2_error,
+)
 
 try:
     from openai import APIError as OpenAIAPIError
@@ -78,10 +89,7 @@ class OpenAIProviderAdapter(BaseProviderAdapter):
                 raw_answer=None,
                 citations=None,
                 response_time=None,
-                error={
-                    "code": "missing_api_key",
-                    "message": "OPENAI_API_KEY is not configured.",
-                },
+                error=no_api_key_error("openai").to_error_dict(),
                 provider_metadata={"provider": "openai"},
             )
 
@@ -91,10 +99,7 @@ class OpenAIProviderAdapter(BaseProviderAdapter):
                 raw_answer=None,
                 citations=None,
                 response_time=None,
-                error={
-                    "code": "sdk_not_installed",
-                    "message": "openai package is required for OpenAIProviderAdapter.",
-                },
+                error=configuration_error("openai").to_error_dict(),
                 provider_metadata={"provider": "openai"},
             )
 
@@ -105,10 +110,7 @@ class OpenAIProviderAdapter(BaseProviderAdapter):
                 raw_answer=None,
                 citations=None,
                 response_time=None,
-                error={
-                    "code": "unsupported_scdl_level",
-                    "message": "OpenAI provider supports only SCDL L1 or L2.",
-                },
+                error=unsupported_l2_error("openai").to_error_dict(),
                 provider_metadata={"provider": "openai"},
             )
 
@@ -132,6 +134,30 @@ class OpenAIProviderAdapter(BaseProviderAdapter):
             citations = self._extract_citations(response)
             provider_metadata = self._extract_provider_metadata(response, model=model)
 
+            if raw_answer is None:
+                return ProviderResponse(
+                    status="error",
+                    raw_answer=None,
+                    citations=None,
+                    response_time=elapsed,
+                    error=invalid_response_error(
+                        "openai",
+                        model,
+                        scdl_level,
+                    ).to_error_dict(),
+                    provider_metadata=provider_metadata,
+                )
+
+            if raw_answer.strip() == "":
+                return ProviderResponse(
+                    status="error",
+                    raw_answer=None,
+                    citations=None,
+                    response_time=elapsed,
+                    error=empty_response_error("openai", model, scdl_level).to_error_dict(),
+                    provider_metadata=provider_metadata,
+                )
+
             return ProviderResponse(
                 status="success",
                 raw_answer=raw_answer,
@@ -148,7 +174,7 @@ class OpenAIProviderAdapter(BaseProviderAdapter):
                 raw_answer=None,
                 citations=None,
                 response_time=elapsed,
-                error=self._normalize_error(exc, status=status),
+                error=self._normalize_error(exc, status=status, model=model, level=scdl_level),
                 provider_metadata={"provider": "openai", "model": model},
             )
 
@@ -183,14 +209,21 @@ class OpenAIProviderAdapter(BaseProviderAdapter):
 
         return "error"
 
-    def _normalize_error(self, exc: Exception, status: str) -> dict[str, str]:
+    def _normalize_error(
+        self,
+        exc: Exception,
+        status: str,
+        *,
+        model: str | None,
+        level: str | None,
+    ) -> dict[str, object]:
         if status == "timeout":
-            return {"code": "timeout", "message": "OpenAI request timed out."}
+            return timeout_error("openai", model, level).to_error_dict()
         if status == "rate_limited":
-            return {"code": "rate_limited", "message": "OpenAI rate limit exceeded."}
+            return rate_limit_error("openai", model, level).to_error_dict()
         if isinstance(exc, OpenAIAPIError):
-            return {"code": "provider_error", "message": "OpenAI request failed."}
-        return {"code": "provider_error", "message": "OpenAI request failed."}
+            return provider_request_failed_error("openai", model, level).to_error_dict()
+        return unknown_provider_error("openai", model, level).to_error_dict()
 
     def _extract_raw_answer(self, response: Any) -> str | None:
         output_text = self._get_attr_or_key(response, "output_text")

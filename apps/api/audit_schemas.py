@@ -105,6 +105,7 @@ class AuditStatusResponse(FrontendAuditSchema):
     failed_runs: int = 0
     completion_ratio: float = 0.0
     updated_at: datetime | None = None
+    provider_diagnostics: list["ProviderDiagnosticResponse"] = Field(default_factory=list)
 
 
 class AuditRunTriggerResponse(FrontendAuditSchema):
@@ -166,6 +167,7 @@ class AuditPipelineRunResponse(FrontendAuditSchema):
     post_processing: AuditPipelinePostProcessingResponse | None = None
     final_audit_status: AuditStatusValue | None = None
     fatal_error: str | None = None
+    provider_diagnostics: list["ProviderDiagnosticResponse"] = Field(default_factory=list)
 
 
 class ComponentScoresResponse(FrontendAuditSchema):
@@ -187,6 +189,17 @@ class SourceSummaryItemResponse(FrontendAuditSchema):
     source_quality_score: float | None = None
 
 
+class ProviderDiagnosticResponse(FrontendAuditSchema):
+    code: str
+    message: str
+    provider: str
+    model: str | None = None
+    level: SCDLLevelValue | None = None
+    retryable: bool = False
+    run_id: int | None = None
+    query_id: int | None = None
+
+
 class AuditResultRowResponse(FrontendAuditSchema):
     audit_id: int
     scdl_level: SCDLLevelValue = "L1"
@@ -205,6 +218,7 @@ class AuditResultRowResponse(FrontendAuditSchema):
     raw_answer_ref: int | None = None
     error_code: str | None = None
     error_message: str | None = None
+    provider_error: ProviderDiagnosticResponse | None = None
 
 
 class AuditResultsResponse(FrontendAuditSchema):
@@ -212,6 +226,7 @@ class AuditResultsResponse(FrontendAuditSchema):
     audit_number: int
     rows: list[AuditResultRowResponse] = Field(default_factory=list)
     total: int = 0
+    provider_diagnostics: list[ProviderDiagnosticResponse] = Field(default_factory=list)
 
 
 class CompetitorSummaryItemResponse(FrontendAuditSchema):
@@ -255,6 +270,7 @@ class AuditSummaryResponse(FrontendAuditSchema):
     query_type_coverage: list[QueryTypeCoverageItemResponse] = Field(default_factory=list)
     competitors: list[CompetitorSummaryItemResponse] = Field(default_factory=list)
     sources: list[SourceSummaryItemResponse] = Field(default_factory=list)
+    provider_diagnostics: list[ProviderDiagnosticResponse] = Field(default_factory=list)
 
 
 class RawResponseInspectionResponse(FrontendAuditSchema):

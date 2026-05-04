@@ -2,6 +2,20 @@ export type UserRole = "user" | "admin";
 export type AuditStatus = "created" | "running" | "partial" | "completed" | "failed";
 export type RunStatus = "pending" | "success" | "error" | "timeout" | "rate_limited";
 export type SCDLLevel = "L1" | "L2";
+export type ProviderDiagnosticCode =
+  | "PROVIDER_DISABLED"
+  | "NO_API_KEY"
+  | "INVALID_API_KEY"
+  | "INVALID_MODEL"
+  | "UNSUPPORTED_L2"
+  | "TIMEOUT"
+  | "RATE_LIMIT"
+  | "EMPTY_RESPONSE"
+  | "INVALID_RESPONSE"
+  | "PROVIDER_UNAVAILABLE"
+  | "PROVIDER_REQUEST_FAILED"
+  | "CONFIGURATION_ERROR"
+  | "UNKNOWN_PROVIDER_ERROR";
 export type SeedQueryType =
   | "brand_direct"
   | "category_discovery"
@@ -131,6 +145,7 @@ export type AuditStatusResponse = {
   failed_runs: number;
   completion_ratio: number;
   updated_at: string | null;
+  provider_diagnostics?: ProviderDiagnostic[];
 };
 
 export type AuditRunTriggerResponse = {
@@ -192,6 +207,18 @@ export type AuditPipelineRunResponse = {
   post_processing: AuditPipelinePostProcessingResponse | null;
   final_audit_status: AuditStatus | null;
   fatal_error: string | null;
+  provider_diagnostics?: ProviderDiagnostic[];
+};
+
+export type ProviderDiagnostic = {
+  code: ProviderDiagnosticCode;
+  message: string;
+  provider: string;
+  model?: string | null;
+  level?: SCDLLevel | null;
+  retryable?: boolean;
+  run_id?: number | string | null;
+  query_id?: number | string | null;
 };
 
 export type ComponentScores = {
@@ -231,6 +258,7 @@ export type AuditResultRow = {
   raw_answer_ref: number | null;
   error_code: string | null;
   error_message: string | null;
+  provider_error?: ProviderDiagnostic | null;
 };
 
 export type AuditResultsResponse = {
@@ -238,6 +266,7 @@ export type AuditResultsResponse = {
   audit_number: number;
   rows: AuditResultRow[];
   total: number;
+  provider_diagnostics?: ProviderDiagnostic[];
 };
 
 export type CompetitorSummaryItem = {
@@ -281,4 +310,5 @@ export type AuditSummaryResponse = {
   query_type_coverage: QueryTypeCoverageItem[];
   competitors: CompetitorSummaryItem[];
   sources: SourceSummaryItem[];
+  provider_diagnostics?: ProviderDiagnostic[];
 };

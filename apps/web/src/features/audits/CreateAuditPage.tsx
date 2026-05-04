@@ -107,6 +107,8 @@ export function CreateAuditPage() {
   const watchedValues = useWatch({ control });
   const estimatedTokens = estimateAuditTokens(watchedValues);
   const brandDescriptionLength = watchedValues.brandDescription?.length ?? 0;
+  const seedQueryItemsError =
+    errors.seedQueryItems?.message ?? errors.seedQueryItems?.root?.message;
   const hasGenerationDomain = Boolean(watchedValues.brandDomain?.trim());
   const hasGenerationDescription = Boolean(watchedValues.brandDescription?.trim());
   const effectiveUseDomainForGeneration =
@@ -211,8 +213,8 @@ export function CreateAuditPage() {
                 <input type="hidden" {...register(`seedQueryItems.${index}.source`)} />
               </div>
             ))}
-            {errors.seedQueryItems?.message ? (
-              <p className="text-sm text-red-700">{errors.seedQueryItems.message}</p>
+            {seedQueryItemsError ? (
+              <p className="text-sm text-red-700">{seedQueryItemsError}</p>
             ) : null}
             <Button
               type="button"

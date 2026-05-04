@@ -134,6 +134,7 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
                 "brand_name": "Acme AI",
                 "providers": ["openai"],
                 "runs_per_query": 1,
+                "seed_queries": ["valid query"],
             }
         )
 
@@ -196,6 +197,7 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
                         "brand_domain": brand_domain,
                         "providers": ["openai"],
                         "runs_per_query": 1,
+                        "seed_queries": ["valid query"],
                     }
                 )
 
@@ -206,6 +208,7 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
                 "brand_description": "x" * 500,
                 "providers": ["openai"],
                 "runs_per_query": 1,
+                "seed_queries": ["valid query"],
             }
         )
         self.assertEqual(valid_payload.brand_description, "x" * 500)
@@ -217,6 +220,7 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
                     "brand_description": "x" * 501,
                     "providers": ["openai"],
                     "runs_per_query": 1,
+                    "seed_queries": ["valid query"],
                 }
             )
 
@@ -239,6 +243,7 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
                 "providers": ["mock"],
                 "runs_per_query": 1,
                 "scdl_level": "L1",
+                "seed_queries": ["valid query"],
             }
         )
 
@@ -264,6 +269,7 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
                 "providers": ["mock"],
                 "runs_per_query": 1,
                 "scdl_level": "L2",
+                "seed_queries": ["valid query"],
             }
         )
 
@@ -361,6 +367,24 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
                 }
             )
 
+    def test_at_least_one_seed_query_is_required(self) -> None:
+        for payload_fragment in (
+            {},
+            {"seed_queries": []},
+            {"seed_query_items": []},
+        ):
+            with self.subTest(payload_fragment=payload_fragment), self.assertRaises(
+                ValidationError
+            ):
+                AuditCreateRequest.model_validate(
+                    {
+                        "brand_name": "Acme",
+                        "providers": ["mock"],
+                        "runs_per_query": 1,
+                        **payload_fragment,
+                    }
+                )
+
     def test_seed_query_count_limit_is_enforced(self) -> None:
         valid_payload = AuditCreateRequest.model_validate(
             {
@@ -444,6 +468,7 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
                 "providers": ["openai"],
                 "runs_per_query": 1,
                 "brand_domain": "acme.ai",
+                "seed_queries": ["valid query"],
             }
         )
         second_payload = AuditCreateRequest.model_validate(
@@ -451,6 +476,7 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
                 "brand_name": "  ACME AI  ",
                 "providers": ["mock"],
                 "runs_per_query": 1,
+                "seed_queries": ["valid query"],
             }
         )
 
@@ -485,6 +511,7 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
                 "brand_name": "Acme AI",
                 "providers": ["openai"],
                 "runs_per_query": 1,
+                "seed_queries": ["valid query"],
             }
         )
 
@@ -621,6 +648,7 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
                 "brand_name": "Acme AI",
                 "providers": ["mock"],
                 "runs_per_query": 1,
+                "seed_queries": ["valid query"],
             }
         )
 

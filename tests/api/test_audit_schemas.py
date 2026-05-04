@@ -133,6 +133,7 @@ def test_audit_status_serializes_without_internal_job_details() -> None:
         "failed_runs": 2,
         "completion_ratio": 0.5,
         "updated_at": "2026-04-29T09:30:00Z",
+        "provider_diagnostics": [],
     }
     assert "jobs" not in payload
     _assert_no_sensitive_keys(payload)
@@ -192,6 +193,7 @@ def test_empty_results_response_serializes_stable_shape() -> None:
         "audit_number": 3,
         "rows": [],
         "total": 0,
+        "provider_diagnostics": [],
     }
     _assert_no_sensitive_keys(payload)
 
