@@ -418,6 +418,46 @@ class AuditExecutionServiceTests(unittest.IsolatedAsyncioTestCase):
         assert raw_response is not None
         self.assertEqual(raw_response.provider_metadata["gateway_l2_experimental"], True)
 
+    async def test_gemini_ui_provider_executes_through_openrouter_gateway_mode(self) -> None:
+        audit, _job = await self._create_audit_with_job(provider="gemini")
+        provider = _RecordingProvider(
+            ProviderResponse(
+                status="success",
+                raw_answer="Acme AI is visible in this Gemini gateway answer.",
+                citations=[],
+                response_time=0.1,
+                error=None,
+                provider_metadata={
+                    "provider": "openrouter",
+                    "execution_provider": "openrouter",
+                    "model_id": "google/gemini-test",
+                    "model_provider": "google",
+                    "gateway": True,
+                    "gateway_l2_experimental": False,
+                    "level": "L1",
+                },
+            )
+        )
+
+        summary = await execute_audit_jobs(
+            self.session,
+            audit.id,
+            pilot_config=RealProviderPilotConfig(
+                real_provider_enabled=True,
+                provider_mode="openrouter",
+            ),
+            provider_factory=lambda _provider: provider,
+        )
+
+        raw_response = (
+            await self.session.execute(select(RawResponse))
+        ).scalar_one_or_none()
+        self.assertEqual(summary.jobs_executed, 1)
+        self.assertEqual(summary.success_count, 1)
+        self.assertEqual(provider.calls[0]["provider"], "gemini")
+        assert raw_response is not None
+        self.assertEqual(raw_response.provider_status, "success")
+
 
 if __name__ == "__main__":
     unittest.main()

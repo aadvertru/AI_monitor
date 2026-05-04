@@ -76,10 +76,40 @@ class ProviderFactoryTests(unittest.TestCase):
 
         self.assertIsInstance(adapter, OpenRouterProviderAdapter)
 
+    def test_openrouter_mode_routes_gemini_to_openrouter_adapter(self) -> None:
+        with patch.dict("os.environ", {"OPENROUTER_API_KEY": "sk-or-test"}, clear=True):
+            adapter = build_provider_adapter(
+                "gemini",
+                pilot_config=RealProviderPilotConfig(
+                    real_provider_enabled=True,
+                    provider_mode="openrouter",
+                ),
+            )
+
+        self.assertIsInstance(adapter, OpenRouterProviderAdapter)
+
     def test_provider_mode_mismatch_blocks_real_providers(self) -> None:
+        with self.assertRaisesRegex(PilotPolicyError, "OpenRouter adapter"):
+            build_provider_adapter(
+                "openrouter",
+                pilot_config=RealProviderPilotConfig(
+                    real_provider_enabled=True,
+                    provider_mode="openai",
+                ),
+            )
+
         with self.assertRaisesRegex(PilotPolicyError, "Anthropic adapter"):
             build_provider_adapter(
                 "anthropic",
+                pilot_config=RealProviderPilotConfig(
+                    real_provider_enabled=True,
+                    provider_mode="openai",
+                ),
+            )
+
+        with self.assertRaisesRegex(PilotPolicyError, "Unsupported provider adapter"):
+            build_provider_adapter(
+                "gemini",
                 pilot_config=RealProviderPilotConfig(
                     real_provider_enabled=True,
                     provider_mode="openai",
@@ -92,15 +122,6 @@ class ProviderFactoryTests(unittest.TestCase):
                 pilot_config=RealProviderPilotConfig(
                     real_provider_enabled=True,
                     provider_mode="anthropic",
-                ),
-            )
-
-        with self.assertRaisesRegex(PilotPolicyError, "OpenRouter adapter"):
-            build_provider_adapter(
-                "openrouter",
-                pilot_config=RealProviderPilotConfig(
-                    real_provider_enabled=True,
-                    provider_mode="openai",
                 ),
             )
 

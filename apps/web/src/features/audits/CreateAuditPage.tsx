@@ -1,7 +1,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation } from "@tanstack/react-query";
 import { ArrowLeft, Loader2, Plus, Sparkles, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useFieldArray, useForm, useWatch } from "react-hook-form";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
@@ -105,6 +105,15 @@ export function CreateAuditPage() {
   });
 
   const watchedValues = useWatch({ control });
+  const isSourceIntelligenceAvailable = watchedValues.scdlLevel === "L2";
+  useEffect(() => {
+    if (!isSourceIntelligenceAvailable && watchedValues.enableSourceIntelligence) {
+      setValue("enableSourceIntelligence", false, {
+        shouldDirty: true,
+        shouldValidate: true,
+      });
+    }
+  }, [isSourceIntelligenceAvailable, setValue, watchedValues.enableSourceIntelligence]);
   const estimatedTokens = estimateAuditTokens(watchedValues);
   const brandDescriptionLength = watchedValues.brandDescription?.length ?? 0;
   const seedQueryItemsError =
@@ -348,16 +357,18 @@ export function CreateAuditPage() {
           </Field>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-2">
-          <label className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-ink">
-            <input
-              className="size-4 accent-brand-600"
-              type="checkbox"
-              {...register("enableSourceIntelligence")}
-            />
-            Source intelligence
-          </label>
-        </div>
+        {isSourceIntelligenceAvailable ? (
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-ink">
+              <input
+                className="size-4 accent-brand-600"
+                type="checkbox"
+                {...register("enableSourceIntelligence")}
+              />
+              Source intelligence
+            </label>
+          </div>
+        ) : null}
 
         {createAuditMutation.error ? (
           <p className="text-sm text-red-700">

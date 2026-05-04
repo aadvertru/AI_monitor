@@ -48,6 +48,7 @@ describe("create audit page", () => {
     expect(screen.queryByLabelText("Locale")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Runs per query")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Follow-up depth")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Source intelligence")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Generate seed queries" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Query expansion/ })).not.toBeInTheDocument();
     expect(screen.getByText(/Estimated audit cost:/)).toHaveTextContent("0 tokens");
@@ -393,6 +394,40 @@ describe("create audit page", () => {
 
     await user.type(screen.getByLabelText("Max queries"), "1");
     expect(screen.getByText(/Estimated audit cost:/)).toHaveTextContent("40 tokens");
+  });
+
+  it("only shows source intelligence for L2 and clears it before L1 submission", async () => {
+    const fetchMock = mockFetchSequence([
+      { body: currentUserFixture },
+      { body: createAuditResponse },
+    ]);
+    const user = userEvent.setup();
+
+    renderRoute("/audits/new");
+    await user.type(await screen.findByLabelText("Brand name"), "Acme AI");
+    await user.type(screen.getByLabelText("Brand domain"), "acme.ai");
+    await user.type(screen.getByLabelText("Seed query 1"), "best nike shoes");
+
+    expect(screen.queryByLabelText("Source intelligence")).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText("SCDL level"), "L2");
+    await user.click(screen.getByLabelText("Source intelligence"));
+    expect(screen.getByLabelText("Source intelligence")).toBeChecked();
+
+    await user.selectOptions(screen.getByLabelText("SCDL level"), "L1");
+    expect(screen.queryByLabelText("Source intelligence")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Create audit" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://localhost:8000/audits",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const [, request] = fetchMock.mock.calls[1];
+    expect(JSON.parse(String(request?.body))).toMatchObject({
+      scdl_level: "L1",
+      enable_source_intelligence: false,
+    });
   });
 
   it("submits seed queries, location fields, and hidden defaults in the backend contract format", async () => {

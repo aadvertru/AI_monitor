@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { appendGeneratedSeedQueries, schema } from "./auditSetupFormConfig";
+import {
+  appendGeneratedSeedQueries,
+  buildPayload,
+  estimateAuditTokens,
+  schema,
+} from "./auditSetupFormConfig";
 
 describe("seed query append behavior", () => {
   it("adds unique generated suggestions to the end without replacing manual queries", () => {
@@ -112,5 +117,29 @@ describe("audit setup form schema", () => {
     if (!result.success) {
       expect(result.error.issues[0]?.message).toBe("Seed query must be at least 3 characters.");
     }
+  });
+
+  it("ignores source intelligence cost for L1", () => {
+    expect(
+      estimateAuditTokens({
+        enableSourceIntelligence: true,
+        providers: ["openai"],
+        scdlLevel: "L1",
+        seedQueryItems: [{ text: "valid query", type: null, source: "user" }],
+      }),
+    ).toBe(10);
+  });
+
+  it("forces source intelligence off in L1 payloads", () => {
+    const values = schema.parse({
+      ...validValues,
+      enableSourceIntelligence: true,
+      scdlLevel: "L1",
+    });
+
+    expect(buildPayload(values)).toMatchObject({
+      scdl_level: "L1",
+      enable_source_intelligence: false,
+    });
   });
 });

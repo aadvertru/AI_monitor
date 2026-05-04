@@ -1,7 +1,8 @@
 # Provider Contract
 
 This document defines the provider adapter contract for AI Brand Visibility Monitor.
-It is the standard for mock, OpenAI, and future real providers such as Anthropic.
+It is the standard for mock, native providers such as OpenAI, gateway providers
+such as OpenRouter, and future real providers.
 
 The goal is to keep provider integrations interchangeable and prevent provider-specific
 response shapes from leaking into parser, scoring, aggregation, API responses, or frontend code.
@@ -9,8 +10,13 @@ response shapes from leaking into parser, scoring, aggregation, API responses, o
 ## Current Status
 
 - `mock`: required for deterministic local/test execution.
-- `openai`: first real provider.
-- `anthropic`: future provider, not implemented yet.
+- `openai`: first real provider and current strict L2 baseline.
+- `openrouter`: gateway provider integration implemented with mocked backend
+  coverage and pending live verification. OpenRouter L1 is the multi-model
+  gateway path. OpenRouter L2 is experimental gateway web search, not equivalent
+  to native provider L2.
+- `anthropic`: native branch is deferred/unverified. Claude can be reached
+  through OpenRouter model ids for gateway L1 comparisons.
 
 ## Core Rules
 
@@ -22,6 +28,36 @@ response shapes from leaking into parser, scoring, aggregation, API responses, o
 6. Raw provider responses, raw prompts, request headers, API keys, and secrets must not reach normal frontend endpoints.
 7. CI must not call real providers.
 8. L1 and L2 behavior must be explicit per provider. No silent fallback is allowed.
+
+## Native vs Gateway Providers
+
+Provider identity has three distinct concepts:
+
+```text
+execution_provider = the integration path used by the backend
+model_provider     = the upstream model owner/provider
+model_id           = the configured model identifier for that execution path
+```
+
+Native provider:
+
+- The backend calls the provider API directly.
+- Example: `execution_provider=openai`, `model_provider=openai`,
+  `model_id=gpt-...`.
+- Native integrations are required when provider-specific web search, source
+  semantics, usage, diagnostics, or strict citation behavior matters.
+
+Gateway provider:
+
+- The backend calls a unified routing API that can execute many model providers.
+- Example: `execution_provider=openrouter`, `model_provider=anthropic`,
+  `model_id=anthropic/claude-...`.
+- A gateway-routed Claude model is not the same execution path as native
+  Anthropic.
+
+OpenRouter does not replace native providers. Native adapters remain required
+when provider-specific L2 behavior, exact citations/source behavior, native web
+search tools, provider-specific diagnostics, or cost accounting are required.
 
 ## Current Adapter Interface
 
@@ -72,9 +108,11 @@ ProviderRunInput(
 
 Field rules:
 
-- `provider`: normalized provider id such as `mock`, `openai`, or `anthropic`.
+- `provider`: normalized execution provider id such as `mock`, `openai`,
+  `openrouter`, or `anthropic`.
 - `level`: SCDL level, `L1` or `L2`.
-- `model`: backend-configured model. Normal audit UI must not choose models.
+- `model`: backend-configured model. For gateway providers this is the gateway
+  model id and must be allowlisted before execution.
 - `query`: final seed query text, trimmed and non-empty.
 - `brand_name`: audited brand/entity.
 - `brand_domain`: optional validated domain.
@@ -249,6 +287,11 @@ No silent fallback:
 - No `L2 -> L1` downgrade.
 - No real-provider fallback to mock.
 - No configured-model fallback to another model.
+- No OpenRouter L1 failure fallback to native OpenAI, native Anthropic, or mock.
+- No OpenRouter L2 failure fallback to OpenRouter L1.
+- No OpenRouter L2 failure fallback to native OpenAI L2.
+- No native provider failure fallback to OpenRouter unless a future task
+  explicitly designs that behavior.
 - Any fallback must be explicit and visible in diagnostics.
 
 ## Timeout, Retry, and Rate Limits
@@ -265,7 +308,7 @@ No silent fallback:
 Recommended config keys:
 
 ```text
-PROVIDER_MODE=mock|openai|anthropic
+PROVIDER_MODE=mock|openai|openrouter|anthropic
 REAL_PROVIDER_ENABLED=false|true
 
 OPENAI_API_KEY=...
@@ -274,11 +317,26 @@ OPENAI_L2_MODEL=...
 OPENAI_REQUEST_TIMEOUT_SECONDS=30
 OPENAI_MAX_OUTPUT_TOKENS=1200
 
+OPENROUTER_API_KEY=...
+OPENROUTER_L1_MODEL=...
+OPENROUTER_L2_MODEL=...
+OPENROUTER_ALLOWED_MODELS=...
+OPENROUTER_REQUEST_TIMEOUT_SECONDS=30
+OPENROUTER_MAX_OUTPUT_TOKENS=1200
+OPENROUTER_WEB_SEARCH_ENABLED=false
+OPENROUTER_WEB_SEARCH_TOOL=openrouter:web_search
+OPENROUTER_SITE_URL=
+OPENROUTER_APP_NAME=AI Brand Visibility Monitor
+
 ANTHROPIC_API_KEY=...
 ANTHROPIC_L1_MODEL=...
-ANTHROPIC_L2_MODEL=...
 ANTHROPIC_REQUEST_TIMEOUT_SECONDS=30
 ANTHROPIC_MAX_OUTPUT_TOKENS=1200
+
+# Future Claude L2 phase only:
+ANTHROPIC_L2_MODEL=...
+ANTHROPIC_WEB_SEARCH_TOOL_VERSION=...
+ANTHROPIC_WEB_SEARCH_MAX_USES=...
 
 REAL_PROVIDER_MAX_PROVIDERS=1
 REAL_PROVIDER_MAX_QUERIES=5
@@ -301,6 +359,7 @@ Rules:
 - Disabled provider must produce `PROVIDER_DISABLED`.
 - Invalid model/config must produce `INVALID_MODEL` or `CONFIGURATION_ERROR`.
 - Backend must enforce caps before provider execution.
+- Gateway model ids must be backend allowlisted before provider execution.
 - Frontend must never receive provider secrets or raw config.
 
 ## Raw Response Handling
@@ -434,12 +493,53 @@ Before implementing a new real provider:
 9. Do not change parser/scoring for provider-specific response shapes.
 10. Do not expose provider-specific raw responses to frontend.
 
-## Recommendation Before Anthropic/Claude
+## OpenRouter Gateway Strategy
 
-Before adding Anthropic/Claude:
+OpenRouter is the active gateway provider integration.
 
-1. Stabilize OpenAI one-click UI audit flow.
-2. Normalize provider errors and frontend-safe diagnostics.
-3. Complete OpenAI provider parity checklist.
-4. Add Anthropic L1 adapter first.
-5. Treat Anthropic L2 as unsupported until explicitly implemented and verified.
+OpenRouter L1:
+
+1. Runs AI answers without web access through the OpenRouter gateway.
+2. Uses backend-configured and allowlisted OpenRouter model ids.
+3. Must not enable web search, tools, plugins, `:online`, or external source
+   enrichment.
+4. Sources/citations are normally empty.
+5. Metadata must distinguish `execution_provider=openrouter`,
+   `model_provider=<model prefix>`, and `model_id=<openrouter model id>`.
+
+OpenRouter L2:
+
+1. Is experimental gateway web search.
+2. Uses OpenRouter gateway web-search behavior.
+3. Is not equivalent to native OpenAI, Anthropic, Perplexity, Gemini, or xAI L2.
+4. Citations/sources are best-effort and must be marked as gateway/experimental
+   metadata.
+5. Must not silently fallback to L1, native OpenAI L2, native Anthropic, or mock.
+
+Gateway readiness requires:
+
+- execution provider tracked separately from model provider
+- model id stored in provider metadata
+- model provider derived/stored safely
+- gateway L1 verified without web access
+- gateway L2 explicitly marked experimental unless source/citation behavior is
+  validated
+- no silent fallback to native provider or mock
+- normalized gateway errors
+- JSON-serializable, secret-free gateway usage/source metadata
+
+## Anthropic/Claude Native Branch
+
+Native Anthropic/Claude is deferred/unverified while OpenRouter gateway
+integration is active.
+
+Current native branch state:
+
+1. Native Anthropic code may exist from earlier tasks but is not the active
+   next integration path.
+2. Claude L1 comparisons should use OpenRouter model ids for gateway execution.
+3. Native Anthropic L2/web-search remains future work.
+4. If native `provider=anthropic` fails, it must not fallback to OpenRouter,
+   OpenAI, or mock.
+5. If native `provider=anthropic` requests unsupported L2, return normalized
+   `UNSUPPORTED_L2`.

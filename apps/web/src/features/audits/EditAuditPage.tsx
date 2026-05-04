@@ -125,6 +125,15 @@ export function EditAuditPage() {
   }, [detail.data, reset]);
 
   const watchedValues = useWatch({ control });
+  const isSourceIntelligenceAvailable = watchedValues.scdlLevel === "L2";
+  useEffect(() => {
+    if (!isSourceIntelligenceAvailable && watchedValues.enableSourceIntelligence) {
+      setValue("enableSourceIntelligence", false, {
+        shouldDirty: true,
+        shouldValidate: true,
+      });
+    }
+  }, [isSourceIntelligenceAvailable, setValue, watchedValues.enableSourceIntelligence]);
   const estimatedTokens = estimateAuditTokens(watchedValues);
   const brandDescriptionLength = watchedValues.brandDescription?.length ?? 0;
   const seedQueryItemsError =
@@ -400,14 +409,16 @@ export function EditAuditPage() {
             </Field>
           </div>
 
-          <label className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-ink md:w-1/2">
-            <input
-              className="size-4 accent-brand-600"
-              type="checkbox"
-              {...register("enableSourceIntelligence")}
-            />
-            Source intelligence
-          </label>
+          {isSourceIntelligenceAvailable ? (
+            <label className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-ink md:w-1/2">
+              <input
+                className="size-4 accent-brand-600"
+                type="checkbox"
+                {...register("enableSourceIntelligence")}
+              />
+              Source intelligence
+            </label>
+          ) : null}
 
           {updateAuditMutation.error ? (
             <p className="text-sm text-red-700">

@@ -125,6 +125,50 @@ describe("edit audit page", () => {
     });
   });
 
+  it("hides source intelligence for L1 audits and saves it as disabled", async () => {
+    const l1AuditWithLegacySourceIntelligence = {
+      ...auditDetailFixture,
+      enable_source_intelligence: true,
+      scdl_level: "L1",
+    };
+    const fetchMock = mockFetchSequence([
+      { body: currentUserFixture },
+      { body: l1AuditWithLegacySourceIntelligence },
+      { body: { ...l1AuditWithLegacySourceIntelligence, enable_source_intelligence: false } },
+    ]);
+    const user = userEvent.setup();
+
+    renderRoute("/audits/42/edit");
+
+    expect(await screen.findByRole("heading", { name: "Edit audit setup" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Source intelligence")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save setup" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://localhost:8000/audits/42",
+        expect.objectContaining({ method: "PUT" }),
+      );
+    });
+    const [, request] = fetchMock.mock.calls[2];
+    expect(JSON.parse(String(request?.body))).toMatchObject({
+      scdl_level: "L1",
+      enable_source_intelligence: false,
+    });
+  });
+
+  it("shows source intelligence for L2 audits", async () => {
+    mockFetchSequence([
+      { body: currentUserFixture },
+      { body: { ...auditDetailFixture, scdl_level: "L2" } },
+    ]);
+
+    renderRoute("/audits/42/edit");
+
+    expect(await screen.findByRole("heading", { name: "Edit audit setup" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Source intelligence")).toBeInTheDocument();
+  });
+
   it("does not render editable form controls for completed audits", async () => {
     mockFetchSequence([
       { body: currentUserFixture },

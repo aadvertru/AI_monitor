@@ -6,15 +6,22 @@ capabilities, prevent provider-specific behavior from leaking into parser,
 scoring, aggregation, API responses, or frontend code, confirm L1/L2 support,
 and decide when a provider is ready to be marked as supported.
 
-Anthropic/Claude is future work. Do not implement it as part of this document.
+OpenRouter is the active next provider integration. It is a gateway provider:
+the backend calls OpenRouter while the routed model may belong to Anthropic,
+Google, OpenAI, Meta, xAI, or another upstream provider.
+
+Native Anthropic/Claude is deferred/unverified while the project moves to the
+OpenRouter gateway path. Claude L1 can be tested through OpenRouter model ids.
 
 ## Provider Support Matrix
 
-| Provider | Status | L1 | L2 | Notes |
-|---|---|---|---|---|
-| `mock` | supported for tests/dev | yes | deterministic simulation | Required for CI and local deterministic tests; never a real visibility source. |
-| `openai` | active real provider | yes | yes | First real provider. Uses backend-owned OpenAI execution and normalized outputs. |
-| `anthropic` | planned | planned | not assumed | Future work. Initial target is L1 only until explicitly implemented and verified. |
+| Provider | Type | Status | L1 | L2 | Notes |
+|---|---|---|---|---|---|
+| `mock` | native/test | supported | yes | deterministic simulation | Required for CI and local deterministic tests; never a real visibility source. |
+| `openai` | native | baseline | yes | yes | Primary verified strict L2/source-capable path. |
+| `openrouter` | gateway | implemented/pending live verification | implemented | experimental implemented | One key, many L1 models; L2 is best-effort gateway web search. |
+| `anthropic` | native | deferred/unverified | deferred | future | Native branch deferred; use OpenRouter for Claude L1 comparisons. |
+| `perplexity` | native | future | future | future | Optional future citation/search provider. |
 
 ## Provider Checklist Template
 
@@ -28,6 +35,7 @@ Use this template for every provider before marking it supported.
 - [ ] Unsupported L2 returns `UNSUPPORTED_L2`
 - [ ] No silent fallback from L2 to L1
 - [ ] No silent fallback from real provider to mock
+- [ ] Gateway providers distinguish execution provider, model provider, and model id
 - [ ] Configured model is used; no silent model replacement
 
 ### Normalized Output
@@ -156,7 +164,7 @@ Known limitations:
 
 ## Claude Readiness Decision
 
-Decision: Proceed to Claude L1 adapter.
+Decision: Defer native Claude in favor of OpenRouter gateway integration.
 
 Rationale:
 
@@ -168,36 +176,124 @@ Rationale:
 - Provider contract is current.
 - Provider parity checklist exists.
 
-Initial Claude scope:
+Current native Claude scope:
 
-- Anthropic/Claude L1 only.
-- No L2 web search.
+- Deferred/unverified.
+- No native L2 web search in the active path.
 - No silent fallback to mock or another real provider.
 - No parser/scoring changes.
 - No frontend redesign.
 - No raw response exposure.
 - Mocked tests only in CI.
-- Manual one-query Claude L1 verification required.
+- Future manual one-query native Claude verification required before support claim.
 
-Claude L2 is unsupported until designed and verified. Claude L2 requests must
-return `UNSUPPORTED_L2`.
+Claude via OpenRouter is gateway execution, not native Anthropic execution.
 
-## Provider: anthropic
+## Provider: openrouter
 
-Anthropic/Claude is future work. Initial target is L1 only. L2 is not assumed.
-Until L2 is explicitly implemented and verified, unsupported L2 must return
-`UNSUPPORTED_L2`. Do not add Anthropic/Claude runtime code as part of parity
-documentation work.
+OpenRouter is the active gateway provider integration.
+
+OpenRouter L1 means an AI answer without web access through OpenRouter. It must
+not use web search, plugins, `:online`, browsing tools, or external source
+enrichment.
+
+OpenRouter L2 is experimental gateway web search. It is not equivalent to
+native OpenAI L2 or a future native Anthropic/Perplexity/Gemini L2 path.
+Sources/citations are best-effort.
+
+Gateway metadata must track:
+
+```text
+execution_provider=openrouter
+model_provider=<prefix before slash>
+model_id=<openrouter model id>
+gateway=true
+gateway_l2_experimental=true|false
+```
+
+No fallback is allowed from OpenRouter L1/L2 to native OpenAI, native Anthropic,
+mock, or a different OpenRouter level/model.
 
 | Area | Status | Notes |
 |---|---|---|
-| Adapter implemented | Planned | Future task. |
-| L1 support | Planned | Initial target only. |
-| L2 support | Not verified | Must not be assumed. |
-| Unsupported L2 handling | Planned | Required before exposing L2 choice for Anthropic. |
-| Normalized output/errors | Planned | Must match `docs/PROVIDER_CONTRACT.md`. |
-| CI behavior | Planned | Must use mocked client/provider calls only. |
-| Manual verification | Planned | Required before support claim. |
+| Adapter implemented | Done | Mocked backend coverage exists. |
+| L1 support | Done/pending live verification | Primary gateway model-comparison path; no web search/tools. |
+| L2 support | Experimental implemented/pending live verification | Best-effort OpenRouter web-search server tool behavior. |
+| Gateway model allowlist | Done | Required before execution. |
+| Normalized answer text | Done | Implemented for L1/L2 mocked responses. |
+| Normalized sources | Done | L1 empty; L2 best-effort annotations/citations/sources. |
+| Normalized errors | Done | Matches `docs/PROVIDER_CONTRACT.md`. |
+| Gateway metadata | Done | Distinguishes execution/model providers and model id. |
+| API diagnostics | Pending live verification | Should reuse safe provider diagnostics. |
+| UI diagnostics | Pending live verification | Should reuse existing diagnostics. |
+| CI behavior | Done | Mocked client calls only. |
+| Manual L1 verification | Not verified | Required before support claim. |
+| Manual L2 verification | Not verified | Required and must remain experimental until validated. |
+
+Planned config placeholders:
+
+```text
+OPENROUTER_API_KEY
+OPENROUTER_L1_MODEL
+OPENROUTER_L2_MODEL
+OPENROUTER_ALLOWED_MODELS
+OPENROUTER_REQUEST_TIMEOUT_SECONDS
+OPENROUTER_MAX_OUTPUT_TOKENS
+OPENROUTER_WEB_SEARCH_ENABLED
+OPENROUTER_WEB_SEARCH_TOOL
+OPENROUTER_SITE_URL
+OPENROUTER_APP_NAME
+```
+
+## Provider: anthropic
+
+Native Anthropic/Claude is deferred/unverified while OpenRouter gateway
+integration is active. Claude L1 comparisons should use OpenRouter model ids
+until native Anthropic is reactivated for provider-specific behavior.
+
+Native Anthropic L2 is future work. Until L2 is explicitly designed,
+implemented, and verified, native Anthropic L2 requests must return
+`UNSUPPORTED_L2` and must not fallback to Claude L1, OpenRouter, OpenAI, or
+mock.
+
+Current pilot policy allows one real provider mode per run. Mixed real-provider
+audits are out of scope until multi-provider orchestration is explicitly
+designed; this is not a permanent architecture limitation.
+
+Frontend must never call Anthropic APIs directly. Parser/scoring must consume
+normalized provider output and must not branch on Anthropic raw response shapes.
+
+| Area | Status | Notes |
+|---|---|---|
+| Adapter implemented | Deferred/unverified | Native branch is not the active integration path. |
+| L1 support | Deferred/unverified | Use OpenRouter for Claude L1 comparisons for now. |
+| L2 support | Not supported | Future L2 phase only. |
+| Unsupported L2 normalized | Deferred/unverified | Must return `UNSUPPORTED_L2` if native branch is wired. |
+| No fallback to OpenRouter/OpenAI/mock | Required | Required for all native Anthropic failures. |
+| Normalized answer text | Deferred/unverified | Required before support claim. |
+| Normalized errors | Deferred/unverified | Must match `docs/PROVIDER_CONTRACT.md`. |
+| API diagnostics | Deferred/unverified | Should reuse existing diagnostics if reactivated. |
+| UI diagnostics | Deferred/unverified | Should reuse existing diagnostics if reactivated. |
+| CI behavior | Required | Must use mocked client/provider calls only. |
+| Manual L1 verification | Not verified | Required before support claim. |
+| Manual L2 verification | Not verified | Future L2 phase only. |
+
+Planned L1 config placeholders:
+
+```text
+ANTHROPIC_API_KEY
+ANTHROPIC_L1_MODEL
+ANTHROPIC_REQUEST_TIMEOUT_SECONDS
+ANTHROPIC_MAX_OUTPUT_TOKENS
+```
+
+Future L2 config placeholders:
+
+```text
+ANTHROPIC_L2_MODEL
+ANTHROPIC_WEB_SEARCH_TOOL_VERSION
+ANTHROPIC_WEB_SEARCH_MAX_USES
+```
 
 ## Provider Readiness Definition
 

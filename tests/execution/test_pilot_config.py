@@ -120,7 +120,7 @@ class RealProviderPilotConfigTests(unittest.TestCase):
     def test_unsupported_provider_execution_returns_controlled_error(self) -> None:
         with self.assertRaisesRegex(PilotPolicyError, "Unsupported real-provider"):
             validate_audit_against_pilot_config(
-                providers=["gemini"],
+                providers=["perplexity"],
                 query_count=1,
                 runs_per_query=1,
                 scdl_level="L1",
@@ -163,6 +163,33 @@ class RealProviderPilotConfigTests(unittest.TestCase):
                 ),
             )
 
+    def test_openrouter_provider_mode_allows_gateway_routed_ui_providers(self) -> None:
+        for provider in ("openai", "anthropic", "gemini"):
+            validate_audit_against_pilot_config(
+                providers=[provider],
+                query_count=1,
+                runs_per_query=1,
+                scdl_level="L1",
+                config=load_real_provider_pilot_config(
+                    env={"PROVIDER_MODE": "openrouter", "REAL_PROVIDER_ENABLED": "true"}
+                ),
+            )
+
+    def test_openrouter_provider_mode_rejects_multiple_gateway_routed_ui_providers(self) -> None:
+        with self.assertRaisesRegex(PilotPolicyError, "one UI provider per audit"):
+            validate_audit_against_pilot_config(
+                providers=["openai", "anthropic"],
+                query_count=1,
+                runs_per_query=1,
+                scdl_level="L1",
+                config=RealProviderPilotConfig(
+                    real_provider_enabled=True,
+                    provider_mode="openrouter",
+                    max_providers=2,
+                    max_total_runs=2,
+                ),
+            )
+
     def test_provider_mode_mismatch_rejects_anthropic_openai_and_openrouter(self) -> None:
         with self.assertRaisesRegex(PilotPolicyError, "Provider mode 'openai'"):
             validate_audit_against_pilot_config(
@@ -188,7 +215,7 @@ class RealProviderPilotConfigTests(unittest.TestCase):
 
         with self.assertRaisesRegex(PilotPolicyError, "Provider mode 'openrouter'"):
             validate_audit_against_pilot_config(
-                providers=["openai"],
+                providers=["mock", "openai"],
                 query_count=1,
                 runs_per_query=1,
                 scdl_level="L1",

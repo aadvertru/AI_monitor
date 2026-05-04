@@ -264,7 +264,7 @@ export function estimateAuditTokens(values: EstimateValues) {
   const selectedProviders = values.providers?.length ?? 0;
   const base = effectiveQueries * selectedProviders * 10;
   const scdlMultiplier = values.scdlLevel === "L2" ? 1.5 : 1;
-  const sourceIntelligenceAddon = values.enableSourceIntelligence
+  const sourceIntelligenceAddon = values.scdlLevel === "L2" && values.enableSourceIntelligence
     ? effectiveQueries * selectedProviders * 5
     : 0;
 
@@ -286,7 +286,8 @@ export function buildPayload(values: CreateAuditFormValues): AuditCreateRequest 
     max_queries:
       values.maxQueries === "" || values.maxQueries === undefined ? null : values.maxQueries,
     enable_query_expansion: false,
-    enable_source_intelligence: values.enableSourceIntelligence,
+    enable_source_intelligence:
+      values.scdlLevel === "L2" ? values.enableSourceIntelligence : false,
     follow_up_depth: 0,
     scdl_level: values.scdlLevel as SCDLLevel,
   };

@@ -25,11 +25,21 @@ MOCK_PROVIDER = "mock"
 OPENAI_PROVIDER = "openai"
 ANTHROPIC_PROVIDER = "anthropic"
 OPENROUTER_PROVIDER = "openrouter"
+GEMINI_PROVIDER = "gemini"
 ALLOWED_PROVIDER_MODES = frozenset(
     {MOCK_PROVIDER, OPENAI_PROVIDER, OPENROUTER_PROVIDER, ANTHROPIC_PROVIDER}
 )
 SUPPORTED_EXECUTION_PROVIDERS = frozenset(
-    {MOCK_PROVIDER, OPENAI_PROVIDER, OPENROUTER_PROVIDER, ANTHROPIC_PROVIDER}
+    {
+        MOCK_PROVIDER,
+        OPENAI_PROVIDER,
+        OPENROUTER_PROVIDER,
+        ANTHROPIC_PROVIDER,
+        GEMINI_PROVIDER,
+    }
+)
+OPENROUTER_GATEWAY_PROVIDERS = frozenset(
+    {OPENROUTER_PROVIDER, OPENAI_PROVIDER, ANTHROPIC_PROVIDER, GEMINI_PROVIDER}
 )
 
 
@@ -130,7 +140,13 @@ def validate_audit_against_pilot_config(
         return
 
     active_provider = resolved_config.provider_mode
-    if any(provider != active_provider for provider in normalized_providers):
+    if active_provider == OPENROUTER_PROVIDER:
+        if any(provider not in OPENROUTER_GATEWAY_PROVIDERS for provider in normalized_providers):
+            raise PilotPolicyError(
+                "Provider mode 'openrouter' allows OpenRouter gateway execution only; "
+                "mixed provider lists are rejected during the pilot."
+            )
+    elif any(provider != active_provider for provider in normalized_providers):
         raise PilotPolicyError(
             f"Provider mode '{active_provider}' allows {active_provider} execution only; "
             "mixed provider lists "
@@ -147,6 +163,15 @@ def validate_audit_against_pilot_config(
         raise PilotPolicyError("SCDL level must be L1 or L2 for the real-provider pilot.")
 
     provider_count = len(set(normalized_providers))
+    if (
+        resolved_config.provider_mode == OPENROUTER_PROVIDER
+        and provider_count > 1
+        and any(provider in OPENROUTER_GATEWAY_PROVIDERS for provider in normalized_providers)
+    ):
+        raise PilotPolicyError(
+            "OpenRouter gateway pilot allows one UI provider per audit; "
+            "multiple gateway-routed providers would use the same configured model."
+        )
     if provider_count > resolved_config.max_providers:
         raise PilotPolicyError("Real-provider audit exceeds max providers cap.")
     if query_count > resolved_config.max_queries:

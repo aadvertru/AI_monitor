@@ -33,6 +33,24 @@ def build_provider_adapter(
     if normalized_provider == "mock":
         return MockProviderAdapter()
 
+    if config.provider_mode == "openrouter" and normalized_provider in {
+        "openrouter",
+        "openai",
+        "anthropic",
+        "gemini",
+    }:
+        if not config.real_provider_enabled:
+            raise PilotPolicyError(
+                "OpenRouter adapter can only be selected when real provider mode is enabled."
+            )
+        openrouter_config = validate_openrouter_config_for_pilot(config)
+        return OpenRouterProviderAdapter(config=openrouter_config, client=openrouter_client)
+
+    if normalized_provider == "openrouter":
+        raise PilotPolicyError(
+            "OpenRouter adapter can only be selected when real provider mode is enabled."
+        )
+
     if normalized_provider == "openai":
         if config.provider_mode != "openai" or not config.real_provider_enabled:
             raise PilotPolicyError(
@@ -40,14 +58,6 @@ def build_provider_adapter(
             )
         openai_config = validate_openai_config_for_pilot(config)
         return OpenAIProviderAdapter(config=openai_config, client=openai_client)
-
-    if normalized_provider == "openrouter":
-        if config.provider_mode != "openrouter" or not config.real_provider_enabled:
-            raise PilotPolicyError(
-                "OpenRouter adapter can only be selected when real provider mode is enabled."
-            )
-        openrouter_config = validate_openrouter_config_for_pilot(config)
-        return OpenRouterProviderAdapter(config=openrouter_config, client=openrouter_client)
 
     if normalized_provider == "anthropic":
         if config.provider_mode != "anthropic" or not config.real_provider_enabled:
