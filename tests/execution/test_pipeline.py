@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import unittest
 from unittest.mock import patch
 
@@ -8,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from apps.api.main import build_audit_results_response, build_audit_summary_response
 from libs.execution.audit_execution import AuditJobExecutionSummary, execute_audit_jobs
+from libs.execution.openrouter_config import OpenRouterProviderConfig
+from libs.execution.openrouter_provider import OpenRouterProviderAdapter
 from libs.execution.pilot_config import RealProviderPilotConfig
 from libs.execution.pipeline import run_audit_pipeline
 from libs.execution.post_processing import AuditPostProcessingSummary, process_audit_results
@@ -54,6 +57,83 @@ class _QueryAwareProvider(BaseProviderAdapter):
             error=None,
             provider_metadata={"provider": "mock"},
         )
+
+
+class _OpenRouterLikeProvider(BaseProviderAdapter):
+    async def query(self, query: str, **kwargs) -> ProviderResponse:
+        return ProviderResponse(
+            status="success",
+            raw_answer="Acme AI is a recommended visibility platform.",
+            citations=[],
+            response_time=0.123,
+            error=None,
+            provider_metadata={
+                "provider": "openrouter",
+                "execution_provider": "openrouter",
+                "model_id": "anthropic/claude-3.5-sonnet",
+                "model_provider": "anthropic",
+                "gateway": True,
+                "gateway_l2_experimental": kwargs.get("scdl_level") == "L2",
+                "level": kwargs.get("scdl_level"),
+                "usage": {
+                    "input_tokens": 11,
+                    "output_tokens": 22,
+                    "total_tokens": 33,
+                },
+            },
+        )
+
+
+class _UnsafeRaisingProvider(BaseProviderAdapter):
+    async def query(self, query: str, **kwargs) -> ProviderResponse:
+        raise RuntimeError(
+            "sk-or-secret OPENROUTER_API_KEY authorization headers raw_prompt "
+            "raw_response traceback Bearer"
+        )
+
+
+class _OpenRouterAdapterLikeProvider(OpenRouterProviderAdapter):
+    """Real OpenRouterProviderAdapter subclass with a stubbed query() for pipeline tests."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            config=OpenRouterProviderConfig(
+                model_l1="google/gemini-2.0-flash-001",
+                model_l2="anthropic/claude-3.5-sonnet",
+            )
+        )
+
+    async def query(self, query: str, **kwargs) -> ProviderResponse:
+        return ProviderResponse(
+            status="success",
+            raw_answer="Acme AI is a recommended visibility platform.",
+            citations=[],
+            response_time=0.123,
+            error=None,
+            provider_metadata={
+                "provider": "openrouter",
+                "execution_provider": "openrouter",
+                "model_id": "anthropic/claude-3.5-sonnet",
+                "model_provider": "anthropic",
+                "gateway": True,
+                "gateway_l2_experimental": kwargs.get("scdl_level") == "L2",
+                "level": kwargs.get("scdl_level"),
+                "usage": {
+                    "input_tokens": 11,
+                    "output_tokens": 22,
+                    "total_tokens": 33,
+                },
+            },
+        )
+
+
+class _ListHandler(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
 
 
 class AuditPipelineTests(unittest.IsolatedAsyncioTestCase):
@@ -373,6 +453,163 @@ class AuditPipelineTests(unittest.IsolatedAsyncioTestCase):
         results = await build_audit_results_response(self.session, saved_audit)
         self.assertEqual(summary.final_audit_status, "completed")
         self.assertEqual(results.rows[0].provider, "openrouter")
+
+    async def test_pipeline_emits_safe_structured_logs_for_openrouter_gateway(
+        self,
+    ) -> None:
+        audit = await self._create_audit(providers=["openrouter"])
+        handler = _ListHandler()
+        execution_logger = logging.getLogger("libs.execution")
+        previous_level = execution_logger.level
+        execution_logger.setLevel(logging.INFO)
+        execution_logger.addHandler(handler)
+        try:
+            await run_audit_pipeline(
+                self.session,
+                audit.id,
+                pilot_config=RealProviderPilotConfig(
+                    real_provider_enabled=True,
+                    provider_mode="openrouter",
+                ),
+                provider_factory=lambda _provider: _OpenRouterLikeProvider(),
+            )
+        finally:
+            execution_logger.removeHandler(handler)
+            execution_logger.setLevel(previous_level)
+
+        events = [getattr(record, "event", None) for record in handler.records]
+        for expected_event in {
+            "audit_pipeline_started",
+            "audit_jobs_scheduled",
+            "audit_job_started",
+            "provider_call_started",
+            "provider_call_completed",
+            "audit_job_completed",
+            "post_processing_started",
+            "run_processing_completed",
+            "post_processing_completed",
+            "audit_status_transition",
+            "audit_pipeline_completed",
+        }:
+            self.assertIn(expected_event, events)
+
+        provider_completed = next(
+            record
+            for record in handler.records
+            if getattr(record, "event", None) == "provider_call_completed"
+        )
+        self.assertEqual(provider_completed.execution_provider, "openrouter")
+        self.assertEqual(provider_completed.model_id, "anthropic/claude-3.5-sonnet")
+        self.assertEqual(provider_completed.model_provider, "anthropic")
+        self.assertTrue(provider_completed.gateway)
+        self.assertFalse(provider_completed.gateway_l2_experimental)
+        self.assertEqual(provider_completed.level, "L1")
+        self.assertEqual(provider_completed.total_tokens, 33)
+
+    async def test_provider_call_started_uses_openrouter_adapter_metadata_for_routed_provider(
+        self,
+    ) -> None:
+        audit = await self._create_audit(providers=["gemini"])
+        handler = _ListHandler()
+        execution_logger = logging.getLogger("libs.execution")
+        previous_level = execution_logger.level
+        execution_logger.setLevel(logging.INFO)
+        execution_logger.addHandler(handler)
+        try:
+            await run_audit_pipeline(
+                self.session,
+                audit.id,
+                pilot_config=RealProviderPilotConfig(
+                    real_provider_enabled=True,
+                    provider_mode="openrouter",
+                ),
+                provider_factory=lambda _provider: _OpenRouterAdapterLikeProvider(),
+            )
+        finally:
+            execution_logger.removeHandler(handler)
+            execution_logger.setLevel(previous_level)
+
+        provider_started = next(
+            record
+            for record in handler.records
+            if getattr(record, "event", None) == "provider_call_started"
+        )
+        self.assertEqual(provider_started.execution_provider, "openrouter")
+        self.assertEqual(provider_started.model_id, "google/gemini-2.0-flash-001")
+        self.assertEqual(provider_started.model_provider, "google")
+        self.assertTrue(provider_started.gateway)
+        self.assertFalse(provider_started.gateway_l2_experimental)
+
+    async def test_provider_failure_logs_do_not_include_unsafe_values(self) -> None:
+        audit = await self._create_audit(providers=["openrouter"])
+        handler = _ListHandler()
+        execution_logger = logging.getLogger("libs.execution")
+        previous_level = execution_logger.level
+        execution_logger.setLevel(logging.INFO)
+        execution_logger.addHandler(handler)
+        try:
+            summary = await run_audit_pipeline(
+                self.session,
+                audit.id,
+                pilot_config=RealProviderPilotConfig(
+                    real_provider_enabled=True,
+                    provider_mode="openrouter",
+                ),
+                provider_factory=lambda _provider: _UnsafeRaisingProvider(),
+            )
+        finally:
+            execution_logger.removeHandler(handler)
+            execution_logger.setLevel(previous_level)
+
+        self.assertEqual(summary.final_audit_status, "failed")
+        events = [getattr(record, "event", None) for record in handler.records]
+        self.assertIn("provider_call_failed", events)
+        self.assertEqual(events.count("audit_job_failed"), 0)
+        safe_field_names = {
+            "event",
+            "audit_id",
+            "run_id",
+            "query_id",
+            "execution_provider",
+            "model_id",
+            "model_provider",
+            "level",
+            "gateway",
+            "gateway_l2_experimental",
+            "status",
+            "duration_ms",
+            "error_code",
+            "retryable",
+            "source_count",
+            "from_status",
+            "to_status",
+            "reason",
+            "exception_type",
+        }
+        combined = "\n".join(
+            " ".join(
+                str(getattr(record, name))
+                for name in safe_field_names
+                if hasattr(record, name)
+            )
+            for record in handler.records
+        ).lower()
+        for unsafe in {
+            "openrouter_api_key",
+            "authorization",
+            "headers",
+            "bearer",
+            "raw_response",
+            "raw_prompt",
+            "request_body",
+            "raw_tool_result",
+            "raw_annotations",
+            "stack_trace",
+            "traceback",
+            "sk-or-",
+            "sk-",
+        }:
+            self.assertNotIn(unsafe, combined)
 
     async def test_missing_audit_returns_fatal_summary(self) -> None:
         summary = await run_audit_pipeline(self.session, 404)

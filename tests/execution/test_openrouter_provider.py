@@ -272,7 +272,8 @@ class OpenRouterProviderAdapterL1Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rate_response.error["code"], "RATE_LIMIT")
         assert unknown_response.error is not None
         self.assertEqual(unknown_response.error["code"], "UNKNOWN_PROVIDER_ERROR")
-        self.assertIn("Unexpected error during OpenRouter query.", "\n".join(logs.output))
+        self.assertIn("openrouter_query_unexpected_error", "\n".join(logs.output))
+        self.assertNotIn("sk-or-hidden", "\n".join(logs.output))
         serialized = f"{rate_response.error} {unknown_response.error}"
         self.assertNotIn("sk-or-hidden", serialized)
         self.assertNotIn("authorization", serialized.lower())

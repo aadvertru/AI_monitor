@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -11,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from libs.analysis import parser, scoring
 from libs.execution.provider_adapter import ProviderResponse
+from libs.execution.safe_logging import duration_ms, log_event, perf_start
 from libs.storage.models import (
     Audit,
     AuditStatus,
@@ -22,6 +24,8 @@ from libs.storage.models import (
     RunStatus,
     Score,
 )
+
+logger = logging.getLogger(__name__)
 
 TERMINAL_RUN_STATUSES = {
     RunStatus.SUCCESS,
@@ -76,6 +80,8 @@ async def process_audit_results(
     audit_id: int,
 ) -> AuditPostProcessingSummary:
     """Process stored raw responses for one audit without calling providers."""
+    processing_start = perf_start()
+    log_event(logger, "post_processing_started", audit_id=audit_id)
     audit_row = (
         await session.execute(
             select(Audit, Brand).join(Brand, Audit.brand_id == Brand.id).where(
@@ -84,6 +90,13 @@ async def process_audit_results(
         )
     ).first()
     if audit_row is None:
+        log_event(
+            logger,
+            "post_processing_failed",
+            audit_id=audit_id,
+            duration_ms=duration_ms(processing_start),
+            error_code="audit_not_found",
+        )
         return AuditPostProcessingSummary(
             audit_id=audit_id,
             fatal_error=f"Audit with id={audit_id} was not found.",
@@ -128,9 +141,25 @@ async def process_audit_results(
         await session.commit()
         await session.refresh(audit)
         counters.audit_status = _enum_value(audit.status)
-        return counters.to_summary()
+        summary = counters.to_summary()
+        log_event(
+            logger,
+            "post_processing_completed",
+            audit_id=audit_id,
+            status=summary.audit_status,
+            duration_ms=duration_ms(processing_start),
+            runs_processed=summary.runs_processed,
+        )
+        return summary
     except SQLAlchemyError as exc:
         await session.rollback()
+        log_event(
+            logger,
+            "post_processing_failed",
+            audit_id=audit_id,
+            duration_ms=duration_ms(processing_start),
+            error_code=exc.__class__.__name__,
+        )
         return counters.to_summary(
             fatal_error=f"Database failure during post-processing: {exc.__class__.__name__}."
         )
@@ -172,6 +201,7 @@ async def _process_run(
     score: Score | None,
     counters: _MutableProcessingCounters,
 ) -> None:
+    run_processing_start = perf_start()
     if run.status != RunStatus.SUCCESS:
         counters.skipped_non_successful_run += 1
         return
@@ -208,6 +238,18 @@ async def _process_run(
 
         if created_any:
             counters.runs_processed += 1
+            log_event(
+                logger,
+                "run_processing_completed",
+                audit_id=counters.audit_id,
+                run_id=run.id,
+                query_id=query.id,
+                raw_response_id=raw_response.id,
+                parsed_result_id=parsed_result.id if parsed_result is not None else None,
+                score_id=score.id if score is not None else None,
+                duration_ms=duration_ms(run_processing_start),
+                status="processed",
+            )
         else:
             counters.skipped_already_processed += 1
     except Exception as exc:
@@ -217,6 +259,17 @@ async def _process_run(
                 code="post_processing_error",
                 message=f"Run post-processing failed: {exc.__class__.__name__}.",
             )
+        )
+        log_event(
+            logger,
+            "post_processing_failed",
+            audit_id=counters.audit_id,
+            run_id=run.id,
+            query_id=query.id,
+            raw_response_id=raw_response.id if raw_response is not None else None,
+            duration_ms=duration_ms(run_processing_start),
+            status="error",
+            error_code="post_processing_error",
         )
 
 

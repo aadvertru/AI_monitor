@@ -26,6 +26,7 @@ from libs.execution.provider_errors import (
     no_api_key_error,
     unknown_provider_error,
 )
+from libs.execution.safe_logging import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +150,18 @@ class OpenRouterProviderAdapter(BaseProviderAdapter):
             )
         except Exception:
             elapsed = time.perf_counter() - start
-            logger.warning("Unexpected error during OpenRouter query.", exc_info=True)
+            log_event(
+                logger,
+                "openrouter_query_unexpected_error",
+                log_level=logging.WARNING,
+                execution_provider="openrouter",
+                model_id=selection.model_id,
+                model_provider=selection.model_provider,
+                level=level,
+                gateway=True,
+                gateway_l2_experimental=level == "L2",
+                exception_type="unexpected_provider_exception",
+            )
             return ProviderResponse(
                 status="error",
                 raw_answer=None,

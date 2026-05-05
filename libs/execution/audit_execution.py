@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -17,10 +18,12 @@ from libs.execution.pilot_config import (
 )
 from libs.execution.provider_adapter import BaseProviderAdapter
 from libs.execution.provider_factory import build_provider_adapter
+from libs.execution.safe_logging import duration_ms, log_event, perf_start
 from libs.execution.worker import execute_job
 from libs.storage.models import Audit, Job, JobStatus, Query, Run, RunStatus
 
 ProviderFactory = Callable[[str], BaseProviderAdapter]
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -108,11 +111,23 @@ async def execute_audit_jobs(
             jobs_skipped += 1
             continue
 
+        job_start = perf_start()
         try:
             adapter = factory(job.provider)
             await execute_job(session, job.id, adapter)
             jobs_executed += 1
         except Exception as exc:
+            log_event(
+                logger,
+                "audit_job_execution_error",
+                log_level=logging.WARNING,
+                audit_id=audit_id,
+                query_id=job.query_id,
+                execution_provider=job.provider,
+                status="error",
+                duration_ms=duration_ms(job_start),
+                error_code="job_execution_error",
+            )
             errors.append(
                 JobExecutionError(
                     job_id=job.id,

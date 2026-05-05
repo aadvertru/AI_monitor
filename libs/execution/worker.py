@@ -2,16 +2,28 @@
 
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from libs.execution.openrouter_provider import OpenRouterProviderAdapter
 from libs.execution.provider_adapter import (
     BaseProviderAdapter,
     ProviderResponse,
     normalize_provider_response,
 )
 from libs.execution.provider_errors import unknown_provider_error
+from libs.execution.safe_logging import (
+    duration_ms,
+    error_log_fields,
+    log_event,
+    perf_start,
+    provider_log_fields,
+)
 from libs.storage.models import Audit, Job, JobStatus, Query, RawResponse, Run, RunStatus
+
+logger = logging.getLogger(__name__)
 
 
 def _map_provider_status_to_run_status(provider_status: str) -> RunStatus:
@@ -30,6 +42,10 @@ async def execute_job(
     provider: BaseProviderAdapter,
 ) -> Run:
     """Execute a scheduled job, persist Run + RawResponse, and update statuses."""
+    job_start = perf_start()
+    job: Job | None = None
+    run: Run | None = None
+    scdl_level_value: str | None = None
     try:
         job = await session.get(Job, job_id)
         if job is None:
@@ -69,6 +85,30 @@ async def execute_job(
             session.add(run)
             await session.flush()
 
+        log_event(
+            logger,
+            "audit_job_started",
+            audit_id=job.audit_id,
+            run_id=run.id,
+            query_id=job.query_id,
+            execution_provider=job.provider,
+            level=scdl_level_value,
+            status=_enum_value(job.status),
+        )
+        provider_start = perf_start()
+        log_event(
+            logger,
+            "provider_call_started",
+            audit_id=job.audit_id,
+            run_id=run.id,
+            query_id=job.query_id,
+            **provider_log_fields(
+                job.provider,
+                metadata=_adapter_metadata(provider, scdl_level_value),
+                scdl_level=scdl_level_value,
+            ),
+        )
+
         try:
             response = await provider.query(
                 query_text,
@@ -96,6 +136,41 @@ async def execute_job(
                 provider=job.provider,
                 model=_metadata_model(response.provider_metadata),
                 level=scdl_level_value,
+            )
+
+        provider_fields = provider_log_fields(
+            job.provider,
+            metadata=response.provider_metadata,
+            scdl_level=scdl_level_value,
+            citations=response.citations,
+        )
+        provider_duration = (
+            int(round(response.response_time * 1000))
+            if response.response_time is not None
+            else duration_ms(provider_start)
+        )
+        if response.status == "success":
+            log_event(
+                logger,
+                "provider_call_completed",
+                audit_id=job.audit_id,
+                run_id=run.id,
+                query_id=job.query_id,
+                status=response.status,
+                duration_ms=provider_duration,
+                **provider_fields,
+            )
+        else:
+            log_event(
+                logger,
+                "provider_call_failed",
+                audit_id=job.audit_id,
+                run_id=run.id,
+                query_id=job.query_id,
+                status=response.status,
+                duration_ms=provider_duration,
+                **provider_fields,
+                **error_log_fields(response.error),
             )
 
         run.status = _map_provider_status_to_run_status(response.status)
@@ -132,9 +207,33 @@ async def execute_job(
 
         await session.commit()
         await session.refresh(run)
+        log_event(
+            logger,
+            "audit_job_completed",
+            audit_id=job.audit_id,
+            run_id=run.id,
+            query_id=job.query_id,
+            execution_provider=job.provider,
+            level=scdl_level_value,
+            status=_enum_value(run.status),
+            duration_ms=duration_ms(job_start),
+        )
         return run
-    except Exception:
+    except Exception as exc:
         await session.rollback()
+        log_event(
+            logger,
+            "audit_job_failed",
+            log_level=logging.WARNING,
+            audit_id=job.audit_id if job is not None else None,
+            run_id=run.id if run is not None else None,
+            query_id=job.query_id if job is not None else None,
+            execution_provider=job.provider if job is not None else None,
+            level=scdl_level_value,
+            status="error",
+            duration_ms=duration_ms(job_start),
+            error_code=exc.__class__.__name__,
+        )
         raise
 
 
@@ -143,4 +242,39 @@ def _metadata_model(provider_metadata: dict | None) -> str | None:
         return None
     model = provider_metadata.get("model")
     return model if isinstance(model, str) else None
+
+
+def _adapter_metadata(provider: BaseProviderAdapter, scdl_level: str | None) -> dict[str, object]:
+    if isinstance(provider, OpenRouterProviderAdapter):
+        config = provider.config
+        model_id = _openrouter_model_for_level(config, scdl_level)
+        return {
+            "provider": "openrouter",
+            "execution_provider": "openrouter",
+            "model_id": model_id,
+            "model_provider": _model_provider(model_id),
+            "gateway": True,
+            "gateway_l2_experimental": scdl_level == "L2",
+            "level": scdl_level,
+        }
+    return {}
+
+
+def _openrouter_model_for_level(config: object, scdl_level: str | None) -> str | None:
+    if scdl_level == "L2":
+        model_id = getattr(config, "model_l2", None)
+    else:
+        model_id = getattr(config, "model_l1", None)
+    return model_id if isinstance(model_id, str) else None
+
+
+def _model_provider(model_id: str | None) -> str | None:
+    if not isinstance(model_id, str) or "/" not in model_id:
+        return None
+    provider_name = model_id.split("/", 1)[0].strip()
+    return provider_name or None
+
+
+def _enum_value(value: object) -> str:
+    return value.value if hasattr(value, "value") else str(value)
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -20,6 +21,7 @@ from libs.execution.post_processing import (
     AuditPostProcessingSummary,
     process_audit_results,
 )
+from libs.execution.safe_logging import duration_ms, log_event, perf_start
 from libs.storage.models import (
     Audit,
     AuditStatus,
@@ -30,6 +32,8 @@ from libs.storage.models import (
     RunStatus,
     Score,
 )
+
+logger = logging.getLogger(__name__)
 
 PostProcessingService = Callable[[AsyncSession, int], object]
 
@@ -84,9 +88,19 @@ async def run_audit_pipeline(
     provider_factory: ProviderFactory | None = None,
 ) -> AuditPipelineSummary:
     """Run schedule -> execute -> post-process for one audit."""
+    pipeline_start = perf_start()
     scheduling = AuditSchedulingSummary(audit_id=audit_id)
+    log_event(logger, "audit_pipeline_started", audit_id=audit_id)
     audit = await session.get(Audit, audit_id)
     if audit is None:
+        log_event(
+            logger,
+            "audit_pipeline_failed",
+            audit_id=audit_id,
+            status=AuditStatus.FAILED.value,
+            duration_ms=duration_ms(pipeline_start),
+            error_code="audit_not_found",
+        )
         return AuditPipelineSummary(
             audit_id=audit_id,
             scheduling=scheduling,
@@ -107,10 +121,26 @@ async def run_audit_pipeline(
             scheduled_jobs=scheduled_jobs,
             total_jobs=await _job_count(session, audit_id),
         )
+        log_event(
+            logger,
+            "audit_jobs_scheduled",
+            audit_id=audit_id,
+            scheduled_jobs=scheduling.scheduled_jobs,
+            total_jobs=scheduling.total_jobs,
+        )
     except Exception as exc:
         await session.rollback()
         final_status = await _set_audit_status(session, audit_id, AuditStatus.FAILED)
         fatal_error = f"Audit scheduling failed: {exc.__class__.__name__}."
+        log_event(
+            logger,
+            "audit_pipeline_failed",
+            log_level=logging.WARNING,
+            audit_id=audit_id,
+            status=final_status,
+            duration_ms=duration_ms(pipeline_start),
+            error_code="audit_scheduling_failed",
+        )
         return AuditPipelineSummary(
             audit_id=audit_id,
             scheduling=AuditSchedulingSummary(
@@ -129,6 +159,15 @@ async def run_audit_pipeline(
     )
     if execution.fatal_error is not None:
         final_status = await _set_audit_status(session, audit_id, AuditStatus.FAILED)
+        log_event(
+            logger,
+            "audit_pipeline_failed",
+            log_level=logging.WARNING,
+            audit_id=audit_id,
+            status=final_status,
+            duration_ms=duration_ms(pipeline_start),
+            error_code="audit_execution_failed",
+        )
         return AuditPipelineSummary(
             audit_id=audit_id,
             scheduling=scheduling,
@@ -140,6 +179,15 @@ async def run_audit_pipeline(
     post_processing = await process_audit_results(session, audit_id)
     if post_processing.fatal_error is not None:
         final_status = await _set_audit_status(session, audit_id, AuditStatus.FAILED)
+        log_event(
+            logger,
+            "audit_pipeline_failed",
+            log_level=logging.WARNING,
+            audit_id=audit_id,
+            status=final_status,
+            duration_ms=duration_ms(pipeline_start),
+            error_code="post_processing_failed",
+        )
         return AuditPipelineSummary(
             audit_id=audit_id,
             scheduling=scheduling,
@@ -154,6 +202,16 @@ async def run_audit_pipeline(
         audit_id=audit_id,
         execution=execution,
         post_processing=post_processing,
+    )
+    log_event(
+        logger,
+        "audit_pipeline_completed",
+        audit_id=audit_id,
+        status=final_status,
+        duration_ms=duration_ms(pipeline_start),
+        jobs_executed=execution.jobs_executed,
+        jobs_skipped=execution.jobs_skipped,
+        runs_processed=post_processing.runs_processed,
     )
     return AuditPipelineSummary(
         audit_id=audit_id,
@@ -175,6 +233,7 @@ async def _derive_and_persist_final_status(
     if audit is None:
         return AuditStatus.FAILED.value
 
+    from_status = _status_value(audit.status)
     expected_runs = await _expected_run_count(session, audit)
     terminal_runs = await _terminal_run_count(session, audit_id)
     usable_scores = await _usable_score_count(session, audit_id)
@@ -195,7 +254,22 @@ async def _derive_and_persist_final_status(
 
     await session.commit()
     await session.refresh(audit)
-    return _status_value(audit.status)
+    to_status = _status_value(audit.status)
+    log_event(
+        logger,
+        "audit_status_transition",
+        audit_id=audit_id,
+        from_status=from_status,
+        to_status=to_status,
+        reason=_status_transition_reason(
+            to_status=to_status,
+            terminal_failures=terminal_failures,
+            execution_errors=len(execution.errors),
+            processing_errors=len(post_processing.errors),
+            missing_raw_count=post_processing.skipped_missing_raw_response,
+        ),
+    )
+    return to_status
 
 
 async def _set_audit_status(
@@ -206,10 +280,20 @@ async def _set_audit_status(
     audit = await session.get(Audit, audit_id)
     if audit is None:
         return status.value
+    from_status = _status_value(audit.status)
     audit.status = status
     await session.commit()
     await session.refresh(audit)
-    return _status_value(audit.status)
+    to_status = _status_value(audit.status)
+    log_event(
+        logger,
+        "audit_status_transition",
+        audit_id=audit_id,
+        from_status=from_status,
+        to_status=to_status,
+        reason="provider_error" if status == AuditStatus.FAILED else "status_update",
+    )
+    return to_status
 
 
 async def _job_count(session: AsyncSession, audit_id: int) -> int:
@@ -265,3 +349,24 @@ async def _usable_score_count(session: AsyncSession, audit_id: int) -> int:
 
 def _status_value(status: object) -> str:
     return status.value if hasattr(status, "value") else str(status)
+
+
+def _status_transition_reason(
+    *,
+    to_status: str,
+    terminal_failures: int,
+    execution_errors: int,
+    processing_errors: int,
+    missing_raw_count: int,
+) -> str:
+    if to_status == AuditStatus.COMPLETED.value:
+        return "all_runs_completed"
+    if to_status == AuditStatus.PARTIAL.value:
+        return "partial_results_available"
+    if processing_errors or missing_raw_count:
+        return "post_processing_error"
+    if terminal_failures or execution_errors:
+        return "provider_error"
+    if to_status == AuditStatus.FAILED.value:
+        return "no_usable_results"
+    return "status_update"
