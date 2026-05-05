@@ -8,11 +8,18 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from apps.api.main import AuditCreateRequest, create_audit, update_audit
+from apps.api.main import (
+    AuditCreateRequest,
+    AuditEstimateRequest,
+    create_audit,
+    estimate_audit,
+    update_audit,
+)
 from apps.api.security import create_access_token, load_auth_config
 from libs.storage.models import (
     Audit,
     AuditStatus,
+    AuditTarget,
     Base,
     Brand,
     Query,
@@ -150,6 +157,127 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertEqual(context.exception.status_code, 401)
+
+    async def test_estimate_endpoint_requires_authentication(self) -> None:
+        payload = AuditEstimateRequest.model_validate(
+            {
+                "seed_queries": ["valid query"],
+                "providers": ["mock"],
+            }
+        )
+
+        async with self.session_factory() as session:
+            with (
+                patch.dict("os.environ", AUTH_ENV, clear=True),
+                self.assertRaises(HTTPException) as context,
+            ):
+                await estimate_audit(
+                    payload=payload,
+                    request=self._anonymous_request(),
+                    session=session,
+                )
+
+        self.assertEqual(context.exception.status_code, 401)
+
+    async def test_estimate_endpoint_reports_canonical_counts_and_caps(self) -> None:
+        user = await self._create_user()
+        payload = AuditEstimateRequest.model_validate(
+            {
+                "seed_queries": ["query one", "query two"],
+                "runs_per_query": 1,
+                "model_targets": [
+                    {
+                        "ai_family": "chatgpt",
+                        "execution_provider": "openrouter",
+                        "model_provider": "openai",
+                        "model_id": "openai/gpt-4o-mini",
+                        "display_name": "GPT-4o mini L1",
+                        "level": "L1",
+                        "gateway": True,
+                    },
+                    {
+                        "ai_family": "chatgpt",
+                        "execution_provider": "openrouter",
+                        "model_provider": "openai",
+                        "model_id": "openai/gpt-4o-mini",
+                        "display_name": "GPT-4o mini L2",
+                        "level": "L2",
+                        "gateway": True,
+                        "gateway_l2_experimental": True,
+                    },
+                ],
+            }
+        )
+
+        async with self.session_factory() as session:
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                result = await estimate_audit(
+                    payload=payload,
+                    request=self._authenticated_request(user),
+                    session=session,
+                )
+
+        self.assertEqual(result.query_count, 2)
+        self.assertEqual(result.target_count, 2)
+        self.assertEqual(result.model_count, 1)
+        self.assertEqual(result.estimated_runs, 4)
+        self.assertFalse(result.over_cap)
+
+    async def test_estimate_endpoint_reports_over_cap_violations(self) -> None:
+        user = await self._create_user()
+        payload = AuditEstimateRequest.model_validate(
+            {
+                "seed_queries": ["query one", "query two"],
+                "providers": ["mock"],
+            }
+        )
+
+        async with self.session_factory() as session:
+            with patch.dict(
+                "os.environ",
+                {**AUTH_ENV, "MAX_QUERIES_PER_AUDIT": "1"},
+                clear=True,
+            ):
+                result = await estimate_audit(
+                    payload=payload,
+                    request=self._authenticated_request(user),
+                    session=session,
+                )
+
+        self.assertTrue(result.over_cap)
+        self.assertEqual(result.violations[0].code, "MAX_QUERIES_PER_AUDIT_EXCEEDED")
+
+    async def test_create_audit_over_cap_is_rejected_with_422(self) -> None:
+        user = await self._create_user()
+        payload = AuditCreateRequest.model_validate(
+            {
+                "brand_name": "Acme AI",
+                "providers": ["mock"],
+                "runs_per_query": 1,
+                "seed_queries": ["query one", "query two"],
+            }
+        )
+
+        async with self.session_factory() as session:
+            with (
+                patch.dict(
+                    "os.environ",
+                    {**AUTH_ENV, "MAX_QUERIES_PER_AUDIT": "1"},
+                    clear=True,
+                ),
+                self.assertRaises(HTTPException) as context,
+            ):
+                await create_audit(
+                    payload=payload,
+                    request=self._authenticated_request(user),
+                    session=session,
+                )
+
+        self.assertEqual(context.exception.status_code, 422)
+        self.assertEqual(
+            context.exception.detail[0]["code"],
+            "MAX_QUERIES_PER_AUDIT_EXCEEDED",
+        )
 
     async def test_empty_brand_name_rejected(self) -> None:
         with self.assertRaises(ValidationError):
@@ -336,6 +464,136 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(query_rows[0].query_type, SeedQueryType.BRAND_DIRECT)
         self.assertEqual(query_rows[1].source, SeedQuerySource.USER)
         self.assertIsNone(query_rows[1].query_type)
+
+    async def test_create_audit_accepts_and_persists_model_targets(self) -> None:
+        user = await self._create_user()
+        payload = AuditCreateRequest.model_validate(
+            {
+                "brand_name": "Acme Targets",
+                "runs_per_query": 1,
+                "seed_queries": ["valid query"],
+                "model_targets": [
+                    {
+                        "ai_family": "chatgpt",
+                        "execution_provider": "openrouter",
+                        "model_provider": "openai",
+                        "model_id": "openai/gpt-4o-mini",
+                        "display_name": "GPT-4o mini",
+                        "level": "L1",
+                        "gateway": True,
+                    },
+                    {
+                        "ai_family": "chatgpt",
+                        "execution_provider": "openrouter",
+                        "model_provider": "openai",
+                        "model_id": "openai/gpt-4o-mini",
+                        "display_name": "GPT-4o mini",
+                        "level": "L2",
+                        "gateway": True,
+                        "gateway_l2_experimental": True,
+                    },
+                ],
+            }
+        )
+
+        async with self.session_factory() as session:
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                result = await create_audit(
+                    payload=payload,
+                    request=self._authenticated_request(user),
+                    session=session,
+                )
+
+        self.assertEqual(result.providers, ["openrouter"])
+        self.assertEqual(result.scdl_level, "L2")
+        self.assertEqual(len(result.model_targets), 2)
+        self.assertEqual(result.model_targets[0].model_id, "openai/gpt-4o-mini")
+        self.assertEqual(result.model_targets[0].level, "L1")
+        self.assertTrue(result.model_targets[1].gateway_l2_experimental)
+
+        async with self.session_factory() as session:
+            saved_targets = (
+                await session.execute(
+                    select(AuditTarget)
+                    .where(AuditTarget.audit_id == result.audit_id)
+                    .order_by(AuditTarget.id)
+                )
+            ).scalars().all()
+
+        self.assertEqual(len(saved_targets), 2)
+        self.assertEqual([target.level.value for target in saved_targets], ["L1", "L2"])
+
+    def test_model_target_validation_rejects_invalid_shapes(self) -> None:
+        base_payload = {
+            "brand_name": "Acme",
+            "runs_per_query": 1,
+            "seed_queries": ["valid query"],
+        }
+        valid_target = {
+            "ai_family": "chatgpt",
+            "execution_provider": "openrouter",
+            "model_provider": "openai",
+            "model_id": "openai/gpt-4o-mini",
+            "display_name": "GPT-4o mini",
+            "level": "L1",
+            "gateway": True,
+        }
+
+        for field_name in (
+            "ai_family",
+            "execution_provider",
+            "model_provider",
+            "model_id",
+            "display_name",
+            "level",
+        ):
+            with self.subTest(field_name=field_name), self.assertRaises(ValidationError):
+                target = dict(valid_target)
+                target.pop(field_name)
+                AuditCreateRequest.model_validate({**base_payload, "model_targets": [target]})
+
+        with self.assertRaises(ValidationError):
+            AuditCreateRequest.model_validate(
+                {
+                    **base_payload,
+                    "model_targets": [
+                        {**valid_target, "level": "L1", "gateway_l2_experimental": True}
+                    ],
+                }
+            )
+
+        with self.assertRaises(ValidationError):
+            AuditCreateRequest.model_validate(
+                {**base_payload, "model_targets": [valid_target, dict(valid_target)]}
+            )
+
+    def test_model_targets_and_legacy_fields_are_rejected_together(self) -> None:
+        target = {
+            "ai_family": "chatgpt",
+            "execution_provider": "openrouter",
+            "model_provider": "openai",
+            "model_id": "openai/gpt-4o-mini",
+            "display_name": "GPT-4o mini",
+            "level": "L1",
+        }
+
+        for legacy_fragment in (
+            {"providers": ["mock"]},
+            {"scdl_level": "L1"},
+            {"providers": ["mock"], "scdl_level": "L1"},
+        ):
+            with self.subTest(legacy_fragment=legacy_fragment), self.assertRaises(
+                ValidationError
+            ):
+                AuditCreateRequest.model_validate(
+                    {
+                        "brand_name": "Acme",
+                        "runs_per_query": 1,
+                        "seed_queries": ["valid query"],
+                        "model_targets": [target],
+                        **legacy_fragment,
+                    }
+                )
 
     def test_seed_query_item_validation_rejects_unknown_type_or_source(self) -> None:
         for seed_query_item in (
@@ -640,6 +898,70 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.seed_queries, ["Generated query"])
         self.assertEqual(result.seed_query_items[0].source, "ai")
         self.assertEqual(result.seed_query_items[0].type, "recommendation")
+
+    async def test_created_audit_can_be_updated_with_model_targets(self) -> None:
+        user = await self._create_user()
+        create_payload = AuditCreateRequest.model_validate(
+            {
+                "brand_name": "Acme AI",
+                "providers": ["mock"],
+                "runs_per_query": 1,
+                "seed_queries": ["old query"],
+            }
+        )
+        update_payload = AuditCreateRequest.model_validate(
+            {
+                "brand_name": "Acme AI",
+                "runs_per_query": 1,
+                "seed_queries": ["new query"],
+                "model_targets": [
+                    {
+                        "ai_family": "claude",
+                        "execution_provider": "openrouter",
+                        "model_provider": "anthropic",
+                        "model_id": "anthropic/claude-3.5-sonnet",
+                        "display_name": "Claude 3.5 Sonnet",
+                        "level": "L1",
+                        "gateway": True,
+                    }
+                ],
+            }
+        )
+
+        async with self.session_factory() as session:
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                created = await create_audit(
+                    payload=create_payload,
+                    request=self._authenticated_request(user),
+                    session=session,
+                )
+
+        async with self.session_factory() as session:
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                result = await update_audit(
+                    audit_id=created.audit_id,
+                    payload=update_payload,
+                    request=self._authenticated_request(user),
+                    session=session,
+                )
+
+        self.assertEqual(result.providers, ["openrouter"])
+        self.assertEqual(len(result.model_targets), 1)
+        self.assertEqual(
+            result.model_targets[0].model_id,
+            "anthropic/claude-3.5-sonnet",
+        )
+        self.assertEqual(result.model_targets[0].model_provider, "anthropic")
+
+        async with self.session_factory() as session:
+            saved_targets = (
+                await session.execute(
+                    select(AuditTarget).where(AuditTarget.audit_id == created.audit_id)
+                )
+            ).scalars().all()
+
+        self.assertEqual(len(saved_targets), 1)
+        self.assertEqual(saved_targets[0].ai_family, "claude")
 
     async def test_non_created_audit_update_is_rejected(self) -> None:
         user = await self._create_user()

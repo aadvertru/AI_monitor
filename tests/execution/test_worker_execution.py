@@ -10,6 +10,7 @@ from libs.execution.provider_adapter import BaseProviderAdapter, ProviderRespons
 from libs.execution.worker import execute_job
 from libs.storage.models import (
     Audit,
+    AuditTarget,
     Base,
     Brand,
     Job,
@@ -68,6 +69,30 @@ class _RaisingProvider(BaseProviderAdapter):
         raise self.exc
 
 
+class _RecordingProvider(BaseProviderAdapter):
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def query(self, query: str, **kwargs) -> ProviderResponse:
+        self.calls.append({"query": query, **kwargs})
+        return ProviderResponse(
+            status="success",
+            raw_answer=f"Answer for: {query}",
+            citations=[],
+            response_time=0.1,
+            error=None,
+            provider_metadata={
+                "provider": kwargs.get("execution_provider") or kwargs.get("provider"),
+                "execution_provider": kwargs.get("execution_provider"),
+                "model_id": kwargs.get("model_id"),
+                "model_provider": kwargs.get("model_provider"),
+                "gateway": kwargs.get("gateway"),
+                "gateway_l2_experimental": kwargs.get("gateway_l2_experimental"),
+                "level": kwargs.get("scdl_level"),
+            },
+        )
+
+
 class WorkerExecutionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
@@ -102,6 +127,44 @@ class WorkerExecutionTests(unittest.IsolatedAsyncioTestCase):
             run_number=1,
             status=JobStatus.PENDING,
             idempotency_key=build_job_idempotency_key(audit.id, query.id, provider_code, 1),
+        )
+        self.session.add(job)
+        await self.session.commit()
+        await self.session.refresh(job)
+        return job
+
+    async def _create_target_job(self, *, model_id: str) -> Job:
+        brand = Brand(name=f"Target Brand {model_id}")
+        audit = Audit(brand=brand, providers=["openrouter"], runs_per_query=1)
+        query = Query(audit=audit, text="best ai monitoring tools")
+        self.session.add_all([brand, audit, query])
+        await self.session.flush()
+        target = AuditTarget(
+            audit_id=audit.id,
+            ai_family="chatgpt",
+            execution_provider="openrouter",
+            model_provider=model_id.split("/", 1)[0],
+            model_id=model_id,
+            display_name=model_id,
+            level="L1",
+            gateway=True,
+        )
+        self.session.add(target)
+        await self.session.flush()
+        job = Job(
+            audit_id=audit.id,
+            query_id=query.id,
+            audit_target_id=target.id,
+            provider="openrouter",
+            run_number=1,
+            status=JobStatus.PENDING,
+            idempotency_key=build_job_idempotency_key(
+                audit.id,
+                query.id,
+                "openrouter",
+                1,
+                audit_target_id=target.id,
+            ),
         )
         self.session.add(job)
         await self.session.commit()
@@ -216,6 +279,30 @@ class WorkerExecutionTests(unittest.IsolatedAsyncioTestCase):
         )).scalars().all()
         self.assertEqual(parsed_count, [])
         self.assertEqual(score_count, [])
+
+    async def test_target_metadata_is_passed_to_provider_and_persisted_on_run(
+        self,
+    ) -> None:
+        job = await self._create_target_job(model_id="openai/gpt-4o-mini")
+        provider = _RecordingProvider()
+
+        run = await execute_job(self.session, job.id, provider)
+
+        self.assertEqual(provider.calls[0]["model_id"], "openai/gpt-4o-mini")
+        self.assertEqual(provider.calls[0]["model_provider"], "openai")
+        self.assertEqual(provider.calls[0]["execution_provider"], "openrouter")
+        self.assertEqual(provider.calls[0]["audit_target_id"], job.audit_target_id)
+        self.assertTrue(provider.calls[0]["gateway"])
+
+        persisted_run = await self.session.get(Run, run.id)
+        raw_response = (
+            await self.session.execute(select(RawResponse).where(RawResponse.run_id == run.id))
+        ).scalar_one_or_none()
+        assert persisted_run is not None
+        assert raw_response is not None
+        self.assertEqual(persisted_run.audit_target_id, job.audit_target_id)
+        self.assertEqual(raw_response.request_snapshot["audit_target_id"], job.audit_target_id)
+        self.assertEqual(raw_response.request_snapshot["model_id"], "openai/gpt-4o-mini")
 
     async def test_worker_rolls_back_when_persistence_fails(self) -> None:
         job = await self._create_job(provider_code="mock")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from collections import Counter, defaultdict
 from collections.abc import AsyncIterator
@@ -30,6 +31,7 @@ from apps.api.audit_schemas import (
     AuditRunTriggerResponse,
     AuditStatusResponse,
     AuditSummaryResponse,
+    AuditTargetResponse,
     CompetitorSummaryItemResponse,
     ComponentScoresResponse,
     CriticalQueryItemResponse,
@@ -85,6 +87,7 @@ from libs.execution.provider_errors import (
 from libs.storage.models import (
     Audit,
     AuditStatus,
+    AuditTarget,
     Brand,
     Job,
     ParsedResult,
@@ -106,6 +109,10 @@ MAX_BRAND_DESCRIPTION_LENGTH = 500
 MAX_SEED_QUERY_COUNT = 20
 MIN_SEED_QUERY_LENGTH = 3
 MAX_SEED_QUERY_LENGTH = 300
+DEFAULT_MAX_AUDIT_TARGETS = 10
+DEFAULT_MAX_MODELS_PER_AUDIT = 5
+DEFAULT_MAX_QUERIES_PER_AUDIT = 20
+DEFAULT_MAX_TOTAL_RUNS_PER_AUDIT = 100
 MAX_EMAIL_LENGTH = 255
 BRAND_DOMAIN_PATTERN = re.compile(
     r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$"
@@ -211,11 +218,49 @@ class SeedQueryItemRequest(BaseModel):
         return self
 
 
+class AuditTargetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ai_family: str
+    execution_provider: str
+    model_provider: str
+    model_id: str
+    display_name: str
+    level: Literal["L1", "L2"]
+    gateway: bool = False
+    gateway_l2_experimental: bool = False
+
+    @field_validator(
+        "ai_family",
+        "execution_provider",
+        "model_provider",
+        "model_id",
+        "display_name",
+    )
+    @classmethod
+    def normalize_required_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("audit target fields must not be empty.")
+        return normalized
+
+    @field_validator("ai_family", "execution_provider", "model_provider")
+    @classmethod
+    def normalize_code_fields(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @model_validator(mode="after")
+    def validate_gateway_l2_flag(self) -> AuditTargetRequest:
+        if self.level == "L1" and self.gateway_l2_experimental:
+            raise ValueError("gateway_l2_experimental is valid only for L2 targets.")
+        return self
+
+
 class AuditCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     brand_name: str
-    providers: list[str]
+    providers: list[str] | None = None
     runs_per_query: int = Field(ge=1, le=5)
 
     brand_domain: str | None = None
@@ -227,6 +272,7 @@ class AuditCreateRequest(BaseModel):
     max_queries: int | None = None
     seed_queries: list[str] | None = None
     seed_query_items: list[SeedQueryItemRequest] | None = None
+    model_targets: list[AuditTargetRequest] | None = None
     enable_query_expansion: bool = False
     enable_source_intelligence: bool = False
     follow_up_depth: int = 0
@@ -244,7 +290,9 @@ class AuditCreateRequest(BaseModel):
 
     @field_validator("providers")
     @classmethod
-    def validate_providers(cls, value: list[str]) -> list[str]:
+    def validate_providers(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
         normalized: list[str] = []
         seen: set[str] = set()
         invalid: list[str] = []
@@ -263,6 +311,23 @@ class AuditCreateRequest(BaseModel):
         if not normalized:
             raise ValueError("providers must contain at least one supported provider.")
         return normalized
+
+    @field_validator("model_targets")
+    @classmethod
+    def validate_model_targets(
+        cls, value: list[AuditTargetRequest] | None
+    ) -> list[AuditTargetRequest] | None:
+        if value is None:
+            return None
+        if not value:
+            raise ValueError("model_targets must contain at least one target.")
+        seen: set[tuple[str, str, str]] = set()
+        for target in value:
+            key = (target.execution_provider, target.model_id, target.level)
+            if key in seen:
+                raise ValueError("model_targets contains duplicate targets.")
+            seen.add(key)
+        return value
 
     @field_validator("brand_domain")
     @classmethod
@@ -309,6 +374,19 @@ class AuditCreateRequest(BaseModel):
             raise ValueError("At least one seed query is required.")
         return self
 
+    @model_validator(mode="after")
+    def validate_target_fields(self) -> AuditCreateRequest:
+        has_targets = self.model_targets is not None
+        has_legacy_providers = "providers" in self.model_fields_set
+        has_legacy_level = "scdl_level" in self.model_fields_set
+        if has_targets and (has_legacy_providers or has_legacy_level):
+            raise ValueError(
+                "Provide either model_targets or legacy providers/scdl_level, not both."
+            )
+        if not has_targets and not self.providers:
+            raise ValueError("providers must contain at least one supported provider.")
+        return self
+
     @field_validator("max_queries")
     @classmethod
     def validate_max_queries(cls, value: int | None) -> int | None:
@@ -336,6 +414,84 @@ class AuditCreateResponse(BaseModel):
     scdl_level: str
     seed_queries: list[str]
     seed_query_items: list[SeedQueryItemResponse] = Field(default_factory=list)
+    model_targets: list[AuditTargetResponse] = Field(default_factory=list)
+
+
+class AuditCapsResponse(BaseModel):
+    max_audit_targets: int
+    max_models_per_audit: int
+    max_queries_per_audit: int
+    max_total_runs_per_audit: int
+
+
+class AuditCapViolationResponse(BaseModel):
+    code: str
+    message: str
+
+
+class AuditEstimateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    seed_queries: list[str] | None = None
+    seed_query_items: list[SeedQueryItemRequest] | None = None
+    model_targets: list[AuditTargetRequest] | None = None
+    providers: list[str] | None = None
+    scdl_level: Literal["L1", "L2"] = "L1"
+    runs_per_query: int = Field(default=1, ge=1, le=5)
+
+    @field_validator("seed_queries")
+    @classmethod
+    def normalize_seed_queries(cls, value: list[str] | None) -> list[str] | None:
+        return AuditCreateRequest.normalize_seed_queries(value)
+
+    @field_validator("seed_query_items")
+    @classmethod
+    def validate_seed_query_items(
+        cls, value: list[SeedQueryItemRequest] | None
+    ) -> list[SeedQueryItemRequest] | None:
+        return AuditCreateRequest.validate_seed_query_items(value)
+
+    @field_validator("providers")
+    @classmethod
+    def validate_providers(cls, value: list[str] | None) -> list[str] | None:
+        return AuditCreateRequest.validate_providers(value)
+
+    @field_validator("model_targets")
+    @classmethod
+    def validate_model_targets(
+        cls, value: list[AuditTargetRequest] | None
+    ) -> list[AuditTargetRequest] | None:
+        return AuditCreateRequest.validate_model_targets(value)
+
+    @model_validator(mode="after")
+    def validate_estimate_fields(self) -> AuditEstimateRequest:
+        if "seed_queries" in self.model_fields_set and "seed_query_items" in self.model_fields_set:
+            raise ValueError("Provide either seed_queries or seed_query_items, not both.")
+        has_queries = bool(self.seed_queries) or bool(self.seed_query_items)
+        if not has_queries:
+            raise ValueError("At least one seed query is required.")
+
+        has_targets = self.model_targets is not None
+        has_legacy_providers = "providers" in self.model_fields_set
+        has_legacy_level = "scdl_level" in self.model_fields_set
+        if has_targets and (has_legacy_providers or has_legacy_level):
+            raise ValueError(
+                "Provide either model_targets or legacy providers/scdl_level, not both."
+            )
+        if not has_targets and not self.providers:
+            raise ValueError("providers must contain at least one supported provider.")
+        return self
+
+
+class AuditEstimateResponse(BaseModel):
+    query_count: int
+    target_count: int
+    model_count: int
+    estimated_runs: int
+    caps: AuditCapsResponse
+    over_cap: bool = False
+    violations: list[AuditCapViolationResponse] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class GenerateSeedQuerySuggestionsRequest(BaseModel):
@@ -425,13 +581,142 @@ def build_user_response(user: User) -> UserResponse:
     )
 
 
-def build_seed_query_items(payload: AuditCreateRequest) -> list[SeedQueryItemRequest]:
+def build_seed_query_items(
+    payload: AuditCreateRequest | AuditEstimateRequest,
+) -> list[SeedQueryItemRequest]:
     if payload.seed_query_items is not None:
         return payload.seed_query_items
     return [
         SeedQueryItemRequest(text=query_text, source="user", type=None)
         for query_text in payload.seed_queries or []
     ]
+
+
+def build_audit_target_requests(
+    payload: AuditCreateRequest | AuditEstimateRequest,
+) -> list[AuditTargetRequest]:
+    if payload.model_targets is not None:
+        return payload.model_targets
+    return [
+        AuditTargetRequest(
+            ai_family=provider,
+            execution_provider=provider,
+            model_provider=provider,
+            model_id=provider,
+            display_name=provider.title(),
+            level=payload.scdl_level,
+            gateway=False,
+            gateway_l2_experimental=False,
+        )
+        for provider in payload.providers or []
+    ]
+
+
+def derive_legacy_providers(targets: list[AuditTargetRequest]) -> list[str]:
+    providers: list[str] = []
+    seen: set[str] = set()
+    for target in targets:
+        provider = target.execution_provider
+        if provider not in seen:
+            seen.add(provider)
+            providers.append(provider)
+    return providers
+
+
+def derive_legacy_scdl_level(targets: list[AuditTargetRequest]) -> str:
+    if any(target.level == "L2" for target in targets):
+        return "L2"
+    return "L1"
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default
+
+
+def audit_caps() -> AuditCapsResponse:
+    return AuditCapsResponse(
+        max_audit_targets=_env_int("MAX_AUDIT_TARGETS", DEFAULT_MAX_AUDIT_TARGETS),
+        max_models_per_audit=_env_int(
+            "MAX_MODELS_PER_AUDIT",
+            DEFAULT_MAX_MODELS_PER_AUDIT,
+        ),
+        max_queries_per_audit=_env_int(
+            "MAX_QUERIES_PER_AUDIT",
+            DEFAULT_MAX_QUERIES_PER_AUDIT,
+        ),
+        max_total_runs_per_audit=_env_int(
+            "MAX_TOTAL_RUNS_PER_AUDIT",
+            DEFAULT_MAX_TOTAL_RUNS_PER_AUDIT,
+        ),
+    )
+
+
+def estimate_audit_payload(
+    payload: AuditCreateRequest | AuditEstimateRequest,
+) -> AuditEstimateResponse:
+    seed_query_items = build_seed_query_items(payload)
+    targets = build_audit_target_requests(payload)
+    query_count = len(seed_query_items)
+    target_count = len(targets)
+    model_count = len(
+        {(target.execution_provider, target.model_id) for target in targets}
+    )
+    estimated_runs = query_count * target_count * payload.runs_per_query
+    caps = audit_caps()
+    violations: list[AuditCapViolationResponse] = []
+    if target_count > caps.max_audit_targets:
+        violations.append(
+            AuditCapViolationResponse(
+                code="MAX_AUDIT_TARGETS_EXCEEDED",
+                message="Audit target count exceeds the configured limit.",
+            )
+        )
+    if model_count > caps.max_models_per_audit:
+        violations.append(
+            AuditCapViolationResponse(
+                code="MAX_MODELS_PER_AUDIT_EXCEEDED",
+                message="Audit model count exceeds the configured limit.",
+            )
+        )
+    if query_count > caps.max_queries_per_audit:
+        violations.append(
+            AuditCapViolationResponse(
+                code="MAX_QUERIES_PER_AUDIT_EXCEEDED",
+                message="Audit query count exceeds the configured limit.",
+            )
+        )
+    if estimated_runs > caps.max_total_runs_per_audit:
+        violations.append(
+            AuditCapViolationResponse(
+                code="MAX_TOTAL_RUNS_EXCEEDED",
+                message="Estimated audit runs exceed the configured limit.",
+            )
+        )
+    return AuditEstimateResponse(
+        query_count=query_count,
+        target_count=target_count,
+        model_count=model_count,
+        estimated_runs=estimated_runs,
+        caps=caps,
+        over_cap=bool(violations),
+        violations=violations,
+    )
+
+
+def enforce_audit_caps(payload: AuditCreateRequest) -> None:
+    estimate = estimate_audit_payload(payload)
+    if estimate.over_cap:
+        raise HTTPException(
+            status_code=422,
+            detail=[violation.model_dump() for violation in estimate.violations],
+        )
 
 
 def add_seed_query_records(
@@ -450,6 +735,27 @@ def add_seed_query_records(
         )
 
 
+def add_audit_target_records(
+    session: AsyncSession,
+    audit_id: int,
+    targets: list[AuditTargetRequest],
+) -> None:
+    for target in targets:
+        session.add(
+            AuditTarget(
+                audit_id=audit_id,
+                ai_family=target.ai_family,
+                execution_provider=target.execution_provider,
+                model_provider=target.model_provider,
+                model_id=target.model_id,
+                display_name=target.display_name,
+                level=SCDLLevel(target.level),
+                gateway=target.gateway,
+                gateway_l2_experimental=target.gateway_l2_experimental,
+            )
+        )
+
+
 def build_seed_query_item_response(query: Query) -> SeedQueryItemResponse:
     return SeedQueryItemResponse(
         text=query.text,
@@ -458,18 +764,36 @@ def build_seed_query_item_response(query: Query) -> SeedQueryItemResponse:
     )
 
 
+def build_audit_target_response(target: AuditTarget) -> AuditTargetResponse:
+    return AuditTargetResponse(
+        target_id=target.id,
+        ai_family=target.ai_family,
+        execution_provider=target.execution_provider,
+        model_provider=target.model_provider,
+        model_id=target.model_id,
+        display_name=target.display_name,
+        level=_scdl_level_value(target.level),
+        gateway=target.gateway,
+        gateway_l2_experimental=target.gateway_l2_experimental,
+    )
+
+
 async def create_audit_record(
     session: AsyncSession,
     payload: AuditCreateRequest,
     user_id: int,
 ) -> AuditCreateResponse:
+    enforce_audit_caps(payload)
     brand = await get_or_create_brand_for_audit(session, payload)
+    target_requests = build_audit_target_requests(payload)
+    providers = derive_legacy_providers(target_requests)
+    scdl_level = derive_legacy_scdl_level(target_requests)
 
     audit = Audit(
         user_id=user_id,
         brand=brand,
         status=AuditStatus.CREATED,
-        providers=payload.providers,
+        providers=providers,
         runs_per_query=payload.runs_per_query,
         language=payload.language,
         country=payload.country,
@@ -478,18 +802,25 @@ async def create_audit_record(
         enable_query_expansion=payload.enable_query_expansion,
         enable_source_intelligence=payload.enable_source_intelligence,
         follow_up_depth=payload.follow_up_depth,
-        scdl_level=SCDLLevel(payload.scdl_level),
+        scdl_level=SCDLLevel(scdl_level),
     )
     session.add(audit)
     await session.flush()
 
     seed_query_items = build_seed_query_items(payload)
     add_seed_query_records(session, audit.id, seed_query_items)
+    add_audit_target_records(session, audit.id, target_requests)
     seed_queries = [item.text for item in seed_query_items]
 
     await session.commit()
     await session.refresh(audit)
     audit_number = await get_relative_audit_number(session, audit)
+
+    target_rows = (
+        await session.execute(
+            select(AuditTarget).where(AuditTarget.audit_id == audit.id).order_by(AuditTarget.id)
+        )
+    ).scalars().all()
 
     return AuditCreateResponse(
         audit_id=audit.id,
@@ -508,6 +839,7 @@ async def create_audit_record(
             )
             for item in seed_query_items
         ],
+        model_targets=[build_audit_target_response(target) for target in target_rows],
     )
 
 
@@ -545,10 +877,12 @@ async def update_audit_record(
 ) -> AuditDetailResponse:
     if audit.status != AuditStatus.CREATED:
         raise HTTPException(status_code=409, detail=AUDIT_NOT_EDITABLE_DETAIL)
+    enforce_audit_caps(payload)
 
     brand = await get_or_create_brand_for_audit(session, payload)
+    target_requests = build_audit_target_requests(payload)
     audit.brand = brand
-    audit.providers = payload.providers
+    audit.providers = derive_legacy_providers(target_requests)
     audit.runs_per_query = payload.runs_per_query
     audit.language = payload.language
     audit.country = payload.country
@@ -557,10 +891,12 @@ async def update_audit_record(
     audit.enable_query_expansion = payload.enable_query_expansion
     audit.enable_source_intelligence = payload.enable_source_intelligence
     audit.follow_up_depth = payload.follow_up_depth
-    audit.scdl_level = SCDLLevel(payload.scdl_level)
+    audit.scdl_level = SCDLLevel(derive_legacy_scdl_level(target_requests))
 
     await session.execute(delete(Query).where(Query.audit_id == audit.id))
+    await session.execute(delete(AuditTarget).where(AuditTarget.audit_id == audit.id))
     add_seed_query_records(session, audit.id, build_seed_query_items(payload))
+    add_audit_target_records(session, audit.id, target_requests)
 
     await session.commit()
     await session.refresh(audit)
@@ -784,6 +1120,11 @@ async def build_audit_detail_response(
             select(Query).where(Query.audit_id == audit.id).order_by(Query.id)
         )
     ).scalars().all()
+    targets = (
+        await session.execute(
+            select(AuditTarget).where(AuditTarget.audit_id == audit.id).order_by(AuditTarget.id)
+        )
+    ).scalars().all()
     return AuditDetailResponse(
         audit_id=audit.id,
         audit_number=audit_number,
@@ -801,6 +1142,7 @@ async def build_audit_detail_response(
         max_queries=audit.max_queries,
         seed_queries=[query.text for query in queries],
         seed_query_items=[build_seed_query_item_response(query) for query in queries],
+        model_targets=[build_audit_target_response(target) for target in targets],
         enable_query_expansion=audit.enable_query_expansion,
         enable_source_intelligence=audit.enable_source_intelligence,
         follow_up_depth=audit.follow_up_depth,
@@ -878,7 +1220,15 @@ async def delete_archived_audit_record(session: AsyncSession, audit: Audit) -> N
 
 async def get_expected_run_count(session: AsyncSession, audit: Audit) -> int:
     query_count = await get_effective_query_count(session, audit)
-    return query_count * len(audit.providers or []) * audit.runs_per_query
+    target_count = (
+        await session.execute(
+            select(func.count())
+            .select_from(AuditTarget)
+            .where(AuditTarget.audit_id == audit.id)
+        )
+    ).scalar_one()
+    provider_count = target_count or len(audit.providers or [])
+    return query_count * provider_count * audit.runs_per_query
 
 
 async def get_effective_query_count(session: AsyncSession, audit: Audit) -> int:
@@ -913,6 +1263,11 @@ async def build_audit_status_response(
     completed_runs = sum(1 for status in run_statuses if status in terminal_statuses)
     failed_runs = sum(1 for status in run_statuses if status in failed_statuses)
     completion_ratio = completed_runs / total_runs if total_runs else 0.0
+    targets = (
+        await session.execute(
+            select(AuditTarget).where(AuditTarget.audit_id == audit.id).order_by(AuditTarget.id)
+        )
+    ).scalars().all()
 
     return AuditStatusResponse(
         audit_id=audit.id,
@@ -924,6 +1279,7 @@ async def build_audit_status_response(
         failed_runs=failed_runs,
         completion_ratio=round(completion_ratio, 4),
         updated_at=audit.updated_at,
+        model_targets=[build_audit_target_response(target) for target in targets],
         provider_diagnostics=await _provider_diagnostics_for_audit(session, audit),
     )
 
@@ -1063,9 +1419,15 @@ def _error_message(error_object: object) -> str | None:
 
 def _provider_model_from_metadata(provider_metadata: object) -> str | None:
     if isinstance(provider_metadata, dict):
-        model = provider_metadata.get("model")
+        model = provider_metadata.get("model_id") or provider_metadata.get("model")
         return model if isinstance(model, str) else None
     return None
+
+
+def _target_level(target: AuditTarget | None, audit: Audit) -> str:
+    if target is not None:
+        return _scdl_level_value(target.level)
+    return _scdl_level_value(audit.scdl_level)
 
 
 def _provider_diagnostic_response(
@@ -1118,14 +1480,14 @@ async def _provider_diagnostics_for_audit(
     audit: Audit,
 ) -> list[ProviderDiagnosticResponse]:
     stmt = (
-        select(Run, RawResponse)
+        select(Run, RawResponse, AuditTarget)
         .outerjoin(RawResponse, RawResponse.run_id == Run.id)
+        .outerjoin(AuditTarget, AuditTarget.id == Run.audit_target_id)
         .where(Run.audit_id == audit.id)
         .order_by(Run.id)
     )
     diagnostics: list[ProviderDiagnosticResponse] = []
-    level = _scdl_level_value(audit.scdl_level)
-    for run, raw_response in (await session.execute(stmt)).all():
+    for run, raw_response, target in (await session.execute(stmt)).all():
         error_object = raw_response.error_object if raw_response is not None else None
         provider_metadata = (
             raw_response.provider_metadata if raw_response is not None else None
@@ -1135,7 +1497,7 @@ async def _provider_diagnostics_for_audit(
             provider=run.provider,
             run_status=run.status,
             model=_provider_model_from_metadata(provider_metadata),
-            level=level,
+            level=_target_level(target, audit),
             run_id=run.id,
             query_id=run.query_id,
         )
@@ -1220,17 +1582,20 @@ async def build_audit_results_response(
 ) -> AuditResultsResponse:
     audit_number = await get_relative_audit_number(session, audit)
     stmt = (
-        select(Run, Query, ParsedResult, Score, RawResponse)
+        select(Run, Query, ParsedResult, Score, RawResponse, AuditTarget)
         .join(Query, Run.query_id == Query.id)
         .outerjoin(ParsedResult, ParsedResult.run_id == Run.id)
         .outerjoin(Score, Score.run_id == Run.id)
         .outerjoin(RawResponse, RawResponse.run_id == Run.id)
+        .outerjoin(AuditTarget, AuditTarget.id == Run.audit_target_id)
         .where(Run.audit_id == audit.id)
-        .order_by(Query.id, Run.provider, Run.run_number, Run.id)
+        .order_by(Query.id, AuditTarget.id, Run.provider, Run.run_number, Run.id)
     )
 
     rows: list[AuditResultRowResponse] = []
-    for run, query, parsed_result, score, raw_response in (await session.execute(stmt)).all():
+    for run, query, parsed_result, score, raw_response, target in (
+        await session.execute(stmt)
+    ).all():
         sources = []
         if parsed_result is not None and isinstance(parsed_result.sources, list):
             sources = [
@@ -1244,7 +1609,7 @@ async def build_audit_results_response(
             model=_provider_model_from_metadata(
                 raw_response.provider_metadata if raw_response is not None else None
             ),
-            level=_scdl_level_value(audit.scdl_level),
+            level=_target_level(target, audit),
             run_id=run.id,
             query_id=query.id,
         )
@@ -1252,7 +1617,9 @@ async def build_audit_results_response(
         rows.append(
             AuditResultRowResponse(
                 audit_id=audit.id,
-                scdl_level=_scdl_level_value(audit.scdl_level),
+                scdl_level=_target_level(target, audit),
+                target_id=target.id if target is not None else None,
+                target=build_audit_target_response(target) if target is not None else None,
                 query_id=query.id,
                 query=query.text,
                 provider=run.provider,
@@ -1619,6 +1986,21 @@ async def list_audits(
         raise
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=500, detail="Failed to load audits.") from exc
+
+
+@app.post("/audits/estimate", response_model=AuditEstimateResponse)
+async def estimate_audit(
+    payload: AuditEstimateRequest,
+    request: Request,
+    session: AsyncSession = DB_SESSION_DEPENDENCY,
+) -> AuditEstimateResponse:
+    try:
+        await get_authenticated_user_from_request(session, request)
+        return estimate_audit_payload(payload)
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=500, detail="Failed to estimate audit.") from exc
 
 
 @app.post("/audits", response_model=AuditCreateResponse)

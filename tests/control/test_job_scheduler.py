@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session
 
 from libs.control.job_scheduler import schedule_jobs_for_audit
-from libs.storage.models import Audit, Base, Brand, Job, JobStatus, Query
+from libs.storage.models import Audit, AuditTarget, Base, Brand, Job, JobStatus, Query
 
 
 class JobSchedulerTests(unittest.TestCase):
@@ -123,6 +123,71 @@ class JobSchedulerTests(unittest.TestCase):
         self.assertEqual(len(first), 4)
         self.assertEqual(second, [])
         self.assertEqual(len(persisted), 4)
+
+    def test_scheduler_expands_queries_by_audit_targets(self) -> None:
+        audit = self._create_audit(
+            providers=["openrouter"],
+            runs_per_query=1,
+            query_texts=["q1", "q2"],
+        )
+        targets = [
+            AuditTarget(
+                audit_id=audit.id,
+                ai_family="chatgpt",
+                execution_provider="openrouter",
+                model_provider="openai",
+                model_id="openai/gpt-4o-mini",
+                display_name="GPT-4o mini",
+                level="L1",
+                gateway=True,
+            ),
+            AuditTarget(
+                audit_id=audit.id,
+                ai_family="claude",
+                execution_provider="openrouter",
+                model_provider="anthropic",
+                model_id="anthropic/claude-3.5-sonnet",
+                display_name="Claude 3.5 Sonnet",
+                level="L1",
+                gateway=True,
+            ),
+            AuditTarget(
+                audit_id=audit.id,
+                ai_family="chatgpt",
+                execution_provider="openrouter",
+                model_provider="openai",
+                model_id="openai/gpt-4o-mini",
+                display_name="GPT-4o mini L2",
+                level="L2",
+                gateway=True,
+                gateway_l2_experimental=True,
+            ),
+        ]
+        self.session.add_all(targets)
+        self.session.commit()
+
+        created = schedule_jobs_for_audit(self.session, audit.id)
+
+        self.assertEqual(len(created), 6)
+        self.assertEqual(
+            {job.audit_target_id for job in created},
+            {target.id for target in targets},
+        )
+        self.assertEqual({job.provider for job in created}, {"openrouter"})
+        self.assertEqual(len({job.idempotency_key for job in created}), 6)
+
+    def test_legacy_audit_without_targets_still_schedules_from_providers(self) -> None:
+        audit = self._create_audit(
+            providers=["mock"],
+            runs_per_query=1,
+            query_texts=["q1"],
+        )
+
+        created = schedule_jobs_for_audit(self.session, audit.id)
+
+        self.assertEqual(len(created), 1)
+        self.assertIsNone(created[0].audit_target_id)
+        self.assertEqual(created[0].provider, "mock")
 
 
 if __name__ == "__main__":

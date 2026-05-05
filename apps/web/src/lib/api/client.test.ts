@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   archiveAudit,
+  createAudit,
   deleteArchivedAudit,
   generateSeedQuerySuggestions,
   getAuditDetail,
@@ -18,11 +19,19 @@ import {
 } from "./client";
 import {
   auditDetailFixture,
+  auditDetailWithModelTargetsFixture,
   auditListFixture,
   auditPipelineRunFixture,
   auditResultsFixture,
   auditSummaryFixture,
+  auditTargetFixture,
+  auditTargetWireFixture,
+  createAuditModelTargetsPayloadFixture,
+  createAuditModelTargetsWireFixture,
   currentUserFixture,
+  legacyAuditDetailWithoutModelTargetsFixture,
+  openRouterL2AuditTargetFixture,
+  openRouterL2AuditTargetWireFixture,
   unauthenticatedAuthErrorFixture,
 } from "../../test/fixtures";
 import { mockFetchSequence } from "../../test/mockFetch";
@@ -83,9 +92,21 @@ describe("api client", () => {
   });
 
   it("loads audit detail responses", async () => {
-    mockFetchSequence([{ body: auditDetailFixture }]);
+    mockFetchSequence([{ body: legacyAuditDetailWithoutModelTargetsFixture }]);
 
-    await expect(getAuditDetail(42)).resolves.toEqual(auditDetailFixture);
+    await expect(getAuditDetail(42)).resolves.toEqual({
+      ...auditDetailFixture,
+      modelTargets: [],
+    });
+  });
+
+  it("maps audit detail model_targets from snake_case wire fixtures", async () => {
+    mockFetchSequence([{ body: auditDetailWithModelTargetsFixture }]);
+
+    await expect(getAuditDetail(42)).resolves.toEqual({
+      ...auditDetailWithModelTargetsFixture,
+      modelTargets: [auditTargetFixture, openRouterL2AuditTargetFixture],
+    });
   });
 
   it("updates audit setup with a credentialed PUT request", async () => {
@@ -100,7 +121,7 @@ describe("api client", () => {
         seed_queries: ["best ai visibility tools"],
         scdl_level: "L1",
       }),
-    ).resolves.toEqual(auditDetailFixture);
+    ).resolves.toEqual({ ...auditDetailFixture, modelTargets: [] });
     expect(fetchMock).toHaveBeenCalledWith(
       "http://localhost:8000/audits/42",
       expect.objectContaining({
@@ -108,6 +129,33 @@ describe("api client", () => {
         method: "PUT",
       }),
     );
+  });
+
+  it("maps create payload modelTargets to backend model_targets", async () => {
+    const fetchMock = mockFetchSequence([
+      {
+        body: {
+          audit_id: 42,
+          audit_number: 1,
+          brand_id: 7,
+          status: "created",
+          providers: ["openrouter"],
+          runs_per_query: 1,
+          scdl_level: "L1",
+          seed_queries: ["best ai visibility tools"],
+          seed_query_items: [{ text: "best ai visibility tools", source: "user" }],
+          model_targets: [auditTargetWireFixture, openRouterL2AuditTargetWireFixture],
+        },
+      },
+    ]);
+
+    const result = await createAudit(createAuditModelTargetsPayloadFixture);
+
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(request.body).toBe(JSON.stringify(createAuditModelTargetsWireFixture));
+    expect(String(request.body)).not.toContain("modelTargets");
+    expect(result.modelTargets?.[0]?.gatewayL2Experimental).toBe(false);
+    expect(result.modelTargets?.[1]?.gatewayL2Experimental).toBe(true);
   });
 
   it("generates seed query suggestions with the documented endpoint and payload", async () => {

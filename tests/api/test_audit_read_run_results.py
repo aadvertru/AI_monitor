@@ -26,6 +26,7 @@ from libs.execution.post_processing import AuditPostProcessingSummary
 from libs.storage.models import (
     Audit,
     AuditStatus,
+    AuditTarget,
     Base,
     Brand,
     Job,
@@ -269,6 +270,91 @@ class AuditReadRunResultsAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(detail_result.scdl_level, "L2")
         self.assertEqual(status_result.scdl_level, "L2")
         self.assertEqual(results_result.rows[0].scdl_level, "L2")
+
+    async def test_status_and_results_expose_safe_target_metadata(self) -> None:
+        owner = await self._create_user()
+        audit = await self._create_audit(
+            owner,
+            providers=["openrouter"],
+            query_texts=["target query"],
+        )
+
+        async with self.session_factory() as session:
+            query = (
+                await session.execute(select(Query).where(Query.audit_id == audit.id))
+            ).scalars().one()
+            target = AuditTarget(
+                audit_id=audit.id,
+                ai_family="claude",
+                execution_provider="openrouter",
+                model_provider="anthropic",
+                model_id="anthropic/claude-3.5-sonnet",
+                display_name="Claude 3.5 Sonnet",
+                level=SCDLLevel.L2,
+                gateway=True,
+                gateway_l2_experimental=True,
+            )
+            session.add(target)
+            await session.flush()
+            run = Run(
+                audit_id=audit.id,
+                query_id=query.id,
+                audit_target_id=target.id,
+                provider="openrouter",
+                run_number=1,
+                status=RunStatus.ERROR,
+            )
+            session.add(run)
+            await session.flush()
+            session.add(
+                RawResponse(
+                    run_id=run.id,
+                    request_snapshot={"raw_prompt": "hidden"},
+                    raw_answer=None,
+                    citations=None,
+                    provider_metadata={
+                        "model_id": "anthropic/claude-3.5-sonnet",
+                        "headers": {"authorization": "secret"},
+                    },
+                    provider_status="error",
+                    error_object={
+                        "code": "PROVIDER_REQUEST_FAILED",
+                        "message": "Provider request failed.",
+                    },
+                )
+            )
+            await session.commit()
+
+        async with self.session_factory() as session:
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                status_result = await get_audit_status(
+                    audit_id=audit.id,
+                    request=self._authenticated_request(owner),
+                    session=session,
+                )
+                results_result = await get_audit_results(
+                    audit_id=audit.id,
+                    request=self._authenticated_request(owner),
+                    session=session,
+                )
+
+        self.assertEqual(len(status_result.model_targets), 1)
+        self.assertEqual(
+            status_result.model_targets[0].model_id,
+            "anthropic/claude-3.5-sonnet",
+        )
+        row = results_result.rows[0]
+        self.assertEqual(row.target_id, status_result.model_targets[0].target_id)
+        assert row.target is not None
+        self.assertEqual(row.target.execution_provider, "openrouter")
+        self.assertEqual(row.target.level, "L2")
+        self.assertTrue(row.target.gateway_l2_experimental)
+        assert row.provider_error is not None
+        self.assertEqual(row.provider_error.model, "anthropic/claude-3.5-sonnet")
+        self.assertEqual(row.provider_error.level, "L2")
+        dumped = results_result.model_dump()
+        self.assertNotIn("raw_prompt", str(dumped))
+        self.assertNotIn("authorization", str(dumped).lower())
 
     async def test_unauthenticated_list_and_detail_are_rejected(self) -> None:
         owner = await self._create_user()

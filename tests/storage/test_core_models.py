@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from libs.storage.models import (
     Audit,
     AuditStatus,
+    AuditTarget,
     Base,
     Brand,
     ParsedResult,
@@ -16,6 +17,7 @@ from libs.storage.models import (
     RawResponse,
     Run,
     RunStatus,
+    SCDLLevel,
     Score,
     User,
     UserRole,
@@ -148,15 +150,34 @@ class CoreModelsTests(unittest.TestCase):
         self.session.add_all([brand, audit, query])
         self.session.commit()
 
+        # The unique constraint on runs includes audit_target_id (nullable).
+        # For canonical runs (with a non-null target), the constraint enforces
+        # uniqueness correctly. Legacy runs (audit_target_id=NULL) rely on the
+        # jobs idempotency_key for deduplication instead.
+        target = AuditTarget(
+            audit_id=audit.id,
+            ai_family="chatgpt",
+            execution_provider="openai",
+            model_provider="openai",
+            model_id="openai/gpt-4o",
+            display_name="GPT-4o",
+            level=SCDLLevel.L1,
+            gateway=False,
+        )
+        self.session.add(target)
+        self.session.commit()
+
         first_run = Run(
             audit_id=audit.id,
             query_id=query.id,
+            audit_target_id=target.id,
             provider="openai",
             run_number=1,
         )
         duplicate_run = Run(
             audit_id=audit.id,
             query_id=query.id,
+            audit_target_id=target.id,
             provider="openai",
             run_number=1,
         )

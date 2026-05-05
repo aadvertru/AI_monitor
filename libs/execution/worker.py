@@ -21,7 +21,16 @@ from libs.execution.safe_logging import (
     perf_start,
     provider_log_fields,
 )
-from libs.storage.models import Audit, Job, JobStatus, Query, RawResponse, Run, RunStatus
+from libs.storage.models import (
+    Audit,
+    AuditTarget,
+    Job,
+    JobStatus,
+    Query,
+    RawResponse,
+    Run,
+    RunStatus,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +55,16 @@ async def execute_job(
     job: Job | None = None
     run: Run | None = None
     scdl_level_value: str | None = None
+    audit_id_value: int | None = None
+    query_id_value: int | None = None
+    provider_value: str | None = None
     try:
         job = await session.get(Job, job_id)
         if job is None:
             raise ValueError(f"Job with id={job_id} was not found.")
+        audit_id_value = job.audit_id
+        query_id_value = job.query_id
+        provider_value = job.provider
 
         query_text = (
             await session.execute(select(Query.text).where(Query.id == job.query_id))
@@ -57,12 +72,8 @@ async def execute_job(
         if query_text is None:
             raise ValueError(f"Query with id={job.query_id} was not found.")
 
-        scdl_level = (
-            await session.execute(select(Audit.scdl_level).where(Audit.id == job.audit_id))
-        ).scalar_one_or_none()
-        if scdl_level is None:
-            raise ValueError(f"Audit with id={job.audit_id} was not found.")
-        scdl_level_value = scdl_level.value if hasattr(scdl_level, "value") else str(scdl_level)
+        audit_target = await _load_audit_target(session, job)
+        scdl_level_value = await _job_scdl_level(session, job, audit_target)
 
         job.status = JobStatus.RUNNING
         await session.flush()
@@ -72,12 +83,14 @@ async def execute_job(
             Run.query_id == job.query_id,
             Run.provider == job.provider,
             Run.run_number == job.run_number,
+            Run.audit_target_id == job.audit_target_id,
         )
         run = (await session.execute(run_stmt)).scalar_one_or_none()
         if run is None:
             run = Run(
                 audit_id=job.audit_id,
                 query_id=job.query_id,
+                audit_target_id=job.audit_target_id,
                 provider=job.provider,
                 run_number=job.run_number,
                 status=RunStatus.PENDING,
@@ -104,7 +117,7 @@ async def execute_job(
             query_id=job.query_id,
             **provider_log_fields(
                 job.provider,
-                metadata=_adapter_metadata(provider, scdl_level_value),
+                metadata=_adapter_metadata(provider, scdl_level_value, audit_target),
                 scdl_level=scdl_level_value,
             ),
         )
@@ -117,6 +130,20 @@ async def execute_job(
                 query_id=job.query_id,
                 run_number=job.run_number,
                 provider=job.provider,
+                audit_target_id=job.audit_target_id,
+                model_id=audit_target.model_id if audit_target is not None else None,
+                model_provider=(
+                    audit_target.model_provider if audit_target is not None else None
+                ),
+                execution_provider=(
+                    audit_target.execution_provider if audit_target is not None else None
+                ),
+                gateway=audit_target.gateway if audit_target is not None else None,
+                gateway_l2_experimental=(
+                    audit_target.gateway_l2_experimental
+                    if audit_target is not None
+                    else None
+                ),
             )
         except Exception:
             response = ProviderResponse(
@@ -188,6 +215,8 @@ async def execute_job(
                     "query": query_text,
                     "provider": job.provider,
                     "run_number": job.run_number,
+                    "audit_target_id": job.audit_target_id,
+                    "model_id": audit_target.model_id if audit_target is not None else None,
                 },
                 raw_answer=response.raw_answer,
                 citations=response.citations,
@@ -225,10 +254,10 @@ async def execute_job(
             logger,
             "audit_job_failed",
             log_level=logging.WARNING,
-            audit_id=job.audit_id if job is not None else None,
+            audit_id=audit_id_value,
             run_id=run.id if run is not None else None,
-            query_id=job.query_id if job is not None else None,
-            execution_provider=job.provider if job is not None else None,
+            query_id=query_id_value,
+            execution_provider=provider_value,
             level=scdl_level_value,
             status="error",
             duration_ms=duration_ms(job_start),
@@ -244,7 +273,47 @@ def _metadata_model(provider_metadata: dict | None) -> str | None:
     return model if isinstance(model, str) else None
 
 
-def _adapter_metadata(provider: BaseProviderAdapter, scdl_level: str | None) -> dict[str, object]:
+async def _load_audit_target(
+    session: AsyncSession, job: Job
+) -> AuditTarget | None:
+    if job.audit_target_id is None:
+        return None
+    target = await session.get(AuditTarget, job.audit_target_id)
+    if target is None:
+        raise ValueError(f"Audit target with id={job.audit_target_id} was not found.")
+    return target
+
+
+async def _job_scdl_level(
+    session: AsyncSession,
+    job: Job,
+    audit_target: AuditTarget | None,
+) -> str:
+    if audit_target is not None:
+        return _enum_value(audit_target.level)
+    scdl_level = (
+        await session.execute(select(Audit.scdl_level).where(Audit.id == job.audit_id))
+    ).scalar_one_or_none()
+    if scdl_level is None:
+        raise ValueError(f"Audit with id={job.audit_id} was not found.")
+    return _enum_value(scdl_level)
+
+
+def _adapter_metadata(
+    provider: BaseProviderAdapter,
+    scdl_level: str | None,
+    audit_target: AuditTarget | None = None,
+) -> dict[str, object]:
+    if audit_target is not None:
+        return {
+            "provider": audit_target.execution_provider,
+            "execution_provider": audit_target.execution_provider,
+            "model_id": audit_target.model_id,
+            "model_provider": audit_target.model_provider,
+            "gateway": audit_target.gateway,
+            "gateway_l2_experimental": audit_target.gateway_l2_experimental,
+            "level": scdl_level,
+        }
     if isinstance(provider, OpenRouterProviderAdapter):
         config = provider.config
         model_id = _openrouter_model_for_level(config, scdl_level)
@@ -277,4 +346,3 @@ def _model_provider(model_id: str | None) -> str | None:
 
 def _enum_value(value: object) -> str:
     return value.value if hasattr(value, "value") else str(value)
-

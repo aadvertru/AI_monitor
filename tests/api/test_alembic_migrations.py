@@ -34,6 +34,7 @@ def test_alembic_upgrade_head_creates_current_schema() -> None:
         "queries",
         "jobs",
         "runs",
+        "audit_targets",
         "parsed_results",
         "raw_responses",
         "scores",
@@ -44,7 +45,19 @@ def test_alembic_upgrade_head_creates_current_schema() -> None:
         _column_names(inspector, "audits")
     )
     assert {"query_type", "source"}.issubset(_column_names(inspector, "queries"))
-    assert "status" in _column_names(inspector, "runs")
+    assert "audit_target_id" in _column_names(inspector, "jobs")
+    assert {
+        "audit_id",
+        "ai_family",
+        "execution_provider",
+        "model_provider",
+        "model_id",
+        "display_name",
+        "level",
+        "gateway",
+        "gateway_l2_experimental",
+    }.issubset(_column_names(inspector, "audit_targets"))
+    assert {"status", "audit_target_id"}.issubset(_column_names(inspector, "runs"))
     assert "sources" in _column_names(inspector, "parsed_results")
 
     audit_checks = " ".join(
@@ -55,11 +68,16 @@ def test_alembic_upgrade_head_creates_current_schema() -> None:
 
     assert "uq_jobs_idempotency_key" in _unique_names(inspector, "jobs")
     assert "uq_runs_execution_identity" in _unique_names(inspector, "runs")
+    target_checks = " ".join(
+        check["sqltext"] for check in inspector.get_check_constraints("audit_targets")
+    )
+    assert "level" in target_checks
+    assert "gateway_l2_experimental" in target_checks
 
     with sqlite3.connect(db_path) as connection:
         version = connection.execute("SELECT version_num FROM alembic_version").fetchone()
 
-    assert version == ("9d1e2f3a4b5c",)
+    assert version == ("b5e3d2c1f0a9",)
 
 
 def _column_names(inspector, table_name: str) -> set[str]:

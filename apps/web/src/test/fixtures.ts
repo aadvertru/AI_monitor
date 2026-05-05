@@ -7,9 +7,12 @@ import type {
   AuditRunTriggerResponse,
   AuditSummaryResponse,
   AuditStatusResponse,
+  AuditTarget,
+  AuditTargetWire,
   LogoutResponse,
   CurrentUser,
   ProviderDiagnostic,
+  AuditCreateRequest,
 } from "../lib/api/types";
 import type { ApiErrorPayload } from "../lib/api/client";
 
@@ -61,6 +64,54 @@ export const auditCreateResponseFixture: AuditCreateResponse = {
   ],
 };
 
+export const auditTargetWireFixture: AuditTargetWire = {
+  target_id: 10,
+  ai_family: "chatgpt",
+  execution_provider: "openrouter",
+  model_provider: "openai",
+  model_id: "openai/gpt-4o-mini",
+  display_name: "GPT-4o mini",
+  level: "L1",
+  gateway: true,
+  gateway_l2_experimental: false,
+};
+
+export const openRouterL2AuditTargetWireFixture: AuditTargetWire = {
+  target_id: 11,
+  ai_family: "chatgpt",
+  execution_provider: "openrouter",
+  model_provider: "openai",
+  model_id: "openai/gpt-4o-mini",
+  display_name: "GPT-4o mini with web",
+  level: "L2",
+  gateway: true,
+  gateway_l2_experimental: true,
+};
+
+export const auditTargetFixture: AuditTarget = {
+  targetId: auditTargetWireFixture.target_id,
+  aiFamily: auditTargetWireFixture.ai_family,
+  executionProvider: auditTargetWireFixture.execution_provider,
+  modelProvider: auditTargetWireFixture.model_provider,
+  modelId: auditTargetWireFixture.model_id,
+  displayName: auditTargetWireFixture.display_name,
+  level: auditTargetWireFixture.level,
+  gateway: auditTargetWireFixture.gateway,
+  gatewayL2Experimental: auditTargetWireFixture.gateway_l2_experimental,
+};
+
+export const openRouterL2AuditTargetFixture: AuditTarget = {
+  targetId: openRouterL2AuditTargetWireFixture.target_id,
+  aiFamily: openRouterL2AuditTargetWireFixture.ai_family,
+  executionProvider: openRouterL2AuditTargetWireFixture.execution_provider,
+  modelProvider: openRouterL2AuditTargetWireFixture.model_provider,
+  modelId: openRouterL2AuditTargetWireFixture.model_id,
+  displayName: openRouterL2AuditTargetWireFixture.display_name,
+  level: openRouterL2AuditTargetWireFixture.level,
+  gateway: openRouterL2AuditTargetWireFixture.gateway,
+  gatewayL2Experimental: openRouterL2AuditTargetWireFixture.gateway_l2_experimental,
+};
+
 export const auditDetailFixture: AuditDetail = {
   ...auditListFixture[0],
   brand_id: 7,
@@ -80,6 +131,45 @@ export const auditDetailFixture: AuditDetail = {
   enable_query_expansion: false,
   enable_source_intelligence: false,
   follow_up_depth: 0,
+};
+
+export const auditDetailWithModelTargetsFixture: AuditDetail = {
+  ...auditDetailFixture,
+  providers: ["openrouter"],
+  scdl_level: "L2",
+  model_targets: [auditTargetWireFixture, openRouterL2AuditTargetWireFixture],
+};
+
+export const legacyAuditDetailWithoutModelTargetsFixture: AuditDetail = {
+  ...auditDetailFixture,
+};
+
+export const createAuditModelTargetsPayloadFixture: AuditCreateRequest = {
+  brand_name: "Acme AI",
+  brand_domain: "acme.example",
+  runs_per_query: 1,
+  seed_query_items: [
+    {
+      text: "best ai visibility tools",
+      type: "category_discovery",
+      source: "user",
+    },
+  ],
+  modelTargets: [auditTargetFixture, openRouterL2AuditTargetFixture],
+};
+
+export const createAuditModelTargetsWireFixture = {
+  brand_name: "Acme AI",
+  brand_domain: "acme.example",
+  runs_per_query: 1,
+  seed_query_items: [
+    {
+      text: "best ai visibility tools",
+      type: "category_discovery",
+      source: "user",
+    },
+  ],
+  model_targets: [auditTargetWireFixture, openRouterL2AuditTargetWireFixture],
 };
 
 export const auditStatusFixture: AuditStatusResponse = {

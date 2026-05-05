@@ -73,7 +73,14 @@ class OpenRouterProviderAdapter(BaseProviderAdapter):
             )
 
         try:
-            selection = select_openrouter_model(level, self.config)
+            requested_model_id = kwargs.get("model_id")
+            selection = select_openrouter_model(
+                level,
+                self.config,
+                requested_model_id=(
+                    requested_model_id if isinstance(requested_model_id, str) else None
+                ),
+            )
         except OpenRouterModelPolicyError as exc:
             return ProviderResponse(
                 status="error",

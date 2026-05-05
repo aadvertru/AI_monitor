@@ -133,6 +133,7 @@ def test_audit_status_serializes_without_internal_job_details() -> None:
         "failed_runs": 2,
         "completion_ratio": 0.5,
         "updated_at": "2026-04-29T09:30:00Z",
+        "model_targets": [],
         "provider_diagnostics": [],
     }
     assert "jobs" not in payload

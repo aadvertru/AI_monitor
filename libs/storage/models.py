@@ -28,9 +28,15 @@ def _utc_now() -> datetime:
 
 
 def build_job_idempotency_key(
-    audit_id: int, query_id: int, provider: str, run_number: int
+    audit_id: int,
+    query_id: int,
+    provider: str,
+    run_number: int,
+    audit_target_id: int | None = None,
 ) -> str:
     """Build a stable idempotency key for job scheduling records."""
+    if audit_target_id is not None:
+        return f"{audit_id}:{query_id}:target:{audit_target_id}:{provider}:{run_number}"
     return f"{audit_id}:{query_id}:{provider}:{run_number}"
 
 
@@ -178,6 +184,49 @@ class Audit(Base):
     runs: Mapped[list["Run"]] = relationship(
         back_populates="audit", cascade="all, delete-orphan"
     )
+    targets: Mapped[list["AuditTarget"]] = relationship(
+        back_populates="audit", cascade="all, delete-orphan"
+    )
+
+
+class AuditTarget(Base):
+    __tablename__ = "audit_targets"
+    __table_args__ = (
+        CheckConstraint("level IN ('L1', 'L2')", name="ck_audit_targets_level"),
+        CheckConstraint(
+            "NOT (gateway_l2_experimental AND level = 'L1')",
+            name="ck_audit_targets_l2_gateway_only",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    audit_id: Mapped[int] = mapped_column(
+        ForeignKey("audits.id", ondelete="CASCADE"), nullable=False
+    )
+    ai_family: Mapped[str] = mapped_column(String(64), nullable=False)
+    execution_provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    level: Mapped[SCDLLevel] = mapped_column(
+        SQLEnum(SCDLLevel, native_enum=False),
+        nullable=False,
+    )
+    gateway: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    gateway_l2_experimental: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    provider_config_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    model_display_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    capability_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, onupdate=_utc_now, nullable=False
+    )
+
+    audit: Mapped[Audit] = relationship(back_populates="targets")
 
 
 class Query(Base):
@@ -232,6 +281,9 @@ class Job(Base):
     query_id: Mapped[int] = mapped_column(
         ForeignKey("queries.id", ondelete="CASCADE"), nullable=False
     )
+    audit_target_id: Mapped[int | None] = mapped_column(
+        ForeignKey("audit_targets.id", ondelete="CASCADE"), nullable=True
+    )
     provider: Mapped[str] = mapped_column(String(64), nullable=False)
     run_number: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[JobStatus] = mapped_column(
@@ -247,6 +299,7 @@ class Job(Base):
 
     audit: Mapped[Audit] = relationship(back_populates="jobs")
     query: Mapped[Query] = relationship(back_populates="jobs")
+    audit_target: Mapped[AuditTarget | None] = relationship()
 
 
 class Run(Base):
@@ -256,6 +309,7 @@ class Run(Base):
         UniqueConstraint(
             "audit_id",
             "query_id",
+            "audit_target_id",
             "provider",
             "run_number",
             name="uq_runs_execution_identity",
@@ -269,6 +323,9 @@ class Run(Base):
     query_id: Mapped[int] = mapped_column(
         ForeignKey("queries.id", ondelete="CASCADE"), nullable=False
     )
+    audit_target_id: Mapped[int | None] = mapped_column(
+        ForeignKey("audit_targets.id", ondelete="CASCADE"), nullable=True
+    )
     provider: Mapped[str] = mapped_column(String(64), nullable=False)
     run_number: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[RunStatus] = mapped_column(
@@ -280,6 +337,7 @@ class Run(Base):
 
     audit: Mapped[Audit] = relationship(back_populates="runs")
     query: Mapped[Query] = relationship(back_populates="runs")
+    audit_target: Mapped[AuditTarget | None] = relationship()
     raw_response: Mapped["RawResponse | None"] = relationship(
         back_populates="run",
         uselist=False,

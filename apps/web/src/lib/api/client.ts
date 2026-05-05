@@ -16,6 +16,8 @@ import type {
   LoginRequest,
   LogoutResponse,
   RegisterRequest,
+  AuditTarget,
+  AuditTargetWire,
 } from "./types";
 
 export type ApiErrorPayload = {
@@ -98,6 +100,65 @@ function jsonBody(value: unknown) {
   return JSON.stringify(value);
 }
 
+export function mapAuditTargetToWire(target: AuditTarget): AuditTargetWire {
+  return {
+    id: target.id,
+    target_id: target.targetId,
+    ai_family: target.aiFamily,
+    execution_provider: target.executionProvider,
+    model_provider: target.modelProvider,
+    model_id: target.modelId,
+    display_name: target.displayName,
+    level: target.level,
+    gateway: target.gateway,
+    gateway_l2_experimental: target.gatewayL2Experimental,
+  };
+}
+
+export function mapAuditTargetFromWire(target: AuditTargetWire): AuditTarget {
+  return {
+    id: target.id,
+    targetId: target.target_id,
+    aiFamily: target.ai_family,
+    executionProvider: target.execution_provider,
+    modelProvider: target.model_provider,
+    modelId: target.model_id,
+    displayName: target.display_name,
+    level: target.level,
+    gateway: target.gateway,
+    gatewayL2Experimental: target.gateway_l2_experimental,
+  };
+}
+
+function mapAuditPayloadToWire(payload: AuditCreateRequest) {
+  const { modelTargets, ...wirePayload } = payload;
+  if (modelTargets) {
+    const { providers, scdl_level, model_targets, ...canonicalPayload } = wirePayload;
+    void providers;
+    void scdl_level;
+    void model_targets;
+    return {
+      ...canonicalPayload,
+      model_targets: modelTargets.map(mapAuditTargetToWire),
+    };
+  }
+  return wirePayload;
+}
+
+function mapAuditDetailFromWire(response: AuditDetail): AuditDetail {
+  return {
+    ...response,
+    modelTargets: response.model_targets?.map(mapAuditTargetFromWire) ?? [],
+  };
+}
+
+function mapAuditCreateResponseFromWire(response: AuditCreateResponse): AuditCreateResponse {
+  return {
+    ...response,
+    modelTargets: response.model_targets?.map(mapAuditTargetFromWire) ?? [],
+  };
+}
+
 type RawGenerateSeedQuerySuggestionsResponse = {
   suggestions: GeneratedSeedQuerySuggestion[];
   skipped_duplicates?: number;
@@ -143,11 +204,12 @@ export function listAudits({ archived = false }: { archived?: boolean } = {}) {
   return apiFetch<AuditListItem[]>(`/audits${params}`);
 }
 
-export function createAudit(payload: AuditCreateRequest) {
-  return apiFetch<AuditCreateResponse>("/audits", {
+export async function createAudit(payload: AuditCreateRequest) {
+  const response = await apiFetch<AuditCreateResponse>("/audits", {
     method: "POST",
-    body: jsonBody(payload),
+    body: jsonBody(mapAuditPayloadToWire(payload)),
   });
+  return mapAuditCreateResponseFromWire(response);
 }
 
 export async function generateSeedQuerySuggestions(
@@ -175,12 +237,12 @@ export async function generateSeedQuerySuggestions(
 export function updateAudit(auditId: number, payload: AuditCreateRequest) {
   return apiFetch<AuditDetail>(`/audits/${auditId}`, {
     method: "PUT",
-    body: jsonBody(payload),
-  });
+    body: jsonBody(mapAuditPayloadToWire(payload)),
+  }).then(mapAuditDetailFromWire);
 }
 
 export function getAuditDetail(auditId: number) {
-  return apiFetch<AuditDetail>(`/audits/${auditId}`);
+  return apiFetch<AuditDetail>(`/audits/${auditId}`).then(mapAuditDetailFromWire);
 }
 
 export function getAuditStatus(auditId: number) {

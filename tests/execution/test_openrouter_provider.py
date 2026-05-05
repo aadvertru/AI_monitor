@@ -74,6 +74,33 @@ class OpenRouterProviderAdapterL1Tests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("plugins", payload)
         self.assertNotIn(":online", str(payload))
 
+    async def test_requested_target_model_overrides_default_l1_model(self) -> None:
+        client = _FakeOpenRouterClient(
+            response={"choices": [{"message": {"content": "answer"}}]}
+        )
+        adapter = OpenRouterProviderAdapter(
+            config=_config(
+                {
+                    "OPENROUTER_ALLOWED_MODELS": (
+                        "anthropic/claude-test,openai/gpt-4o-mini"
+                    )
+                }
+            ),
+            client=client,
+        )
+
+        response = await adapter.query(
+            "query",
+            scdl_level="L1",
+            model_id="openai/gpt-4o-mini",
+        )
+
+        self.assertEqual(response.status, "success")
+        self.assertEqual(client.calls[0]["model"], "openai/gpt-4o-mini")
+        assert response.provider_metadata is not None
+        self.assertEqual(response.provider_metadata["model_id"], "openai/gpt-4o-mini")
+        self.assertEqual(response.provider_metadata["model_provider"], "openai")
+
     async def test_unknown_scdl_level_returns_configuration_error_and_does_not_call_client(
         self,
     ) -> None:

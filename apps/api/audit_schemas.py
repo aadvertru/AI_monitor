@@ -57,6 +57,18 @@ class SeedQueryItemResponse(FrontendAuditSchema):
     source: SeedQuerySourceValue = "user"
 
 
+class AuditTargetResponse(FrontendAuditSchema):
+    target_id: int
+    ai_family: str
+    execution_provider: str
+    model_provider: str
+    model_id: str
+    display_name: str
+    level: SCDLLevelValue
+    gateway: bool = False
+    gateway_l2_experimental: bool = False
+
+
 class GeneratedSeedQuerySuggestionResponse(FrontendAuditSchema):
     text: str
     type: SeedQueryTypeValue
@@ -87,6 +99,7 @@ class AuditDetailResponse(FrontendAuditSchema):
     max_queries: int | None = None
     seed_queries: list[str] = Field(default_factory=list)
     seed_query_items: list[SeedQueryItemResponse] = Field(default_factory=list)
+    model_targets: list[AuditTargetResponse] = Field(default_factory=list)
     enable_query_expansion: bool = False
     enable_source_intelligence: bool = False
     follow_up_depth: int = 0
@@ -105,6 +118,7 @@ class AuditStatusResponse(FrontendAuditSchema):
     failed_runs: int = 0
     completion_ratio: float = 0.0
     updated_at: datetime | None = None
+    model_targets: list[AuditTargetResponse] = Field(default_factory=list)
     provider_diagnostics: list["ProviderDiagnosticResponse"] = Field(default_factory=list)
 
 
@@ -203,6 +217,8 @@ class ProviderDiagnosticResponse(FrontendAuditSchema):
 class AuditResultRowResponse(FrontendAuditSchema):
     audit_id: int
     scdl_level: SCDLLevelValue = "L1"
+    target_id: int | None = None
+    target: AuditTargetResponse | None = None
     query_id: int
     query: str
     provider: str

@@ -7,14 +7,20 @@ import type {
   SCDLLevel,
 } from "../lib/api/types";
 import {
+  auditDetailWithModelTargetsFixture,
   auditListFixture,
   auditPipelineRunFixture,
   auditResultsFixture,
   auditSummaryFixture,
+  auditTargetWireFixture,
+  createAuditModelTargetsPayloadFixture,
+  createAuditModelTargetsWireFixture,
   currentUserFixture,
   emptyAuditResultsFixture,
   emptyAuditSummaryFixture,
   failedAuditSummaryFixture,
+  legacyAuditDetailWithoutModelTargetsFixture,
+  openRouterL2AuditTargetWireFixture,
   partialAuditSummaryFixture,
 } from "./fixtures";
 
@@ -95,5 +101,25 @@ describe("frontend-backend contract fixtures", () => {
     expect(auditSummaryFixture.critical_queries.length).toBeGreaterThan(0);
     expect(auditSummaryFixture.sources.length).toBeGreaterThan(0);
     expect(emptyAuditSummaryFixture.sources).toHaveLength(0);
+  });
+
+  it("covers canonical and legacy audit target response fixtures", () => {
+    expect(auditTargetWireFixture.execution_provider).toBe("openrouter");
+    expect(auditTargetWireFixture.gateway_l2_experimental).toBe(false);
+    expect(openRouterL2AuditTargetWireFixture.level).toBe("L2");
+    expect(openRouterL2AuditTargetWireFixture.gateway_l2_experimental).toBe(true);
+
+    expect(auditDetailWithModelTargetsFixture.model_targets).toHaveLength(2);
+    expect(auditDetailWithModelTargetsFixture.model_targets?.[1]?.gateway_l2_experimental).toBe(
+      true,
+    );
+    expect(legacyAuditDetailWithoutModelTargetsFixture.model_targets).toBeUndefined();
+  });
+
+  it("keeps frontend create fixture separate from backend wire payload shape", () => {
+    expect(createAuditModelTargetsPayloadFixture.modelTargets).toHaveLength(2);
+    expect(createAuditModelTargetsPayloadFixture).not.toHaveProperty("model_targets");
+    expect(createAuditModelTargetsWireFixture.model_targets).toHaveLength(2);
+    expect(createAuditModelTargetsWireFixture).not.toHaveProperty("modelTargets");
   });
 });

@@ -25,6 +25,32 @@ export type SeedQueryType =
   | "problem_solution";
 export type SeedQuerySource = "user" | "ai";
 
+export type AuditTarget = {
+  id?: string | number;
+  targetId?: string | number;
+  aiFamily: string;
+  executionProvider: string;
+  modelProvider: string;
+  modelId: string;
+  displayName: string;
+  level: SCDLLevel;
+  gateway?: boolean;
+  gatewayL2Experimental?: boolean;
+};
+
+export type AuditTargetWire = {
+  id?: string | number;
+  target_id?: string | number;
+  ai_family: string;
+  execution_provider: string;
+  model_provider: string;
+  model_id: string;
+  display_name: string;
+  level: SCDLLevel;
+  gateway?: boolean;
+  gateway_l2_experimental?: boolean;
+};
+
 export type CurrentUser = {
   id: number;
   email: string;
@@ -58,7 +84,9 @@ export type AuditListItem = {
 
 export type AuditCreateRequest = {
   brand_name: string;
-  providers: string[];
+  providers?: string[];
+  modelTargets?: AuditTarget[] | null;
+  model_targets?: AuditTargetWire[] | null;
   runs_per_query: number;
   brand_domain?: string | null;
   brand_description?: string | null;
@@ -90,6 +118,8 @@ export type AuditCreateResponse = {
   scdl_level: SCDLLevel;
   seed_queries: string[];
   seed_query_items: SeedQueryDraft[];
+  model_targets?: AuditTargetWire[];
+  modelTargets?: AuditTarget[];
 };
 
 export type AuditDetail = AuditListItem & {
@@ -101,6 +131,8 @@ export type AuditDetail = AuditListItem & {
   max_queries: number | null;
   seed_queries: string[];
   seed_query_items: SeedQueryDraft[];
+  model_targets?: AuditTargetWire[];
+  modelTargets?: AuditTarget[];
   enable_query_expansion: boolean;
   enable_source_intelligence: boolean;
   follow_up_depth: number;
@@ -145,6 +177,8 @@ export type AuditStatusResponse = {
   failed_runs: number;
   completion_ratio: number;
   updated_at: string | null;
+  model_targets?: AuditTargetWire[];
+  modelTargets?: AuditTarget[];
   provider_diagnostics?: ProviderDiagnostic[];
 };
 
@@ -243,6 +277,9 @@ export type SourceSummaryItem = {
 export type AuditResultRow = {
   audit_id: number;
   scdl_level: SCDLLevel;
+  target_id?: number | null;
+  target?: AuditTargetWire | null;
+  targetModel?: AuditTarget | null;
   query_id: number;
   query: string;
   provider: string;
