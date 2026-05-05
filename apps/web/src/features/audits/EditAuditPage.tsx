@@ -1,7 +1,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Loader2, Plus, Save, Sparkles, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useFieldArray, useForm, useWatch } from "react-hook-form";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
@@ -14,19 +14,22 @@ import {
   getAuditDetail,
   updateAudit,
 } from "../../lib/api/client";
-import type { AuditDetail } from "../../lib/api/types";
+import type { AuditDetail, AuditTarget } from "../../lib/api/types";
+import { AuditEstimatePanel } from "./AuditEstimatePanel";
 import { AuditBreadcrumbs } from "./AuditBreadcrumbs";
 import { AuditStatusBadge } from "./AuditStatusBadge";
+import { AuditTargetSelector } from "./AuditTargetSelector";
+import { useAuditEstimate } from "./auditEstimate";
 import {
   brandDescriptionMaxLength,
   appendGeneratedSeedQueries,
   buildPayload,
+  buildEstimatePayload,
   countryOptions,
   emptySeedQueryItem,
   estimateAuditTokens,
   languageOptions,
   parseSeedQueryItems,
-  providerOptions,
   queryTypeOptions,
   schema,
   type CreateAuditFormInput,
@@ -80,7 +83,7 @@ export function EditAuditPage() {
       brandDomain: "",
       brandDescription: "",
       seedQueryItems: [{ ...emptySeedQueryItem }],
-      providers: ["mock"],
+      modelTargets: [],
       language: "en",
       country: "US",
       maxQueries: "",
@@ -125,7 +128,17 @@ export function EditAuditPage() {
   }, [detail.data, reset]);
 
   const watchedValues = useWatch({ control });
-  const isSourceIntelligenceAvailable = watchedValues.scdlLevel === "L2";
+  const modelTargets = (watchedValues.modelTargets ?? []) as AuditTarget[];
+  const isSourceIntelligenceAvailable = modelTargets.some((target) => target.level === "L2");
+  const setModelTargets = useCallback(
+    (targets: AuditTarget[]) => {
+      setValue("modelTargets", targets, {
+        shouldDirty: true,
+        shouldValidate: true,
+      });
+    },
+    [setValue],
+  );
   useEffect(() => {
     if (!isSourceIntelligenceAvailable && watchedValues.enableSourceIntelligence) {
       setValue("enableSourceIntelligence", false, {
@@ -134,10 +147,20 @@ export function EditAuditPage() {
       });
     }
   }, [isSourceIntelligenceAvailable, setValue, watchedValues.enableSourceIntelligence]);
-  const estimatedTokens = estimateAuditTokens(watchedValues);
+  const canEdit = detail.data?.status === "created";
+  const estimatedTokens = estimateAuditTokens({ ...watchedValues, modelTargets });
+  const estimatePayload = useMemo(() => {
+    if (parseSeedQueryItems(watchedValues.seedQueryItems).length === 0 || modelTargets.length === 0) {
+      return null;
+    }
+    return buildEstimatePayload({ ...watchedValues, modelTargets });
+  }, [modelTargets, watchedValues]);
+  const auditEstimate = useAuditEstimate(estimatePayload, estimatePayload !== null && canEdit);
   const brandDescriptionLength = watchedValues.brandDescription?.length ?? 0;
   const seedQueryItemsError =
     errors.seedQueryItems?.message ?? errors.seedQueryItems?.root?.message;
+  const modelTargetsError =
+    typeof errors.modelTargets?.message === "string" ? errors.modelTargets.message : null;
   const hasGenerationDomain = Boolean(watchedValues.brandDomain?.trim());
   const hasGenerationDescription = Boolean(watchedValues.brandDescription?.trim());
   const effectiveUseDomainForGeneration =
@@ -147,7 +170,6 @@ export function EditAuditPage() {
   const canGenerateQueries =
     !generateMutation.isPending &&
     (effectiveUseDomainForGeneration || effectiveUseDescriptionForGeneration);
-  const canEdit = detail.data?.status === "created";
   const onSubmit = handleSubmit((values) => {
     updateAuditMutation.mutate(values);
   });
@@ -341,40 +363,11 @@ export function EditAuditPage() {
             ) : null}
           </fieldset>
 
-          <div className="grid gap-4 md:grid-cols-[1.4fr_0.8fr]">
-            <div>
-              <p className="text-sm font-medium text-ink">Providers</p>
-              <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                {providerOptions.map((provider) => (
-                  <label
-                    className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-ink"
-                    key={provider.value}
-                  >
-                    <input
-                      className="size-4 accent-brand-600"
-                      type="checkbox"
-                      value={provider.value}
-                      {...register("providers")}
-                    />
-                    {provider.label}
-                  </label>
-                ))}
-              </div>
-              {errors.providers?.message ? (
-                <p className="mt-1 text-sm text-red-700">{errors.providers.message}</p>
-              ) : null}
-            </div>
-
-            <Field htmlFor="edit-scdl-level" label="SCDL level" error={errors.scdlLevel?.message}>
-              <select
-                id="edit-scdl-level"
-                className="h-10 w-full rounded-md border border-border bg-white px-3 text-sm text-ink outline-none transition-colors focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
-                {...register("scdlLevel")}
-              >
-                <option value="L1">L1 - no web access</option>
-                <option value="L2">L2 - web access</option>
-              </select>
-            </Field>
+          <div className="space-y-2">
+            <AuditTargetSelector value={modelTargets} onChange={setModelTargets} />
+            {modelTargetsError ? (
+              <p className="text-sm text-red-700">{modelTargetsError}</p>
+            ) : null}
           </div>
 
           <div className="grid gap-4 md:grid-cols-3">
@@ -429,11 +422,16 @@ export function EditAuditPage() {
           ) : null}
 
           <div className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm font-medium text-ink">
-              Estimated audit cost:{" "}
-              <span className="text-brand-700">{estimatedTokens} tokens</span>
-            </p>
-            <Button type="submit" disabled={updateAuditMutation.isPending}>
+            <AuditEstimatePanel
+              error={auditEstimate.error}
+              estimate={auditEstimate.data}
+              isLoading={auditEstimate.isLoading || auditEstimate.isFetching}
+              optimisticTokens={estimatedTokens}
+            />
+            <Button
+              type="submit"
+              disabled={updateAuditMutation.isPending || Boolean(auditEstimate.data?.over_cap)}
+            >
               <Save className="size-4" aria-hidden="true" />
               {updateAuditMutation.isPending ? "Saving..." : "Save setup"}
             </Button>

@@ -2,8 +2,9 @@ import { z } from "zod";
 
 import type {
   AuditCreateRequest,
+  AuditEstimateRequest,
+  AuditTarget,
   GeneratedSeedQuerySuggestion,
-  SCDLLevel,
   SeedQueryDraft,
   SeedQueryType,
 } from "../../lib/api/types";
@@ -105,6 +106,19 @@ const seedQueryItemSchema = z.object({
   source: z.enum(["user", "ai"]).optional(),
 });
 
+const modelTargetSchema = z.object({
+  id: z.union([z.string(), z.number()]).optional(),
+  targetId: z.union([z.string(), z.number()]).optional(),
+  aiFamily: z.string().min(1),
+  executionProvider: z.string().min(1),
+  modelProvider: z.string().min(1),
+  modelId: z.string().min(1),
+  displayName: z.string().min(1),
+  level: z.enum(["L1", "L2"]),
+  gateway: z.boolean().optional(),
+  gatewayL2Experimental: z.boolean().optional(),
+});
+
 export const schema = z
   .object({
     brandName: z.string().trim().min(1, "Enter a brand name."),
@@ -123,12 +137,15 @@ export const schema = z
       .array(seedQueryItemSchema)
       .max(maxSeedQueryCount, `Use ${maxSeedQueryCount} seed queries or fewer.`)
       .optional(),
-    providers: z.array(z.string()).min(1, "Select at least one provider."),
+    modelTargets: z
+      .array(modelTargetSchema)
+      .min(1, "Select at least one model target."),
+    providers: z.array(z.string()).optional(),
     language: z.enum(languageOptions.map((option) => option.value)),
     country: z.enum(countryOptions.map((option) => option.value)),
     maxQueries: z.union([z.literal(""), z.coerce.number().int().positive()]).optional(),
     enableSourceIntelligence: z.boolean(),
-    scdlLevel: z.enum(["L1", "L2"]),
+    scdlLevel: z.enum(["L1", "L2"]).optional(),
   })
   .superRefine((values, context) => {
     if (parseSeedQueryItems(values.seedQueryItems).length === 0) {
@@ -240,6 +257,7 @@ export function appendGeneratedSeedQueries(
 type EstimateValues = {
   enableSourceIntelligence?: boolean;
   maxQueries?: unknown;
+  modelTargets?: AuditTarget[];
   providers?: string[];
   scdlLevel?: "L1" | "L2";
   seedQueries?: string;
@@ -261,23 +279,29 @@ export function estimateAuditTokens(values: EstimateValues) {
       ? parsedMaxQueries
       : null;
   const effectiveQueries = maxQueries ? Math.min(queryCount, maxQueries) : queryCount;
-  const selectedProviders = values.providers?.length ?? 0;
-  const base = effectiveQueries * selectedProviders * 10;
-  const scdlMultiplier = values.scdlLevel === "L2" ? 1.5 : 1;
-  const sourceIntelligenceAddon = values.scdlLevel === "L2" && values.enableSourceIntelligence
-    ? effectiveQueries * selectedProviders * 5
+  const targets = values.modelTargets ?? [];
+  const targetCount = targets.length || values.providers?.length || 0;
+  const l2TargetCount = targets.filter((target) => target.level === "L2").length;
+  const legacyL2Count = values.scdlLevel === "L2" ? targetCount : 0;
+  const effectiveL2Targets = targets.length > 0 ? l2TargetCount : legacyL2Count;
+  const effectiveL1Targets = Math.max(targetCount - effectiveL2Targets, 0);
+  const base = effectiveQueries * (effectiveL1Targets * 10 + effectiveL2Targets * 15);
+  const sourceIntelligenceAddon = values.enableSourceIntelligence
+    ? effectiveQueries * effectiveL2Targets * 5
     : 0;
 
-  return Math.round(base * scdlMultiplier + sourceIntelligenceAddon);
+  return Math.round(base + sourceIntelligenceAddon);
 }
 
 export function buildPayload(values: CreateAuditFormValues): AuditCreateRequest {
   const seedQueryItems = parseSeedQueryItems(values.seedQueryItems);
+  const modelTargets = values.modelTargets;
+  const hasL2Target = modelTargets.some((target) => target.level === "L2");
   return {
     brand_name: values.brandName.trim(),
     brand_domain: optionalText(normalizeBrandDomain(values.brandDomain)),
     brand_description: optionalText(values.brandDescription),
-    providers: values.providers,
+    modelTargets,
     runs_per_query: 1,
     seed_query_items: seedQueryItems.length > 0 ? seedQueryItems : null,
     language: optionalText(values.language),
@@ -287,8 +311,17 @@ export function buildPayload(values: CreateAuditFormValues): AuditCreateRequest 
       values.maxQueries === "" || values.maxQueries === undefined ? null : values.maxQueries,
     enable_query_expansion: false,
     enable_source_intelligence:
-      values.scdlLevel === "L2" ? values.enableSourceIntelligence : false,
+      hasL2Target ? values.enableSourceIntelligence : false,
     follow_up_depth: 0,
-    scdl_level: values.scdlLevel as SCDLLevel,
+  };
+}
+
+export function buildEstimatePayload(values: EstimateValues): AuditEstimateRequest {
+  const seedQueryItems = parseSeedQueryItems(values.seedQueryItems);
+  const modelTargets = values.modelTargets ?? [];
+  return {
+    modelTargets,
+    runs_per_query: 1,
+    seed_query_items: seedQueryItems,
   };
 }

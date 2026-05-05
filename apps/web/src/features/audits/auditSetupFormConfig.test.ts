@@ -87,6 +87,16 @@ describe("audit setup form schema", () => {
     brandDomain: "acme.example",
     brandDescription: "",
     seedQueryItems: [{ text: "valid query", type: null, source: "user" }],
+    modelTargets: [
+      {
+        aiFamily: "chatgpt",
+        executionProvider: "openrouter",
+        modelProvider: "openai",
+        modelId: "openai/gpt-4o-mini",
+        displayName: "GPT-4o mini",
+        level: "L1",
+      },
+    ],
     providers: ["mock"],
     language: "en",
     country: "US",
@@ -138,7 +148,6 @@ describe("audit setup form schema", () => {
     });
 
     expect(buildPayload(values)).toMatchObject({
-      scdl_level: "L1",
       enable_source_intelligence: false,
     });
   });

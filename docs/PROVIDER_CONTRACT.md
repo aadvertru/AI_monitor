@@ -11,10 +11,10 @@ response shapes from leaking into parser, scoring, aggregation, API responses, o
 
 - `mock`: required for deterministic local/test execution.
 - `openai`: first real provider and current strict L2 baseline.
-- `openrouter`: gateway provider integration implemented with mocked backend
-  coverage and pending live verification. OpenRouter L1 is the multi-model
-  gateway path. OpenRouter L2 is experimental gateway web search, not equivalent
-  to native provider L2.
+- `openrouter`: gateway provider integration. OpenRouter L1 is verified for
+  controlled pilot use through backend-configured allowlisted model ids.
+  OpenRouter L2 is experimental gateway web search, not equivalent to native
+  provider L2, and remains pending live source/citation verification.
 - `anthropic`: native branch is deferred/unverified. Claude can be reached
   through OpenRouter model ids for gateway L1 comparisons.
 
@@ -54,6 +54,9 @@ Gateway provider:
   `model_id=anthropic/claude-...`.
 - A gateway-routed Claude model is not the same execution path as native
   Anthropic.
+- During the current pilot, only one gateway-routed UI provider is allowed per
+  audit. This avoids multiple provider labels executing through the same
+  configured OpenRouter model.
 
 OpenRouter does not replace native providers. Native adapters remain required
 when provider-specific L2 behavior, exact citations/source behavior, native web
@@ -506,6 +509,8 @@ OpenRouter L1:
 4. Sources/citations are normally empty.
 5. Metadata must distinguish `execution_provider=openrouter`,
    `model_provider=<model prefix>`, and `model_id=<openrouter model id>`.
+6. Is ready for controlled pilot use after local live verification with routed
+   Gemini/Claude-style model ids.
 
 OpenRouter L2:
 
@@ -527,6 +532,13 @@ Gateway readiness requires:
 - no silent fallback to native provider or mock
 - normalized gateway errors
 - JSON-serializable, secret-free gateway usage/source metadata
+
+Frontend contract:
+
+- Source intelligence is an L2-only setting.
+- L1 create/edit forms must hide or disable Source intelligence.
+- Backend payload builders must force source intelligence off for L1 even if a
+  stale frontend state or legacy audit carried the flag.
 
 ## Anthropic/Claude Native Branch
 

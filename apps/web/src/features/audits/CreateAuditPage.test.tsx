@@ -4,8 +4,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   auditDetailFixture,
+  auditEstimateFixture,
   auditSummaryFixture,
+  auditTargetWireFixture,
   currentUserFixture,
+  modelCatalogWireFixture,
+  openRouterL2AuditTargetWireFixture,
 } from "../../test/fixtures";
 import { mockFetchSequence } from "../../test/mockFetch";
 import { renderRoute } from "../../test/render";
@@ -23,12 +27,35 @@ const createAuditResponse = {
     { text: "best ai visibility tools", type: null, source: "user" },
     { text: "brand monitoring platforms", type: null, source: "user" },
   ],
+  model_targets: [auditTargetWireFixture, openRouterL2AuditTargetWireFixture],
 };
 
 async function openCreatePage() {
-  mockFetchSequence([{ body: currentUserFixture }]);
+  mockFetchSequence([{ body: currentUserFixture }, { body: modelCatalogWireFixture }]);
   renderRoute("/audits/new");
   await screen.findByRole("heading", { name: "Create audit" });
+  await screen.findByLabelText("GPT-4o mini");
+}
+
+async function selectGptL1() {
+  await userEvent.setup().click(await screen.findByLabelText("GPT-4o mini"));
+}
+
+async function selectGptL2() {
+  const user = userEvent.setup();
+  await user.click(await screen.findByLabelText("GPT-4o mini"));
+  await user.click(screen.getByLabelText("GPT-4o mini L2"));
+}
+
+function jsonRequestBodyFor(
+  fetchMock: ReturnType<typeof mockFetchSequence>,
+  url: string,
+  method: string,
+) {
+  const call = fetchMock.mock.calls.find(
+    ([callUrl, init]) => callUrl === url && (init as RequestInit | undefined)?.method === method,
+  );
+  return JSON.parse(String((call?.[1] as RequestInit | undefined)?.body));
 }
 
 describe("create audit page", () => {
@@ -42,7 +69,8 @@ describe("create audit page", () => {
     expect(screen.getByLabelText("Query type 1")).toBeInTheDocument();
     expect(screen.getByLabelText("Language")).toBeInTheDocument();
     expect(screen.getByLabelText("Country")).toBeInTheDocument();
-    expect(screen.getByLabelText("SCDL level")).toBeInTheDocument();
+    expect(screen.getByText("AI model targets")).toBeInTheDocument();
+    expect(screen.getByLabelText("GPT-4o mini")).toBeInTheDocument();
     expect(screen.getByLabelText("Brand description")).toHaveAttribute("maxLength", "500");
     expect(screen.getByText("0 / 500")).toBeInTheDocument();
     expect(screen.queryByLabelText("Locale")).not.toBeInTheDocument();
@@ -76,7 +104,10 @@ describe("create audit page", () => {
   });
 
   it("validates brand domain format before API submission", async () => {
-    const fetchMock = mockFetchSequence([{ body: currentUserFixture }]);
+    const fetchMock = mockFetchSequence([
+      { body: currentUserFixture },
+      { body: modelCatalogWireFixture },
+    ]);
     const user = userEvent.setup();
 
     renderRoute("/audits/new");
@@ -85,11 +116,14 @@ describe("create audit page", () => {
     await user.click(screen.getByRole("button", { name: "Create audit" }));
 
     expect(await screen.findByText("Invalid domain format")).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("shows a live brand description counter and blocks over-limit values", async () => {
-    const fetchMock = mockFetchSequence([{ body: currentUserFixture }]);
+    const fetchMock = mockFetchSequence([
+      { body: currentUserFixture },
+      { body: modelCatalogWireFixture },
+    ]);
     const user = userEvent.setup();
 
     renderRoute("/audits/new");
@@ -106,12 +140,13 @@ describe("create audit page", () => {
     expect(
       await screen.findByText(/Brand description must be 500 characters or fewer./),
     ).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("generates editable seed query rows from current unsaved form values", async () => {
     const fetchMock = mockFetchSequence([
       { body: currentUserFixture },
+      { body: modelCatalogWireFixture },
       {
         body: {
           suggestions: [
@@ -170,6 +205,7 @@ describe("create audit page", () => {
   it("preserves generated query type and source after text edits when saved", async () => {
     const fetchMock = mockFetchSequence([
       { body: currentUserFixture },
+      { body: modelCatalogWireFixture },
       {
         body: {
           suggestions: [
@@ -181,6 +217,7 @@ describe("create audit page", () => {
           ],
         },
       },
+      { body: auditEstimateFixture },
       { body: createAuditResponse },
     ]);
     const user = userEvent.setup();
@@ -193,6 +230,7 @@ describe("create audit page", () => {
     const generatedQuery = await screen.findByDisplayValue("best acme alternatives");
     await user.clear(generatedQuery);
     await user.type(generatedQuery, "edited acme alternatives");
+    await user.click(screen.getByLabelText("GPT-4o mini"));
     await user.click(screen.getByRole("button", { name: "Create audit" }));
 
     await waitFor(() => {
@@ -201,8 +239,7 @@ describe("create audit page", () => {
         expect.objectContaining({ method: "POST" }),
       );
     });
-    const [, , request] = fetchMock.mock.calls;
-    expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({
+    expect(jsonRequestBodyFor(fetchMock, "http://localhost:8000/audits", "POST")).toMatchObject({
       seed_query_items: [
         {
           text: "edited acme alternatives",
@@ -216,6 +253,7 @@ describe("create audit page", () => {
   it("requires at least one seed query before creating an audit", async () => {
     const fetchMock = mockFetchSequence([
       { body: currentUserFixture },
+      { body: modelCatalogWireFixture },
       {
         body: {
           suggestions: [
@@ -240,7 +278,7 @@ describe("create audit page", () => {
     await user.click(screen.getByRole("button", { name: "Create audit" }));
 
     expect(await screen.findByText("Add at least one seed query.")).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("keeps generation disabled when no source is selected or available", async () => {
@@ -275,6 +313,7 @@ describe("create audit page", () => {
   it("shows frontend duplicate warnings when visible form state changed defensively", async () => {
     mockFetchSequence([
       { body: currentUserFixture },
+      { body: modelCatalogWireFixture },
       {
         body: {
           suggestions: [
@@ -302,6 +341,7 @@ describe("create audit page", () => {
   it("respects the 20 query limit and shows frontend limit warnings", async () => {
     mockFetchSequence([
       { body: currentUserFixture },
+      { body: modelCatalogWireFixture },
       {
         body: {
           suggestions: [
@@ -343,6 +383,12 @@ describe("create audit page", () => {
       status: 200,
       statusText: "OK",
     } satisfies Partial<Response>);
+    fetchMock.mockResolvedValueOnce({
+      json: async () => modelCatalogWireFixture,
+      ok: true,
+      status: 200,
+      statusText: "OK",
+    } satisfies Partial<Response>);
     fetchMock.mockReturnValueOnce(new Promise(() => undefined));
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
@@ -358,6 +404,7 @@ describe("create audit page", () => {
   it("shows safe generation errors", async () => {
     mockFetchSequence([
       { body: currentUserFixture },
+      { body: modelCatalogWireFixture },
       { body: { detail: "Seed query generation is unavailable." }, status: 503 },
     ]);
     const user = userEvent.setup();
@@ -381,24 +428,56 @@ describe("create audit page", () => {
     await user.type(screen.getByLabelText("Seed query 1"), "query one");
     await user.click(screen.getByRole("button", { name: "Add query" }));
     await user.type(screen.getByLabelText("Seed query 2"), "query two");
+    expect(screen.getByText(/Estimated audit cost:/)).toHaveTextContent("0 tokens");
+
+    await user.click(screen.getByLabelText("GPT-4o mini"));
     expect(screen.getByText(/Estimated audit cost:/)).toHaveTextContent("20 tokens");
 
-    await user.click(screen.getByLabelText("OpenAI"));
-    expect(screen.getByText(/Estimated audit cost:/)).toHaveTextContent("40 tokens");
-
-    await user.selectOptions(screen.getByLabelText("SCDL level"), "L2");
-    expect(screen.getByText(/Estimated audit cost:/)).toHaveTextContent("60 tokens");
+    await user.click(screen.getByLabelText("GPT-4o mini L2"));
+    expect(screen.getByText(/Estimated audit cost:/)).toHaveTextContent("50 tokens");
 
     await user.click(screen.getByLabelText("Source intelligence"));
-    expect(screen.getByText(/Estimated audit cost:/)).toHaveTextContent("80 tokens");
+    expect(screen.getByText(/Estimated audit cost:/)).toHaveTextContent("60 tokens");
 
     await user.type(screen.getByLabelText("Max queries"), "1");
-    expect(screen.getByText(/Estimated audit cost:/)).toHaveTextContent("40 tokens");
+    expect(screen.getByText(/Estimated audit cost:/)).toHaveTextContent("30 tokens");
+  });
+
+  it("shows backend estimated run counts for selected queries and targets", async () => {
+    const fetchMock = mockFetchSequence([
+      { body: currentUserFixture },
+      { body: modelCatalogWireFixture },
+      { body: auditEstimateFixture },
+    ]);
+    const user = userEvent.setup();
+
+    renderRoute("/audits/new");
+    await user.type(await screen.findByLabelText("Seed query 1"), "query one");
+    await user.click(await screen.findByLabelText("GPT-4o mini"));
+
+    expect(await screen.findByText("This audit will run 4 checks.")).toBeInTheDocument();
+    const body = jsonRequestBodyFor(fetchMock, "http://localhost:8000/audits/estimate", "POST");
+    expect(body).toMatchObject({
+      runs_per_query: 1,
+      seed_query_items: [{ text: "query one", type: null, source: "user" }],
+      model_targets: [
+        expect.objectContaining({
+          model_id: "openai/gpt-4o-mini",
+          level: "L1",
+        }),
+      ],
+    });
+    expect(body).not.toHaveProperty("brand_name");
   });
 
   it("only shows source intelligence for L2 and clears it before L1 submission", async () => {
     const fetchMock = mockFetchSequence([
       { body: currentUserFixture },
+      { body: modelCatalogWireFixture },
+      { body: auditEstimateFixture },
+      { body: auditEstimateFixture },
+      { body: auditEstimateFixture },
+      { body: auditEstimateFixture },
       { body: createAuditResponse },
     ]);
     const user = userEvent.setup();
@@ -409,11 +488,12 @@ describe("create audit page", () => {
     await user.type(screen.getByLabelText("Seed query 1"), "best nike shoes");
 
     expect(screen.queryByLabelText("Source intelligence")).not.toBeInTheDocument();
-    await user.selectOptions(screen.getByLabelText("SCDL level"), "L2");
+    await user.click(await screen.findByLabelText("GPT-4o mini"));
+    await user.click(screen.getByLabelText("GPT-4o mini L2"));
     await user.click(screen.getByLabelText("Source intelligence"));
     expect(screen.getByLabelText("Source intelligence")).toBeChecked();
 
-    await user.selectOptions(screen.getByLabelText("SCDL level"), "L1");
+    await user.click(screen.getByLabelText("GPT-4o mini L2"));
     expect(screen.queryByLabelText("Source intelligence")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Create audit" }));
 
@@ -423,16 +503,18 @@ describe("create audit page", () => {
         expect.objectContaining({ method: "POST" }),
       );
     });
-    const [, request] = fetchMock.mock.calls[1];
-    expect(JSON.parse(String(request?.body))).toMatchObject({
-      scdl_level: "L1",
+    const body = jsonRequestBodyFor(fetchMock, "http://localhost:8000/audits", "POST");
+    expect(body).toMatchObject({
       enable_source_intelligence: false,
     });
+    expect(body).not.toHaveProperty("scdl_level");
   });
 
   it("submits seed queries, location fields, and hidden defaults in the backend contract format", async () => {
     const fetchMock = mockFetchSequence([
       { body: currentUserFixture },
+      { body: modelCatalogWireFixture },
+      { body: auditEstimateFixture },
       { body: createAuditResponse },
     ]);
     const user = userEvent.setup();
@@ -440,15 +522,15 @@ describe("create audit page", () => {
     renderRoute("/audits/new");
     await user.type(await screen.findByLabelText("Brand name"), "Acme AI");
     await user.type(screen.getByLabelText("Brand domain"), " Acme.AI/ ");
-    await user.click(screen.getByLabelText("OpenAI"));
     await user.selectOptions(screen.getByLabelText("Language"), "uk");
     await user.selectOptions(screen.getByLabelText("Country"), "UA");
-    await user.selectOptions(screen.getByLabelText("SCDL level"), "L2");
     await user.type(screen.getByLabelText("Seed query 1"), " best ai visibility tools ");
     await user.click(screen.getByRole("button", { name: "Add query" }));
     await user.type(screen.getByLabelText("Seed query 2"), "brand monitoring platforms");
     await user.click(screen.getByRole("button", { name: "Add query" }));
     await user.type(screen.getByLabelText("Seed query 3"), "Best AI Visibility Tools ");
+    await user.click(await screen.findByLabelText("GPT-4o mini"));
+    await user.click(screen.getByLabelText("GPT-4o mini L2"));
     await user.click(screen.getByRole("button", { name: "Create audit" }));
 
     await waitFor(() => {
@@ -457,12 +539,32 @@ describe("create audit page", () => {
         expect.objectContaining({ method: "POST" }),
       );
     });
-    const [, request] = fetchMock.mock.calls[1];
-    expect(JSON.parse(String(request?.body))).toMatchObject({
+    const body = jsonRequestBodyFor(fetchMock, "http://localhost:8000/audits", "POST");
+    expect(body).toMatchObject({
       brand_name: "Acme AI",
       brand_domain: "acme.ai",
-      providers: ["mock", "openai"],
       runs_per_query: 1,
+      model_targets: [
+        {
+          ai_family: "chatgpt",
+          execution_provider: "openrouter",
+          model_provider: "openai",
+          model_id: "openai/gpt-4o-mini",
+          display_name: "GPT-4o mini",
+          level: "L1",
+          gateway: true,
+        },
+        {
+          ai_family: "chatgpt",
+          execution_provider: "openrouter",
+          model_provider: "openai",
+          model_id: "openai/gpt-4o-mini",
+          display_name: "GPT-4o mini",
+          level: "L2",
+          gateway: true,
+          gateway_l2_experimental: true,
+        },
+      ],
       seed_query_items: [
         { text: "best ai visibility tools", type: null, source: "user" },
         { text: "brand monitoring platforms", type: null, source: "user" },
@@ -472,14 +574,18 @@ describe("create audit page", () => {
       locale: "uk-UA",
       enable_query_expansion: false,
       follow_up_depth: 0,
-      scdl_level: "L2",
     });
-    expect(JSON.parse(String(request?.body))).not.toHaveProperty("seed_queries");
+    expect(body).not.toHaveProperty("seed_queries");
+    expect(body).not.toHaveProperty("providers");
+    expect(body).not.toHaveProperty("scdl_level");
+    expect(body).not.toHaveProperty("modelTargets");
   });
 
   it("redirects to audit detail after successful creation", async () => {
     mockFetchSequence([
       { body: currentUserFixture },
+      { body: modelCatalogWireFixture },
+      { body: auditEstimateFixture },
       { body: createAuditResponse },
       { body: { ...auditDetailFixture, audit_id: 88 } },
       { body: { ...auditSummaryFixture, audit_id: 88 } },
@@ -490,6 +596,7 @@ describe("create audit page", () => {
     await user.type(await screen.findByLabelText("Brand name"), "Acme AI");
     await user.type(screen.getByLabelText("Brand domain"), "acme.ai");
     await user.type(screen.getByLabelText("Seed query 1"), "best nike shoes");
+    await user.click(await screen.findByLabelText("GPT-4o mini"));
     await user.click(screen.getByRole("button", { name: "Create audit" }));
 
     await waitFor(() => {
@@ -501,6 +608,8 @@ describe("create audit page", () => {
   it("displays API validation errors", async () => {
     mockFetchSequence([
       { body: currentUserFixture },
+      { body: modelCatalogWireFixture },
+      { body: auditEstimateFixture },
       { body: { detail: "providers contains unsupported provider codes." }, status: 422 },
     ]);
     const user = userEvent.setup();
@@ -509,6 +618,7 @@ describe("create audit page", () => {
     await user.type(await screen.findByLabelText("Brand name"), "Acme AI");
     await user.type(screen.getByLabelText("Brand domain"), "acme.ai");
     await user.type(screen.getByLabelText("Seed query 1"), "best nike shoes");
+    await user.click(await screen.findByLabelText("GPT-4o mini"));
     await user.click(screen.getByRole("button", { name: "Create audit" }));
 
     expect(

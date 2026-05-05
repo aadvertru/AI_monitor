@@ -5,10 +5,12 @@ import { describe, expect, it, vi } from "vitest";
 import {
   auditCreateResponseFixture,
   auditDetailFixture,
+  auditEstimateFixture,
   auditPipelineRunFixture,
   auditResultsFixture,
   auditSummaryFixture,
   currentUserFixture,
+  modelCatalogWireFixture,
   unauthenticatedAuthErrorFixture,
 } from "./fixtures";
 import { renderRoute } from "./render";
@@ -58,6 +60,8 @@ describe("authenticated SCDL smoke flow", () => {
       { path: "/auth/me", body: unauthenticatedAuthErrorFixture, status: 401 },
       { path: "/auth/login", method: "POST", body: currentUserFixture },
       { path: "/audits", body: [] },
+      { path: "/model-catalog", body: modelCatalogWireFixture },
+      { path: "/audits/estimate", method: "POST", body: auditEstimateFixture },
       { path: "/audits", method: "POST", body: auditCreateResponseFixture },
       { path: "/audits/42", body: auditDetailFixture },
       { path: "/audits/42/summary", body: auditSummaryFixture },
@@ -82,7 +86,11 @@ describe("authenticated SCDL smoke flow", () => {
     await user.click(screen.getAllByRole("link", { name: "New audit" })[0]);
     await user.type(await screen.findByLabelText("Brand name"), "Acme AI");
     await user.type(screen.getByLabelText("Brand domain"), "acme.example");
-    await user.type(screen.getByLabelText("Seed queries"), "best ai visibility tools");
+    await user.type(await screen.findByLabelText("Seed query 1"), "best ai visibility tools");
+    await user.click(await screen.findByLabelText("GPT-4o mini"));
+    await waitFor(() => {
+      expect(screen.queryByText("Estimating checks...")).not.toBeInTheDocument();
+    });
     await user.click(screen.getByRole("button", { name: "Create audit" }));
 
     expect(await screen.findByRole("heading", { name: "Acme AI" })).toBeInTheDocument();

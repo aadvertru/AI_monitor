@@ -13,6 +13,8 @@ import type {
   CurrentUser,
   ProviderDiagnostic,
   AuditCreateRequest,
+  ModelCatalogResponseWire,
+  AuditEstimateResponse,
 } from "../lib/api/types";
 import type { ApiErrorPayload } from "../lib/api/client";
 
@@ -170,6 +172,143 @@ export const createAuditModelTargetsWireFixture = {
     },
   ],
   model_targets: [auditTargetWireFixture, openRouterL2AuditTargetWireFixture],
+};
+
+export const auditEstimateFixture: AuditEstimateResponse = {
+  query_count: 2,
+  target_count: 2,
+  model_count: 1,
+  estimated_runs: 4,
+  caps: {
+    max_audit_targets: 10,
+    max_models_per_audit: 5,
+    max_queries_per_audit: 20,
+    max_total_runs_per_audit: 100,
+  },
+  over_cap: false,
+  violations: [],
+  warnings: [],
+};
+
+export const modelCatalogWireFixture: ModelCatalogResponseWire = {
+  families: [
+    {
+      id: "chatgpt",
+      label: "ChatGPT",
+      models: [
+        {
+          model_id: "openai/gpt-4o-mini",
+          display_name: "GPT-4o mini",
+          model_provider: "openai",
+          execution_provider: "openrouter",
+          ai_family: "chatgpt",
+          supports_l1: true,
+          supports_l2_gateway: true,
+          l2_experimental: true,
+          context_length: 128000,
+        },
+      ],
+    },
+    {
+      id: "gemini",
+      label: "Gemini",
+      models: [
+        {
+          model_id: "google/gemini-2.0-flash-001",
+          display_name: "Gemini 2.0 Flash",
+          model_provider: "google",
+          execution_provider: "openrouter",
+          ai_family: "gemini",
+          supports_l1: true,
+          supports_l2_gateway: true,
+          l2_experimental: true,
+        },
+      ],
+    },
+  ],
+  cached_at: "2026-05-05T00:00:00Z",
+  expires_at: "2026-05-06T00:00:00Z",
+  warnings: [],
+};
+
+export const emptyModelCatalogWireFixture: ModelCatalogResponseWire = {
+  families: [],
+  cached_at: "2026-05-05T00:00:00Z",
+  expires_at: "2026-05-06T00:00:00Z",
+  warnings: [],
+};
+
+export const warningModelCatalogWireFixture: ModelCatalogResponseWire = {
+  ...modelCatalogWireFixture,
+  warnings: ["OpenRouter catalog refresh failed."],
+};
+
+export const extendedModelCatalogWireFixture: ModelCatalogResponseWire = {
+  families: [
+    {
+      id: "chatgpt",
+      label: "ChatGPT",
+      models: [
+        {
+          model_id: "openai/gpt-4o-mini",
+          display_name: "GPT-4o mini",
+          model_provider: "openai",
+          execution_provider: "openrouter",
+          ai_family: "chatgpt",
+          supports_l1: true,
+          supports_l2_gateway: true,
+          l2_experimental: true,
+          context_length: 128000,
+        },
+        {
+          model_id: "openai/gpt-4.1-nano",
+          display_name: "GPT-4.1 nano",
+          model_provider: "openai",
+          execution_provider: "openrouter",
+          ai_family: "chatgpt",
+          supports_l1: true,
+          supports_l2_gateway: false,
+          l2_experimental: false,
+          context_length: 100000,
+        },
+      ],
+    },
+    {
+      id: "gemini",
+      label: "Gemini",
+      models: [
+        {
+          model_id: "google/gemini-2.0-flash-001",
+          display_name: "Gemini 2.0 Flash",
+          model_provider: "google",
+          execution_provider: "openrouter",
+          ai_family: "gemini",
+          supports_l1: true,
+          supports_l2_gateway: true,
+          l2_experimental: true,
+        },
+      ],
+    },
+    {
+      id: "claude",
+      label: "Claude",
+      models: [
+        {
+          model_id: "anthropic/claude-3.5-sonnet",
+          display_name: "Claude 3.5 Sonnet",
+          model_provider: "anthropic",
+          execution_provider: "openrouter",
+          ai_family: "claude",
+          supports_l1: true,
+          supports_l2_gateway: true,
+          l2_experimental: true,
+        },
+      ],
+    },
+  ],
+  cached_at: "2026-05-05T00:00:00Z",
+  expires_at: "2026-05-06T00:00:00Z",
+  warnings: ["OpenRouter catalog refresh failed."],
 };
 
 export const auditStatusFixture: AuditStatusResponse = {

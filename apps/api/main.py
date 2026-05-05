@@ -69,6 +69,10 @@ from libs.analysis.aggregation import (
 )
 from libs.control.job_scheduler import schedule_jobs_for_audit
 from libs.control.query_deduplication import deduplicate_queries
+from libs.execution.openrouter_model_catalog import (
+    ModelCatalogResponse,
+    get_openrouter_model_catalog,
+)
 from libs.execution.pilot_config import (
     PilotConfigError,
     PilotPolicyError,
@@ -2001,6 +2005,27 @@ async def estimate_audit(
         raise
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=500, detail="Failed to estimate audit.") from exc
+
+
+@app.get(
+    "/model-catalog",
+    response_model=ModelCatalogResponse,
+    response_model_exclude_none=True,
+)
+async def get_model_catalog_endpoint(
+    request: Request,
+    session: AsyncSession = DB_SESSION_DEPENDENCY,
+) -> ModelCatalogResponse:
+    try:
+        await get_authenticated_user_from_request(session, request)
+        result = await get_openrouter_model_catalog()
+        if result.diagnostic is not None and not result.families:
+            raise HTTPException(status_code=503, detail=result.diagnostic)
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Unable to load model catalog.") from exc
 
 
 @app.post("/audits", response_model=AuditCreateResponse)

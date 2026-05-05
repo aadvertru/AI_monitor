@@ -19,7 +19,7 @@ OpenRouter gateway path. Claude L1 can be tested through OpenRouter model ids.
 |---|---|---|---|---|---|
 | `mock` | native/test | supported | yes | deterministic simulation | Required for CI and local deterministic tests; never a real visibility source. |
 | `openai` | native | baseline | yes | yes | Primary verified strict L2/source-capable path. |
-| `openrouter` | gateway | implemented/pending live verification | implemented | experimental implemented | One key, many L1 models; L2 is best-effort gateway web search. |
+| `openrouter` | gateway | L1 verified / L2 experimental | verified | experimental pending live source verification | One key, many L1 models; L2 is best-effort gateway web search and remains experimental until live source behavior is validated. |
 | `anthropic` | native | deferred/unverified | deferred | future | Native branch deferred; use OpenRouter for Claude L1 comparisons. |
 | `perplexity` | native | future | future | future | Optional future citation/search provider. |
 
@@ -217,18 +217,18 @@ mock, or a different OpenRouter level/model.
 | Area | Status | Notes |
 |---|---|---|
 | Adapter implemented | Done | Mocked backend coverage exists. |
-| L1 support | Done/pending live verification | Primary gateway model-comparison path; no web search/tools. |
-| L2 support | Experimental implemented/pending live verification | Best-effort OpenRouter web-search server tool behavior. |
+| L1 support | Done | Primary gateway model-comparison path; no web search/tools. Live L1 gateway runs were verified locally with routed Gemini/Claude-style model ids. |
+| L2 support | Experimental pending live source verification | Best-effort OpenRouter web-search server tool behavior. Implemented and tested with mocked client responses, but not yet source-verified with a live L2 response. |
 | Gateway model allowlist | Done | Required before execution. |
 | Normalized answer text | Done | Implemented for L1/L2 mocked responses. |
 | Normalized sources | Done | L1 empty; L2 best-effort annotations/citations/sources. |
 | Normalized errors | Done | Matches `docs/PROVIDER_CONTRACT.md`. |
 | Gateway metadata | Done | Distinguishes execution/model providers and model id. |
-| API diagnostics | Pending live verification | Should reuse safe provider diagnostics. |
-| UI diagnostics | Pending live verification | Should reuse existing diagnostics. |
+| API diagnostics | Done | Safe provider diagnostics are exposed through existing provider diagnostic DTOs. |
+| UI diagnostics | Done | Invalid model/config diagnostics render safely in the existing UI. |
 | CI behavior | Done | Mocked client calls only. |
-| Manual L1 verification | Not verified | Required before support claim. |
-| Manual L2 verification | Not verified | Required and must remain experimental until validated. |
+| Manual L1 verification | Done | Local one-query gateway runs passed after valid OpenRouter model configuration. |
+| Manual L2 verification | Pending | Required before L2 can be called ready; sources/citations must be inspected or safe empty source state confirmed. |
 
 Planned config placeholders:
 
@@ -294,6 +294,31 @@ ANTHROPIC_L2_MODEL
 ANTHROPIC_WEB_SEARCH_TOOL_VERSION
 ANTHROPIC_WEB_SEARCH_MAX_USES
 ```
+
+## OpenRouter Readiness Decision
+
+Decision: OpenRouter L1 is ready for controlled pilot use. OpenRouter L2 remains
+experimental and pending live source/citation verification.
+
+Evidence:
+
+- OpenRouter adapter/config/client/model-policy tests pass with mocked clients.
+- Factory/pilot guardrails prevent silent fallback and provider-mode drift.
+- Gateway metadata distinguishes execution provider, model provider, and model id.
+- Live L1 gateway runs were verified locally with routed Gemini/Claude-style model ids.
+- Invalid model/config failures render safe diagnostics in the UI.
+- Source intelligence is hidden/disabled for L1 in create/edit flows and forced off
+  in L1 payloads.
+
+Known limitations:
+
+- OpenRouter L2 web-search/source behavior has not yet been validated with a live
+  L2 response.
+- Gateway-routed providers are not native provider integrations; provider-specific
+  source semantics, cost accounting, and strict citation behavior still require
+  native adapters or separate provider-specific phases.
+- Current pilot allows one gateway-routed UI provider per audit to avoid multiple
+  provider labels executing through the same configured model.
 
 ## Provider Readiness Definition
 

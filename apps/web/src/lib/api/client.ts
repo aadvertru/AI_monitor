@@ -1,6 +1,8 @@
 import type {
   AuditCreateRequest,
   AuditCreateResponse,
+  AuditEstimateRequest,
+  AuditEstimateResponse,
   AuditActionResponse,
   AuditDetail,
   AuditListItem,
@@ -18,6 +20,10 @@ import type {
   RegisterRequest,
   AuditTarget,
   AuditTargetWire,
+  ModelCatalogFamilyWire,
+  ModelCatalogModelWire,
+  ModelCatalogResponse,
+  ModelCatalogResponseWire,
 } from "./types";
 
 export type ApiErrorPayload = {
@@ -130,7 +136,42 @@ export function mapAuditTargetFromWire(target: AuditTargetWire): AuditTarget {
   };
 }
 
-function mapAuditPayloadToWire(payload: AuditCreateRequest) {
+function mapModelCatalogModelFromWire(
+  model: ModelCatalogModelWire,
+) {
+  return {
+    modelId: model.model_id,
+    displayName: model.display_name,
+    modelProvider: model.model_provider,
+    executionProvider: model.execution_provider,
+    aiFamily: model.ai_family,
+    supportsL1: model.supports_l1 ?? true,
+    supportsL2Gateway: model.supports_l2_gateway ?? false,
+    l2Experimental: model.l2_experimental ?? false,
+    contextLength: model.context_length,
+  };
+}
+
+function mapModelCatalogFamilyFromWire(family: ModelCatalogFamilyWire) {
+  return {
+    id: family.id,
+    label: family.label,
+    models: family.models.map(mapModelCatalogModelFromWire),
+  };
+}
+
+function mapModelCatalogFromWire(
+  response: ModelCatalogResponseWire,
+): ModelCatalogResponse {
+  return {
+    families: response.families?.map(mapModelCatalogFamilyFromWire) ?? [],
+    cachedAt: response.cached_at,
+    expiresAt: response.expires_at,
+    warnings: response.warnings ?? [],
+  };
+}
+
+function mapAuditPayloadToWire(payload: AuditCreateRequest | AuditEstimateRequest) {
   const { modelTargets, ...wirePayload } = payload;
   if (modelTargets) {
     const { providers, scdl_level, model_targets, ...canonicalPayload } = wirePayload;
@@ -199,6 +240,10 @@ export function logoutUser() {
   return apiFetch<LogoutResponse>("/auth/logout", { method: "POST" });
 }
 
+export function getModelCatalog() {
+  return apiFetch<ModelCatalogResponseWire>("/model-catalog").then(mapModelCatalogFromWire);
+}
+
 export function listAudits({ archived = false }: { archived?: boolean } = {}) {
   const params = archived ? "?archived=true" : "";
   return apiFetch<AuditListItem[]>(`/audits${params}`);
@@ -210,6 +255,13 @@ export async function createAudit(payload: AuditCreateRequest) {
     body: jsonBody(mapAuditPayloadToWire(payload)),
   });
   return mapAuditCreateResponseFromWire(response);
+}
+
+export function estimateAudit(payload: AuditEstimateRequest) {
+  return apiFetch<AuditEstimateResponse>("/audits/estimate", {
+    method: "POST",
+    body: jsonBody(mapAuditPayloadToWire(payload)),
+  });
 }
 
 export async function generateSeedQuerySuggestions(

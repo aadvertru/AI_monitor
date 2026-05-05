@@ -51,6 +51,56 @@ export type AuditTargetWire = {
   gateway_l2_experimental?: boolean;
 };
 
+export type ModelCatalogModelWire = {
+  model_id: string;
+  display_name: string;
+  model_provider: string;
+  execution_provider: "openrouter" | string;
+  ai_family: string;
+  supports_l1?: boolean;
+  supports_l2_gateway?: boolean;
+  l2_experimental?: boolean;
+  context_length?: number | null;
+};
+
+export type ModelCatalogFamilyWire = {
+  id: string;
+  label: string;
+  models: ModelCatalogModelWire[];
+};
+
+export type ModelCatalogResponseWire = {
+  families?: ModelCatalogFamilyWire[];
+  cached_at?: string | null;
+  expires_at?: string | null;
+  warnings?: string[];
+};
+
+export type ModelCatalogModel = {
+  modelId: string;
+  displayName: string;
+  modelProvider: string;
+  executionProvider: "openrouter" | string;
+  aiFamily: string;
+  supportsL1: boolean;
+  supportsL2Gateway: boolean;
+  l2Experimental: boolean;
+  contextLength?: number | null;
+};
+
+export type ModelCatalogFamily = {
+  id: string;
+  label: string;
+  models: ModelCatalogModel[];
+};
+
+export type ModelCatalogResponse = {
+  families: ModelCatalogFamily[];
+  cachedAt?: string | null;
+  expiresAt?: string | null;
+  warnings: string[];
+};
+
 export type CurrentUser = {
   id: number;
   email: string;
@@ -100,6 +150,39 @@ export type AuditCreateRequest = {
   enable_source_intelligence?: boolean;
   follow_up_depth?: number;
   scdl_level?: SCDLLevel;
+};
+
+export type AuditEstimateRequest = {
+  providers?: string[];
+  modelTargets?: AuditTarget[] | null;
+  model_targets?: AuditTargetWire[] | null;
+  runs_per_query?: number;
+  seed_queries?: string[] | null;
+  seed_query_items?: SeedQueryDraft[] | null;
+  scdl_level?: SCDLLevel;
+};
+
+export type AuditCaps = {
+  max_audit_targets: number;
+  max_models_per_audit: number;
+  max_queries_per_audit: number;
+  max_total_runs_per_audit: number;
+};
+
+export type AuditCapViolation = {
+  code: string;
+  message: string;
+};
+
+export type AuditEstimateResponse = {
+  query_count: number;
+  target_count: number;
+  model_count: number;
+  estimated_runs: number;
+  caps: AuditCaps;
+  over_cap: boolean;
+  violations: AuditCapViolation[];
+  warnings: string[];
 };
 
 export type SeedQueryDraft = {

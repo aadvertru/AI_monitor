@@ -5,11 +5,13 @@ import {
   archiveAudit,
   createAudit,
   deleteArchivedAudit,
+  estimateAudit,
   generateSeedQuerySuggestions,
   getAuditDetail,
   getAuditResults,
   getAuditSummary,
   getCurrentUser,
+  getModelCatalog,
   loginUser,
   listAudits,
   resolveApiBaseUrl,
@@ -20,6 +22,7 @@ import {
 import {
   auditDetailFixture,
   auditDetailWithModelTargetsFixture,
+  auditEstimateFixture,
   auditListFixture,
   auditPipelineRunFixture,
   auditResultsFixture,
@@ -30,6 +33,7 @@ import {
   createAuditModelTargetsWireFixture,
   currentUserFixture,
   legacyAuditDetailWithoutModelTargetsFixture,
+  modelCatalogWireFixture,
   openRouterL2AuditTargetFixture,
   openRouterL2AuditTargetWireFixture,
   unauthenticatedAuthErrorFixture,
@@ -89,6 +93,114 @@ describe("api client", () => {
       "http://localhost:8000/audits?archived=true",
       expect.objectContaining({ credentials: "include" }),
     );
+  });
+
+  it("loads and maps authenticated model catalog responses", async () => {
+    const fetchMock = mockFetchSequence([{ body: modelCatalogWireFixture }]);
+
+    await expect(getModelCatalog()).resolves.toEqual({
+      families: [
+        {
+          id: "chatgpt",
+          label: "ChatGPT",
+          models: [
+            {
+              modelId: "openai/gpt-4o-mini",
+              displayName: "GPT-4o mini",
+              modelProvider: "openai",
+              executionProvider: "openrouter",
+              aiFamily: "chatgpt",
+              supportsL1: true,
+              supportsL2Gateway: true,
+              l2Experimental: true,
+              contextLength: 128000,
+            },
+          ],
+        },
+        {
+          id: "gemini",
+          label: "Gemini",
+          models: [
+            {
+              modelId: "google/gemini-2.0-flash-001",
+              displayName: "Gemini 2.0 Flash",
+              modelProvider: "google",
+              executionProvider: "openrouter",
+              aiFamily: "gemini",
+              supportsL1: true,
+              supportsL2Gateway: true,
+              l2Experimental: true,
+              contextLength: undefined,
+            },
+          ],
+        },
+      ],
+      cachedAt: "2026-05-05T00:00:00Z",
+      expiresAt: "2026-05-06T00:00:00Z",
+      warnings: [],
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/model-catalog",
+      expect.objectContaining({ credentials: "include" }),
+    );
+  });
+
+  it("handles empty model catalog warnings and missing optional fields", async () => {
+    mockFetchSequence([
+      {
+        body: {
+          families: [
+            {
+              id: "claude",
+              label: "Claude",
+              models: [
+                {
+                  model_id: "anthropic/claude-3.5-sonnet",
+                  display_name: "Claude 3.5 Sonnet",
+                  model_provider: "anthropic",
+                  execution_provider: "openrouter",
+                  ai_family: "claude",
+                },
+              ],
+            },
+          ],
+          warnings: ["Showing stale catalog."],
+        },
+      },
+    ]);
+
+    await expect(getModelCatalog()).resolves.toEqual({
+      families: [
+        {
+          id: "claude",
+          label: "Claude",
+          models: [
+            {
+              modelId: "anthropic/claude-3.5-sonnet",
+              displayName: "Claude 3.5 Sonnet",
+              modelProvider: "anthropic",
+              executionProvider: "openrouter",
+              aiFamily: "claude",
+              supportsL1: true,
+              supportsL2Gateway: false,
+              l2Experimental: false,
+              contextLength: undefined,
+            },
+          ],
+        },
+      ],
+      cachedAt: undefined,
+      expiresAt: undefined,
+      warnings: ["Showing stale catalog."],
+    });
+
+    mockFetchSequence([{ body: {} }]);
+    await expect(getModelCatalog()).resolves.toEqual({
+      families: [],
+      cachedAt: undefined,
+      expiresAt: undefined,
+      warnings: [],
+    });
   });
 
   it("loads audit detail responses", async () => {
@@ -156,6 +268,32 @@ describe("api client", () => {
     expect(String(request.body)).not.toContain("modelTargets");
     expect(result.modelTargets?.[0]?.gatewayL2Experimental).toBe(false);
     expect(result.modelTargets?.[1]?.gatewayL2Experimental).toBe(true);
+  });
+
+  it("estimates audit runs with backend wire model_targets", async () => {
+    const fetchMock = mockFetchSequence([{ body: auditEstimateFixture }]);
+
+    await expect(
+      estimateAudit({
+        runs_per_query: createAuditModelTargetsPayloadFixture.runs_per_query,
+        seed_query_items: createAuditModelTargetsPayloadFixture.seed_query_items,
+        modelTargets: createAuditModelTargetsPayloadFixture.modelTargets,
+      }),
+    ).resolves.toEqual(auditEstimateFixture);
+
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/audits/estimate",
+      expect.objectContaining({ credentials: "include", method: "POST" }),
+    );
+    expect(JSON.parse(String(request.body))).toEqual({
+      runs_per_query: createAuditModelTargetsWireFixture.runs_per_query,
+      seed_query_items: createAuditModelTargetsWireFixture.seed_query_items,
+      model_targets: createAuditModelTargetsWireFixture.model_targets,
+    });
+    expect(String(request.body)).not.toContain("brand_name");
+    expect(String(request.body)).not.toContain("brand_domain");
+    expect(String(request.body)).not.toContain("modelTargets");
   });
 
   it("generates seed query suggestions with the documented endpoint and payload", async () => {
