@@ -1,22 +1,10 @@
+import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { Bar, BarChart, CartesianGrid, Tooltip, XAxis, YAxis } from "recharts";
 
 import type { AuditSummaryResponse } from "../../lib/api/types";
+import { useLocaleFormatters } from "../../lib/i18n/format";
 import { ProviderDiagnostics } from "./ProviderDiagnostics";
-
-const queryTypeLabels: Record<string, string> = {
-  brand_direct: "Brand direct",
-  category_discovery: "Category discovery",
-  recommendation: "Recommendation",
-  comparison: "Comparison",
-  alternative: "Alternative",
-  problem_solution: "Problem-solution",
-  unknown: "Unknown",
-};
-
-function formatPercent(value: number) {
-  return `${Math.round(value * 100)}%`;
-}
 
 function formatScore(value: number | null) {
   return value === null ? "N/A" : value.toFixed(2);
@@ -41,10 +29,6 @@ function providerChartData(summary: AuditSummaryResponse) {
     }));
 }
 
-function queryTypeLabel(value: string) {
-  return queryTypeLabels[value] ?? value;
-}
-
 export function AuditSummaryContent({
   auditId,
   summary,
@@ -52,45 +36,49 @@ export function AuditSummaryContent({
   auditId: number;
   summary: AuditSummaryResponse;
 }) {
+  const { t } = useTranslation(["results", "audits"]);
+  const formatters = useLocaleFormatters();
   const providerData = providerChartData(summary);
+  const queryTypeLabel = (value: string) =>
+    t(`audits:queryTypes.${value}`, { defaultValue: value });
 
   return (
     <div className="space-y-5 px-5 py-5">
       <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-7">
-        <MetricCard label="Queries" value={summary.total_queries} />
-        <MetricCard label="Runs" value={summary.total_runs} />
-        <MetricCard label="Completion" value={formatPercent(summary.completion_ratio)} />
-        <MetricCard label="Visibility" value={formatPercent(summary.visibility_ratio)} />
-        <MetricCard label="Avg score" value={formatScore(summary.average_score)} />
+        <MetricCard label={t("summaryCards.queries")} value={formatters.number(summary.total_queries)} />
+        <MetricCard label={t("summaryCards.runs")} value={formatters.number(summary.total_runs)} />
+        <MetricCard label={t("summaryCards.completion")} value={formatters.percent(summary.completion_ratio)} />
+        <MetricCard label={t("summaryCards.visibility")} value={formatters.percent(summary.visibility_ratio)} />
+        <MetricCard label={t("summaryCards.avgScore")} value={formatScore(summary.average_score)} />
         <MetricCard
-          label="Weighted"
+          label={t("summaryCards.weighted")}
           value={formatScore(summary.weighted_visibility_score)}
         />
-        <MetricCard label="Critical" value={summary.critical_query_count} />
+        <MetricCard label={t("summaryCards.critical")} value={formatters.number(summary.critical_query_count)} />
       </div>
 
       {summary.total_runs === 0 ? (
         <div className="rounded-md border border-border bg-muted px-4 py-3 text-sm text-subtle">
-          No run data is available yet.
+          {t("sections.noRunData")}
         </div>
       ) : null}
 
       <ProviderDiagnostics diagnostics={summary.provider_diagnostics} compact />
 
       <div className="rounded-md border border-border bg-white p-4">
-        <h2 className="text-sm font-semibold text-ink">Query-type diagnostics</h2>
+        <h2 className="text-sm font-semibold text-ink">{t("sections.queryTypeDiagnostics")}</h2>
         {summary.query_type_coverage.length > 0 ? (
           <div className="mt-3 overflow-x-auto">
             <table className="min-w-full divide-y divide-border text-sm">
               <thead className="text-left text-xs uppercase text-subtle">
                 <tr>
-                  <th className="py-2 pr-3 font-semibold">Query type</th>
-                  <th className="px-3 py-2 font-semibold">Queries</th>
-                  <th className="px-3 py-2 font-semibold">Processed</th>
-                  <th className="px-3 py-2 font-semibold">Failed</th>
-                  <th className="px-3 py-2 font-semibold">Brand found</th>
-                  <th className="px-3 py-2 font-semibold">Visibility</th>
-                  <th className="px-3 py-2 font-semibold">Avg score</th>
+                  <th className="py-2 pr-3 font-semibold">{t("sections.queryType")}</th>
+                  <th className="px-3 py-2 font-semibold">{t("summaryCards.queries")}</th>
+                  <th className="px-3 py-2 font-semibold">{t("sections.processed")}</th>
+                  <th className="px-3 py-2 font-semibold">{t("sections.failed")}</th>
+                  <th className="px-3 py-2 font-semibold">{t("sections.brandFound")}</th>
+                  <th className="px-3 py-2 font-semibold">{t("summaryCards.visibility")}</th>
+                  <th className="px-3 py-2 font-semibold">{t("summaryCards.avgScore")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -104,7 +92,7 @@ export function AuditSummaryContent({
                     <td className="px-3 py-2 text-subtle">{item.failed_runs}</td>
                     <td className="px-3 py-2 text-subtle">{item.brand_found_count}</td>
                     <td className="px-3 py-2 text-subtle">
-                      {formatPercent(item.brand_found_rate)}
+                      {formatters.percent(item.brand_found_rate)}
                     </td>
                     <td className="px-3 py-2 text-subtle">{formatScore(item.average_score)}</td>
                   </tr>
@@ -114,14 +102,14 @@ export function AuditSummaryContent({
           </div>
         ) : (
           <p className="mt-3 text-sm text-subtle">
-            Query-type diagnostics will appear after the audit has processed typed seed queries.
+            {t("sections.queryTypeEmpty")}
           </p>
         )}
       </div>
 
       <div className="grid gap-5 lg:grid-cols-[1fr_0.9fr]">
         <div className="rounded-md border border-border bg-white p-4">
-          <h2 className="text-sm font-semibold text-ink">Provider summary</h2>
+          <h2 className="text-sm font-semibold text-ink">{t("sections.providerSummary")}</h2>
           {providerData.length > 0 ? (
             <div className="mt-4 overflow-x-auto" data-testid="provider-score-chart">
               <BarChart data={providerData} width={420} height={220} margin={{ left: -20, right: 8 }}>
@@ -133,12 +121,12 @@ export function AuditSummaryContent({
               </BarChart>
             </div>
           ) : (
-            <p className="mt-3 text-sm text-subtle">No provider scores yet.</p>
+            <p className="mt-3 text-sm text-subtle">{t("sections.noProviderScores")}</p>
           )}
         </div>
 
         <div className="rounded-md border border-border bg-white p-4">
-          <h2 className="text-sm font-semibold text-ink">Critical queries</h2>
+          <h2 className="text-sm font-semibold text-ink">{t("sections.criticalQueries")}</h2>
           {summary.critical_queries.length > 0 ? (
             <ul className="mt-3 divide-y divide-border">
               {summary.critical_queries.slice(0, 5).map((query) => (
@@ -152,28 +140,28 @@ export function AuditSummaryContent({
                     className="mt-1 inline-block text-xs font-medium text-brand-700 hover:underline"
                     to={`/audits/${auditId}/results`}
                   >
-                    View related rows
+                    {t("sections.viewRelatedRows")}
                   </Link>
                 </li>
               ))}
             </ul>
           ) : (
-            <p className="mt-3 text-sm text-subtle">No critical queries detected.</p>
+            <p className="mt-3 text-sm text-subtle">{t("sections.noCriticalQueries")}</p>
           )}
         </div>
       </div>
 
       <div className="rounded-md border border-border bg-white p-4">
-        <h2 className="text-sm font-semibold text-ink">Competitor visibility</h2>
+        <h2 className="text-sm font-semibold text-ink">{t("sections.competitorVisibility")}</h2>
         {summary.competitors.length > 0 ? (
           <div className="mt-3 overflow-x-auto">
             <table className="min-w-full divide-y divide-border text-sm">
               <thead className="text-left text-xs uppercase text-subtle">
                 <tr>
-                  <th className="py-2 pr-3 font-semibold">Competitor</th>
-                  <th className="px-3 py-2 font-semibold">Mentions</th>
-                  <th className="px-3 py-2 font-semibold">Visibility</th>
-                  <th className="px-3 py-2 font-semibold">Avg score</th>
+                  <th className="py-2 pr-3 font-semibold">{t("sections.competitor")}</th>
+                  <th className="px-3 py-2 font-semibold">{t("sections.mentions")}</th>
+                  <th className="px-3 py-2 font-semibold">{t("summaryCards.visibility")}</th>
+                  <th className="px-3 py-2 font-semibold">{t("summaryCards.avgScore")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -184,7 +172,7 @@ export function AuditSummaryContent({
                     <td className="px-3 py-2 text-subtle">
                       {competitor.visibility_ratio === null
                         ? "N/A"
-                        : formatPercent(competitor.visibility_ratio)}
+                        : formatters.percent(competitor.visibility_ratio)}
                     </td>
                     <td className="px-3 py-2 text-subtle">{formatScore(competitor.average_score)}</td>
                   </tr>
@@ -193,29 +181,29 @@ export function AuditSummaryContent({
             </table>
           </div>
         ) : (
-          <p className="mt-3 text-sm text-subtle">No competitors detected.</p>
+          <p className="mt-3 text-sm text-subtle">{t("sections.noCompetitors")}</p>
         )}
       </div>
 
       <div className="rounded-md border border-border bg-white p-4">
-        <h2 className="text-sm font-semibold text-ink">Top sources</h2>
+        <h2 className="text-sm font-semibold text-ink">{t("sections.topSources")}</h2>
         {summary.sources.length > 0 ? (
           <div className="mt-3 overflow-x-auto">
             <table className="min-w-full divide-y divide-border text-sm">
               <thead className="text-left text-xs uppercase text-subtle">
                 <tr>
-                  <th className="py-2 pr-3 font-semibold">Source</th>
-                  <th className="px-3 py-2 font-semibold">Provider</th>
-                  <th className="px-3 py-2 font-semibold">Citations</th>
-                  <th className="px-3 py-2 font-semibold">Quality</th>
+                  <th className="py-2 pr-3 font-semibold">{t("table.source")}</th>
+                  <th className="px-3 py-2 font-semibold">{t("table.provider")}</th>
+                  <th className="px-3 py-2 font-semibold">{t("table.citations")}</th>
+                  <th className="px-3 py-2 font-semibold">{t("table.quality")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {summary.sources.slice(0, 5).map((source) => (
                   <tr key={`${source.url ?? source.domain}-${source.provider}`}>
                     <td className="py-2 pr-3">
-                      <p className="font-medium text-ink">{source.title ?? source.domain ?? "Untitled source"}</p>
-                      <p className="text-subtle">{source.domain ?? source.url ?? "No URL"}</p>
+                      <p className="font-medium text-ink">{source.title ?? source.domain ?? t("sections.untitledSource")}</p>
+                      <p className="text-subtle">{source.domain ?? source.url ?? t("sections.noUrl")}</p>
                     </td>
                     <td className="px-3 py-2 text-subtle">{source.provider ?? "N/A"}</td>
                     <td className="px-3 py-2 text-subtle">{source.citation_count ?? 0}</td>
@@ -226,7 +214,7 @@ export function AuditSummaryContent({
             </table>
           </div>
         ) : (
-          <p className="mt-3 text-sm text-subtle">No source citations yet.</p>
+          <p className="mt-3 text-sm text-subtle">{t("sections.noSourceCitations")}</p>
         )}
       </div>
     </div>

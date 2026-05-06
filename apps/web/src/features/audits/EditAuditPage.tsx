@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Loader2, Plus, Save, Sparkles, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useFieldArray, useForm, useWatch } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { Button } from "../../components/ui/Button";
@@ -31,7 +32,7 @@ import {
   languageOptions,
   parseSeedQueryItems,
   queryTypeOptions,
-  schema,
+  createAuditSetupSchema,
   type CreateAuditFormInput,
   type CreateAuditFormValues,
 } from "./auditSetupFormConfig";
@@ -45,12 +46,14 @@ export function EditAuditPage() {
   const params = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { t } = useTranslation("audits");
   const [isGenerationOpen, setIsGenerationOpen] = useState(false);
   const [useDomainForGeneration, setUseDomainForGeneration] = useState<boolean | null>(null);
   const [useDescriptionForGeneration, setUseDescriptionForGeneration] = useState<boolean | null>(
     null,
   );
   const [generationWarnings, setGenerationWarnings] = useState<string[]>([]);
+  const formSchema = useMemo(() => createAuditSetupSchema(t), [t]);
   const auditId = Number(params.auditId);
   const isValidAuditId = Number.isInteger(auditId) && auditId > 0;
   const detail = useQuery({
@@ -77,7 +80,7 @@ export function EditAuditPage() {
     reset,
     setValue,
   } = useForm<CreateAuditFormInput, unknown, CreateAuditFormValues>({
-    resolver: zodResolver(schema),
+    resolver: zodResolver(formSchema),
     defaultValues: {
       brandName: "",
       brandDomain: "",
@@ -103,11 +106,11 @@ export function EditAuditPage() {
       const warnings = [...(response.warnings ?? [])];
       const addedCount = appendResult.queries.length - parseSeedQueryItems(currentQueries).length;
       if (appendResult.duplicateCount > 0) {
-        warnings.push(`${appendResult.duplicateCount} duplicate queries were skipped.`);
+        warnings.push(t("generation.duplicatesSkipped", { count: appendResult.duplicateCount }));
       }
       if (appendResult.limitSkipped > 0) {
         warnings.push(
-          `Only ${addedCount} queries were added because the audit limit is 20 seed queries.`,
+          t("generation.limitSkipped", { count: addedCount }),
         );
       }
       setValue("seedQueryItems", appendResult.queries, {
@@ -192,7 +195,7 @@ export function EditAuditPage() {
   if (detail.isLoading) {
     return (
       <section className="rounded-md border border-border bg-surface px-5 py-10 text-sm text-subtle shadow-panel" role="status">
-        Loading audit setup...
+        {t("errors.loadingSetup")}
       </section>
     );
   }
@@ -200,9 +203,11 @@ export function EditAuditPage() {
   if (detail.isError || !detail.data || !isValidAuditId) {
     return (
       <section className="rounded-md border border-border bg-surface p-5 shadow-panel">
-        <p className="text-sm text-red-700">Audit setup unavailable.</p>
+        <p className="text-sm text-red-700">
+          {t("errors.setupUnavailable")}
+        </p>
         <Button asChild className="mt-4" variant="secondary">
-          <Link to="/audits">Back to audits</Link>
+          <Link to="/audits">{t("backToAudits")}</Link>
         </Button>
       </section>
     );
@@ -214,7 +219,7 @@ export function EditAuditPage() {
         <div>
           <AuditBreadcrumbs auditId={auditId} auditNumber={detail.data.audit_number} />
           <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-xl font-semibold text-ink">Edit audit setup</h1>
+            <h1 className="text-xl font-semibold text-ink">{t("edit")}</h1>
             <AuditStatusBadge status={detail.data.status} />
           </div>
           <p className="mt-1 text-sm text-subtle">{detail.data.brand_name}</p>
@@ -222,7 +227,7 @@ export function EditAuditPage() {
         <Button asChild variant="ghost">
           <Link to={`/audits/${auditId}`}>
             <ArrowLeft className="size-4" aria-hidden="true" />
-            Back to audit
+            {t("backToAudit")}
           </Link>
         </Button>
       </div>
@@ -230,19 +235,18 @@ export function EditAuditPage() {
       {!canEdit ? (
         <div className="px-5 py-5">
           <div className="rounded-md border border-border bg-muted px-4 py-3 text-sm text-subtle">
-            Only audits in Created status can be edited. Duplicate this audit to change
-            setup for a new run.
+            {t("errors.createdOnlyEdit")}
           </div>
         </div>
       ) : (
         <form className="space-y-6 px-5 py-5" noValidate onSubmit={onSubmit}>
           <div className="grid gap-4 md:grid-cols-2">
-            <Field htmlFor="edit-brand-name" label="Brand name" error={errors.brandName?.message}>
+            <Field htmlFor="edit-brand-name" label={t("fields.brandName")} error={errors.brandName?.message}>
               <Input id="edit-brand-name" {...register("brandName")} />
             </Field>
             <Field
               htmlFor="edit-brand-domain"
-              label="Brand domain"
+              label={t("fields.brandDomain")}
               error={errors.brandDomain?.message}
             >
               <Input id="edit-brand-domain" placeholder="example.com" {...register("brandDomain")} />
@@ -251,7 +255,7 @@ export function EditAuditPage() {
 
           <Field
             htmlFor="edit-brand-description"
-            label="Brand description"
+            label={t("fields.brandDescription")}
             error={errors.brandDescription?.message}
           >
             <textarea
@@ -266,30 +270,30 @@ export function EditAuditPage() {
           </Field>
 
           <fieldset className="space-y-2">
-            <legend className="text-sm font-medium text-ink">Seed queries</legend>
+            <legend className="text-sm font-medium text-ink">{t("fields.seedQueries")}</legend>
             {seedQueryFields.fields.map((field, index) => (
               <div className="grid gap-2 sm:grid-cols-[1fr_12rem_auto]" key={field.id}>
                 <Input
-                  aria-label={`Seed query ${index + 1}`}
+                  aria-label={t("fields.seedQuery", { index: index + 1 })}
                   placeholder="best ai visibility tools"
                   {...register(`seedQueryItems.${index}.text`)}
                 />
                 <select
-                  aria-label={`Query type ${index + 1}`}
+                  aria-label={t("fields.queryType", { index: index + 1 })}
                   className="h-10 w-full rounded-md border border-border bg-white px-3 text-sm text-ink outline-none transition-colors focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
                   {...register(`seedQueryItems.${index}.type`)}
                 >
-                  <option value="">No type</option>
+                  <option value="">{t("queryTypes.none")}</option>
                   {queryTypeOptions.map((type) => (
                     <option key={type.value} value={type.value}>
-                      {type.label}
+                      {t(`queryTypes.${type.value}`)}
                     </option>
                   ))}
                 </select>
                 <Button
                   type="button"
                   variant="ghost"
-                  aria-label={`Remove seed query ${index + 1}`}
+                  aria-label={t("fields.removeSeedQuery", { index: index + 1 })}
                   onClick={() => seedQueryFields.remove(index)}
                 >
                   <Trash2 className="size-4" aria-hidden="true" />
@@ -306,7 +310,7 @@ export function EditAuditPage() {
               onClick={() => seedQueryFields.append({ ...emptySeedQueryItem })}
             >
               <Plus className="size-4" aria-hidden="true" />
-              Add query
+              {t("generation.addQuery")}
             </Button>
             <Button
               type="button"
@@ -314,11 +318,11 @@ export function EditAuditPage() {
               onClick={() => setIsGenerationOpen((current) => !current)}
             >
               <Sparkles className="size-4" aria-hidden="true" />
-              Generate seed queries
+              {t("generation.toggle")}
             </Button>
             {isGenerationOpen ? (
               <div className="space-y-3 rounded-md border border-border bg-muted p-3">
-                <p className="text-sm font-medium text-ink">Generate seed queries</p>
+                <p className="text-sm font-medium text-ink">{t("generation.title")}</p>
                 <div className="grid gap-2 sm:grid-cols-2">
                   <label className="flex items-center gap-2 text-sm text-ink">
                     <input
@@ -328,7 +332,7 @@ export function EditAuditPage() {
                       disabled={!hasGenerationDomain}
                       onChange={(event) => setUseDomainForGeneration(event.target.checked)}
                     />
-                    Use brand domain
+                    {t("generation.useDomain")}
                   </label>
                   <label className="flex items-center gap-2 text-sm text-ink">
                     <input
@@ -338,7 +342,7 @@ export function EditAuditPage() {
                       disabled={!hasGenerationDescription}
                       onChange={(event) => setUseDescriptionForGeneration(event.target.checked)}
                     />
-                    Use brand description
+                    {t("generation.useDescription")}
                   </label>
                 </div>
                 <Button type="button" disabled={!canGenerateQueries} onClick={generateQueries}>
@@ -347,11 +351,11 @@ export function EditAuditPage() {
                   ) : (
                     <Sparkles className="size-4" aria-hidden="true" />
                   )}
-                  {generateMutation.isPending ? "Generating..." : "Generate 10 queries"}
+                  {generateMutation.isPending ? t("generation.generating") : t("generation.generate10")}
                 </Button>
                 {generateMutation.isError ? (
                   <p className="text-sm text-red-700">
-                    Could not generate seed queries. Please try again or enter queries manually.
+                    {t("generation.error")}
                   </p>
                 ) : null}
                 {generationWarnings.map((warning) => (
@@ -371,7 +375,7 @@ export function EditAuditPage() {
           </div>
 
           <div className="grid gap-4 md:grid-cols-3">
-            <Field htmlFor="edit-language" label="Language" error={errors.language?.message}>
+            <Field htmlFor="edit-language" label={t("fields.language")} error={errors.language?.message}>
               <select
                 id="edit-language"
                 className="h-10 w-full rounded-md border border-border bg-white px-3 text-sm text-ink outline-none transition-colors focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
@@ -384,7 +388,7 @@ export function EditAuditPage() {
                 ))}
               </select>
             </Field>
-            <Field htmlFor="edit-country" label="Country" error={errors.country?.message}>
+            <Field htmlFor="edit-country" label={t("fields.country")} error={errors.country?.message}>
               <select
                 id="edit-country"
                 className="h-10 w-full rounded-md border border-border bg-white px-3 text-sm text-ink outline-none transition-colors focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
@@ -397,7 +401,7 @@ export function EditAuditPage() {
                 ))}
               </select>
             </Field>
-            <Field htmlFor="edit-max-queries" label="Max queries" error={errors.maxQueries?.message}>
+            <Field htmlFor="edit-max-queries" label={t("fields.maxQueries")} error={errors.maxQueries?.message}>
               <Input id="edit-max-queries" type="number" min={1} {...register("maxQueries")} />
             </Field>
           </div>
@@ -409,7 +413,7 @@ export function EditAuditPage() {
                 type="checkbox"
                 {...register("enableSourceIntelligence")}
               />
-              Source intelligence
+              {t("fields.sourceIntelligence")}
             </label>
           ) : null}
 
@@ -417,7 +421,7 @@ export function EditAuditPage() {
             <p className="text-sm text-red-700">
               {updateAuditMutation.error instanceof ApiError
                 ? updateAuditMutation.error.message
-                : "Unable to update audit."}
+                : t("errors.save")}
             </p>
           ) : null}
 
@@ -433,7 +437,7 @@ export function EditAuditPage() {
               disabled={updateAuditMutation.isPending || Boolean(auditEstimate.data?.over_cap)}
             >
               <Save className="size-4" aria-hidden="true" />
-              {updateAuditMutation.isPending ? "Saving..." : "Save setup"}
+              {updateAuditMutation.isPending ? t("savePending") : t("saveSetup")}
             </Button>
           </div>
         </form>

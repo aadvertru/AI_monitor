@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { ArrowLeft, Loader2, Plus, Sparkles, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useFieldArray, useForm, useWatch } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { Button } from "../../components/ui/Button";
@@ -23,7 +24,7 @@ import {
   estimateAuditTokens,
   languageOptions,
   queryTypeOptions,
-  schema,
+  createAuditSetupSchema,
   parseSeedQueryItems,
   seedQueryItemsFromText,
   type CreateAuditFormInput,
@@ -37,6 +38,7 @@ type CreateAuditDefaults = Partial<CreateAuditFormInput> & {
 export function CreateAuditPage() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { t } = useTranslation("audits");
   const duplicateDefaults = (location.state as { auditDefaults?: CreateAuditDefaults } | null)
     ?.auditDefaults;
   const [isGenerationOpen, setIsGenerationOpen] = useState(false);
@@ -45,6 +47,7 @@ export function CreateAuditPage() {
     null,
   );
   const [generationWarnings, setGenerationWarnings] = useState<string[]>([]);
+  const formSchema = useMemo(() => createAuditSetupSchema(t), [t]);
   const createAuditMutation = useMutation({
     mutationFn: createAudit,
     onSuccess: (response) => {
@@ -59,7 +62,7 @@ export function CreateAuditPage() {
     register,
     setValue,
   } = useForm<CreateAuditFormInput, unknown, CreateAuditFormValues>({
-    resolver: zodResolver(schema),
+    resolver: zodResolver(formSchema),
     defaultValues: {
       brandName: duplicateDefaults?.brandName ?? "",
       brandDomain: duplicateDefaults?.brandDomain ?? "",
@@ -90,11 +93,11 @@ export function CreateAuditPage() {
       const addedCount =
         appendResult.queries.length - parseSeedQueryItems(currentQueries).length;
       if (appendResult.duplicateCount > 0) {
-        warnings.push(`${appendResult.duplicateCount} duplicate queries were skipped.`);
+        warnings.push(t("generation.duplicatesSkipped", { count: appendResult.duplicateCount }));
       }
       if (appendResult.limitSkipped > 0) {
         warnings.push(
-          `Only ${addedCount} queries were added because the audit limit is 20 seed queries.`,
+          t("generation.limitSkipped", { count: addedCount }),
         );
       }
       setValue("seedQueryItems", appendResult.queries, {
@@ -175,30 +178,30 @@ export function CreateAuditPage() {
     <section className="rounded-md border border-border bg-surface shadow-panel">
       <div className="flex flex-col gap-3 border-b border-border px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-ink">Create audit</h1>
-          <p className="text-sm text-subtle">Manual SCDL audit setup</p>
+          <h1 className="text-xl font-semibold text-ink">{t("create")}</h1>
+          <p className="text-sm text-subtle">{t("manualSetup")}</p>
         </div>
         <Button asChild variant="ghost">
           <Link to="/audits">
             <ArrowLeft className="size-4" aria-hidden="true" />
-            Back to audits
+            {t("backToAudits")}
           </Link>
         </Button>
       </div>
 
       <form className="space-y-6 px-5 py-5" noValidate onSubmit={onSubmit}>
         <div className="grid gap-4 md:grid-cols-2">
-          <Field htmlFor="brand-name" label="Brand name" error={errors.brandName?.message}>
+          <Field htmlFor="brand-name" label={t("fields.brandName")} error={errors.brandName?.message}>
             <Input id="brand-name" {...register("brandName")} />
           </Field>
-          <Field htmlFor="brand-domain" label="Brand domain" error={errors.brandDomain?.message}>
+          <Field htmlFor="brand-domain" label={t("fields.brandDomain")} error={errors.brandDomain?.message}>
             <Input id="brand-domain" placeholder="example.com" {...register("brandDomain")} />
           </Field>
         </div>
 
         <Field
           htmlFor="brand-description"
-          label="Brand description"
+          label={t("fields.brandDescription")}
           error={errors.brandDescription?.message}
         >
           <textarea
@@ -214,30 +217,30 @@ export function CreateAuditPage() {
 
         <div className="space-y-3">
           <fieldset className="space-y-2">
-            <legend className="text-sm font-medium text-ink">Seed queries</legend>
+            <legend className="text-sm font-medium text-ink">{t("fields.seedQueries")}</legend>
             {seedQueryFields.fields.map((field, index) => (
               <div className="grid gap-2 sm:grid-cols-[1fr_12rem_auto]" key={field.id}>
                 <Input
-                  aria-label={`Seed query ${index + 1}`}
+                  aria-label={t("fields.seedQuery", { index: index + 1 })}
                   placeholder="best ai visibility tools"
                   {...register(`seedQueryItems.${index}.text`)}
                 />
                 <select
-                  aria-label={`Query type ${index + 1}`}
+                  aria-label={t("fields.queryType", { index: index + 1 })}
                   className="h-10 w-full rounded-md border border-border bg-white px-3 text-sm text-ink outline-none transition-colors focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
                   {...register(`seedQueryItems.${index}.type`)}
                 >
-                  <option value="">No type</option>
+                  <option value="">{t("queryTypes.none")}</option>
                   {queryTypeOptions.map((type) => (
                     <option key={type.value} value={type.value}>
-                      {type.label}
+                      {t(`queryTypes.${type.value}`)}
                     </option>
                   ))}
                 </select>
                 <Button
                   type="button"
                   variant="ghost"
-                  aria-label={`Remove seed query ${index + 1}`}
+                  aria-label={t("fields.removeSeedQuery", { index: index + 1 })}
                   onClick={() => seedQueryFields.remove(index)}
                 >
                   <Trash2 className="size-4" aria-hidden="true" />
@@ -254,7 +257,7 @@ export function CreateAuditPage() {
               onClick={() => seedQueryFields.append({ ...emptySeedQueryItem })}
             >
               <Plus className="size-4" aria-hidden="true" />
-              Add query
+              {t("generation.addQuery", { defaultValue: "Add query" })}
             </Button>
           </fieldset>
           <Button
@@ -263,11 +266,11 @@ export function CreateAuditPage() {
             onClick={() => setIsGenerationOpen((current) => !current)}
           >
             <Sparkles className="size-4" aria-hidden="true" />
-            Generate seed queries
+            {t("generation.toggle")}
           </Button>
           {isGenerationOpen ? (
             <div className="space-y-3 rounded-md border border-border bg-muted p-3">
-              <p className="text-sm font-medium text-ink">Generate seed queries</p>
+              <p className="text-sm font-medium text-ink">{t("generation.title")}</p>
               <div className="grid gap-2 sm:grid-cols-2">
                 <label className="flex items-center gap-2 text-sm text-ink">
                   <input
@@ -277,7 +280,7 @@ export function CreateAuditPage() {
                     disabled={!hasGenerationDomain}
                     onChange={(event) => setUseDomainForGeneration(event.target.checked)}
                   />
-                  Use brand domain
+                  {t("generation.useDomain")}
                 </label>
                 <label className="flex items-center gap-2 text-sm text-ink">
                   <input
@@ -287,7 +290,7 @@ export function CreateAuditPage() {
                     disabled={!hasGenerationDescription}
                     onChange={(event) => setUseDescriptionForGeneration(event.target.checked)}
                   />
-                  Use brand description
+                  {t("generation.useDescription")}
                 </label>
               </div>
               <Button type="button" disabled={!canGenerateQueries} onClick={generateQueries}>
@@ -296,11 +299,11 @@ export function CreateAuditPage() {
                 ) : (
                   <Sparkles className="size-4" aria-hidden="true" />
                 )}
-                {generateMutation.isPending ? "Generating..." : "Generate 10 queries"}
+                {generateMutation.isPending ? t("generation.generating") : t("generation.generate10")}
               </Button>
               {generateMutation.isError ? (
                 <p className="text-sm text-red-700">
-                  Could not generate seed queries. Please try again or enter queries manually.
+                  {t("generation.error")}
                 </p>
               ) : null}
               {generationWarnings.map((warning) => (
@@ -320,7 +323,7 @@ export function CreateAuditPage() {
         </div>
 
         <div className="grid gap-4 md:grid-cols-3">
-          <Field htmlFor="language" label="Language" error={errors.language?.message}>
+          <Field htmlFor="language" label={t("fields.language")} error={errors.language?.message}>
             <select
               id="language"
               className="h-10 w-full rounded-md border border-border bg-white px-3 text-sm text-ink outline-none transition-colors focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
@@ -333,7 +336,7 @@ export function CreateAuditPage() {
               ))}
             </select>
           </Field>
-          <Field htmlFor="country" label="Country" error={errors.country?.message}>
+          <Field htmlFor="country" label={t("fields.country")} error={errors.country?.message}>
             <select
               id="country"
               className="h-10 w-full rounded-md border border-border bg-white px-3 text-sm text-ink outline-none transition-colors focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
@@ -346,7 +349,7 @@ export function CreateAuditPage() {
               ))}
             </select>
           </Field>
-          <Field htmlFor="max-queries" label="Max queries" error={errors.maxQueries?.message}>
+          <Field htmlFor="max-queries" label={t("fields.maxQueries")} error={errors.maxQueries?.message}>
             <Input id="max-queries" type="number" min={1} {...register("maxQueries")} />
           </Field>
         </div>
@@ -359,7 +362,7 @@ export function CreateAuditPage() {
                 type="checkbox"
                 {...register("enableSourceIntelligence")}
               />
-              Source intelligence
+              {t("fields.sourceIntelligence")}
             </label>
           </div>
         ) : null}
@@ -368,7 +371,7 @@ export function CreateAuditPage() {
           <p className="text-sm text-red-700">
             {createAuditMutation.error instanceof ApiError
               ? createAuditMutation.error.message
-              : "Unable to create audit."}
+              : t("errors.create")}
           </p>
         ) : null}
 
@@ -384,7 +387,7 @@ export function CreateAuditPage() {
             disabled={createAuditMutation.isPending || Boolean(auditEstimate.data?.over_cap)}
           >
             <Plus className="size-4" aria-hidden="true" />
-            {createAuditMutation.isPending ? "Creating..." : "Create audit"}
+            {createAuditMutation.isPending ? t("createPending") : t("create")}
           </Button>
         </div>
       </form>

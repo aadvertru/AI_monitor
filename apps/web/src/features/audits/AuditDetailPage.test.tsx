@@ -260,6 +260,33 @@ describe("audit detail page", () => {
     expect(screen.getByText("OpenAI request timed out.")).toBeInTheDocument();
   });
 
+  it("translates audit detail labels while preserving raw seed query and provider messages", async () => {
+    mockFetchSequence([
+      { body: currentUserFixture },
+      { body: { ...auditDetailFixture, status: "running" } },
+      { body: { ...auditSummaryFixture, status: "running" } },
+      {
+        body: {
+          ...auditStatusFixture,
+          status: "running",
+          provider_diagnostics: [providerDiagnosticFixture],
+        },
+      },
+    ]);
+    const user = userEvent.setup();
+
+    renderRoute("/audits/42");
+
+    await screen.findByText("Provider issue");
+    await user.selectOptions(screen.getByLabelText("Interface language"), "ru");
+
+    expect(await screen.findByText("Проблема провайдера")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Сводка" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByText("Настройки аудита")).toBeInTheDocument();
+    expect(screen.getAllByText("best ai visibility tools")).not.toHaveLength(0);
+    expect(screen.getByText("OpenAI request timed out.")).toBeInTheDocument();
+  });
+
   it("disables the start button while pipeline start is pending", async () => {
     const fetchMock = vi.fn();
     fetchMock

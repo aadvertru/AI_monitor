@@ -62,6 +62,20 @@ export const emptySeedQueryItem: SeedQueryDraft = {
   source: "user",
 };
 
+type MessageResolver = (
+  key: string,
+  options?: { defaultValue?: string; [key: string]: unknown },
+) => string;
+
+function message(
+  t: MessageResolver | undefined,
+  key: string,
+  defaultValue: string,
+  options?: Record<string, unknown>,
+) {
+  return t ? t(key, { defaultValue, ...options }) : defaultValue;
+}
+
 type SeedQueryFormItem = {
   text?: string;
   type?: SeedQueryType | null;
@@ -90,22 +104,6 @@ function isValidBrandDomain(value: string) {
   );
 }
 
-const seedQueryItemSchema = z.object({
-  text: z
-    .string()
-    .max(300, "Seed query must be 300 characters or fewer.")
-    .refine(
-      (value) => value.trim().length === 0 || value.trim().length >= 3,
-      "Seed query must be at least 3 characters.",
-    )
-    .default(""),
-  type: z
-    .enum(queryTypeValues)
-    .nullable()
-    .optional(),
-  source: z.enum(["user", "ai"]).optional(),
-});
-
 const modelTargetSchema = z.object({
   id: z.union([z.string(), z.number()]).optional(),
   targetId: z.union([z.string(), z.number()]).optional(),
@@ -119,43 +117,91 @@ const modelTargetSchema = z.object({
   gatewayL2Experimental: z.boolean().optional(),
 });
 
-export const schema = z
-  .object({
-    brandName: z.string().trim().min(1, "Enter a brand name."),
-    brandDomain: z
+export function createAuditSetupSchema(t?: MessageResolver) {
+  const seedQueryItemSchema = z.object({
+    text: z
       .string()
-      .trim()
-      .min(1, "Enter a brand domain.")
-      .refine(isValidBrandDomain, invalidDomainMessage)
-      .transform(normalizeBrandDomain),
-    brandDescription: z
-      .string()
-      .trim()
-      .max(brandDescriptionMaxLength, `Brand description must be ${brandDescriptionMaxLength} characters or fewer.`)
+      .max(
+        300,
+        message(t, "validation.seedQueryMax", "Seed query must be 300 characters or fewer."),
+      )
+      .refine(
+        (value) => value.trim().length === 0 || value.trim().length >= 3,
+        message(t, "validation.seedQueryMin", "Seed query must be at least 3 characters."),
+      )
+      .default(""),
+    type: z
+      .enum(queryTypeValues)
+      .nullable()
       .optional(),
-    seedQueryItems: z
-      .array(seedQueryItemSchema)
-      .max(maxSeedQueryCount, `Use ${maxSeedQueryCount} seed queries or fewer.`)
-      .optional(),
-    modelTargets: z
-      .array(modelTargetSchema)
-      .min(1, "Select at least one model target."),
-    providers: z.array(z.string()).optional(),
-    language: z.enum(languageOptions.map((option) => option.value)),
-    country: z.enum(countryOptions.map((option) => option.value)),
-    maxQueries: z.union([z.literal(""), z.coerce.number().int().positive()]).optional(),
-    enableSourceIntelligence: z.boolean(),
-    scdlLevel: z.enum(["L1", "L2"]).optional(),
-  })
-  .superRefine((values, context) => {
-    if (parseSeedQueryItems(values.seedQueryItems).length === 0) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Add at least one seed query.",
-        path: ["seedQueryItems"],
-      });
-    }
+    source: z.enum(["user", "ai"]).optional(),
   });
+
+  return z
+    .object({
+      brandName: z
+        .string()
+        .trim()
+        .min(1, message(t, "validation.brandNameRequired", "Enter a brand name.")),
+      brandDomain: z
+        .string()
+        .trim()
+        .min(1, message(t, "validation.brandDomainRequired", "Enter a brand domain."))
+        .refine(
+          isValidBrandDomain,
+          message(t, "validation.invalidDomain", invalidDomainMessage),
+        )
+        .transform(normalizeBrandDomain),
+      brandDescription: z
+        .string()
+        .trim()
+        .max(
+          brandDescriptionMaxLength,
+          message(
+            t,
+            "validation.brandDescriptionMax",
+            `Brand description must be ${brandDescriptionMaxLength} characters or fewer.`,
+            { max: brandDescriptionMaxLength },
+          ),
+        )
+        .optional(),
+      seedQueryItems: z
+        .array(seedQueryItemSchema)
+        .max(
+          maxSeedQueryCount,
+          message(
+            t,
+            "validation.seedQueriesMax",
+            `Use ${maxSeedQueryCount} seed queries or fewer.`,
+            { max: maxSeedQueryCount },
+          ),
+        )
+        .optional(),
+      modelTargets: z
+        .array(modelTargetSchema)
+        .min(
+          1,
+          message(t, "validation.modelTargetRequired", "Select at least one model target."),
+        ),
+      providers: z.array(z.string()).optional(),
+      language: z.enum(languageOptions.map((option) => option.value)),
+      country: z.enum(countryOptions.map((option) => option.value)),
+      maxQueries: z.union([z.literal(""), z.coerce.number().int().positive()]).optional(),
+      enableSourceIntelligence: z.boolean(),
+      scdlLevel: z.enum(["L1", "L2"]).optional(),
+    })
+    .superRefine((values, context) => {
+      if (parseSeedQueryItems(values.seedQueryItems).length === 0) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: message(t, "validation.seedQueriesRequired", "Add at least one seed query."),
+          path: ["seedQueryItems"],
+        });
+      }
+    });
+}
+
+export const schema = createAuditSetupSchema();
 
 export type CreateAuditFormInput = z.input<typeof schema>;
 export type CreateAuditFormValues = z.output<typeof schema>;

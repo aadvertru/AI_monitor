@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, ArrowLeft } from "lucide-react";
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Link, useParams } from "react-router-dom";
 
 import { Button } from "../../components/ui/Button";
@@ -15,12 +16,12 @@ function formatScore(value: number | null) {
   return value === null ? "N/A" : value.toFixed(2);
 }
 
-function sourceLabel(source: SourceSummaryItem) {
-  return source.title ?? source.domain ?? source.url ?? "Untitled source";
+function sourceLabel(source: SourceSummaryItem, fallback: string) {
+  return source.title ?? source.domain ?? source.url ?? fallback;
 }
 
-function sourceLocation(source: SourceSummaryItem) {
-  return source.domain ?? source.url ?? "No URL";
+function sourceLocation(source: SourceSummaryItem, fallback: string) {
+  return source.domain ?? source.url ?? fallback;
 }
 
 function sortSources(sources: SourceSummaryItem[], sortMode: SortMode) {
@@ -37,6 +38,7 @@ function sortSources(sources: SourceSummaryItem[], sortMode: SortMode) {
 }
 
 export function AuditSourcesPage() {
+  const { t } = useTranslation("results");
   const params = useParams();
   const auditId = Number(params.auditId);
   const isValidAuditId = Number.isInteger(auditId) && auditId > 0;
@@ -56,7 +58,7 @@ export function AuditSourcesPage() {
   if (summary.isLoading) {
     return (
       <section className="rounded-md border border-border bg-surface px-5 py-10 text-sm text-subtle shadow-panel" role="status">
-        Loading sources...
+        {t("loadingSources")}
       </section>
     );
   }
@@ -66,7 +68,7 @@ export function AuditSourcesPage() {
       <section className="rounded-md border border-border bg-surface p-5 shadow-panel">
         <div className="flex items-center gap-2 text-sm text-red-700">
           <AlertTriangle className="size-4" aria-hidden="true" />
-          Unable to load sources.
+          {t("loadSourcesError")}
         </div>
       </section>
     );
@@ -79,17 +81,20 @@ export function AuditSourcesPage() {
           <AuditBreadcrumbs
             auditId={auditId}
             auditNumber={summary.data.audit_number}
-            current="Sources"
+            current={t("sources")}
           />
-          <h1 className="text-xl font-semibold text-ink">Source intelligence</h1>
+          <h1 className="text-xl font-semibold text-ink">{t("sourceIntelligence")}</h1>
           <p className="mt-1 text-sm text-subtle">
-            Audit #{summary.data.audit_number} · {summary.data.sources.length} sources
+            {t("auditSources", {
+              count: summary.data.sources.length,
+              number: summary.data.audit_number,
+            })}
           </p>
         </div>
         <Button asChild variant="ghost">
           <Link to={`/audits/${auditId}`}>
             <ArrowLeft className="size-4" aria-hidden="true" />
-            Back to detail
+            {t("backToDetail")}
           </Link>
         </Button>
       </div>
@@ -99,15 +104,15 @@ export function AuditSourcesPage() {
       {summary.data.sources.length > 0 ? (
         <div className="border-b border-border px-5 py-3">
           <label className="block max-w-xs text-sm font-medium text-ink">
-            Sort sources
+            {t("sort.label")}
             <select
               className="mt-1 h-10 w-full rounded-md border border-border bg-white px-3 text-sm text-ink"
               value={sortMode}
               onChange={(event) => setSortMode(event.target.value as SortMode)}
             >
-              <option value="citations">Citation count</option>
-              <option value="provider">Provider</option>
-              <option value="source_type">Source type</option>
+              <option value="citations">{t("sort.citations")}</option>
+              <option value="provider">{t("sort.provider")}</option>
+              <option value="source_type">{t("sort.sourceType")}</option>
             </select>
           </label>
         </div>
@@ -115,8 +120,8 @@ export function AuditSourcesPage() {
 
       {summary.data.sources.length === 0 ? (
         <div className="px-5 py-10">
-          <p className="text-sm font-medium text-ink">No sources yet</p>
-          <p className="mt-1 text-sm text-subtle">Source citations appear after audit runs return cited answers.</p>
+          <p className="text-sm font-medium text-ink">{t("empty.sourcesTitle")}</p>
+          <p className="mt-1 text-sm text-subtle">{t("empty.sourcesBody")}</p>
         </div>
       ) : null}
 
@@ -125,20 +130,20 @@ export function AuditSourcesPage() {
           <table className="min-w-full divide-y divide-border text-sm">
             <thead className="bg-muted text-left text-xs uppercase text-subtle">
               <tr>
-                <th className="px-5 py-3 font-semibold">Source</th>
-                <th className="px-3 py-3 font-semibold">Provider</th>
-                <th className="px-3 py-3 font-semibold">Type</th>
-                <th className="px-3 py-3 font-semibold">Citations</th>
-                <th className="px-3 py-3 font-semibold">Queries</th>
-                <th className="px-3 py-3 font-semibold">Quality</th>
+                <th className="px-5 py-3 font-semibold">{t("table.source")}</th>
+                <th className="px-3 py-3 font-semibold">{t("table.provider")}</th>
+                <th className="px-3 py-3 font-semibold">{t("table.type")}</th>
+                <th className="px-3 py-3 font-semibold">{t("table.citations")}</th>
+                <th className="px-3 py-3 font-semibold">{t("table.queries")}</th>
+                <th className="px-3 py-3 font-semibold">{t("table.quality")}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {sortedSources.map((source, index) => (
                 <tr key={`${source.url ?? source.domain ?? "source"}-${index}`}>
                   <td className="px-5 py-3">
-                    <p className="font-medium text-ink">{sourceLabel(source)}</p>
-                    <p className="text-subtle">{sourceLocation(source)}</p>
+                    <p className="font-medium text-ink">{sourceLabel(source, t("sections.untitledSource"))}</p>
+                    <p className="text-subtle">{sourceLocation(source, t("sections.noUrl"))}</p>
                   </td>
                   <td className="px-3 py-3 text-subtle">{source.provider ?? "N/A"}</td>
                   <td className="px-3 py-3 text-subtle">{source.source_type ?? "N/A"}</td>

@@ -1,0 +1,103 @@
+{
+  "summary": "Summary",
+  "results": "Results",
+  "sources": "Sources",
+  "backToDetail": "Back to detail",
+  "loadingResults": "Loading results...",
+  "loadResultsError": "Unable to load results.",
+  "auditResults": "Audit results",
+  "auditRows": "Audit #{{number}} · {{count}} rows",
+  "auditSources": "Audit #{{number}} · {{count}} sources",
+  "sourceIntelligence": "Source intelligence",
+  "loadingSources": "Loading sources...",
+  "loadSourcesError": "Unable to load sources.",
+  "filters": {
+    "provider": "Provider",
+    "allProviders": "All providers",
+    "runStatus": "Run status",
+    "allStatuses": "All statuses",
+    "visibility": "Visibility",
+    "allVisibility": "All visibility"
+  },
+  "visibility": {
+    "visible": "Visible",
+    "notVisible": "Not visible",
+    "unknown": "Unknown"
+  },
+  "table": {
+    "query": "Query",
+    "provider": "Provider",
+    "run": "Run",
+    "status": "Status",
+    "level": "Level",
+    "visibility": "Visibility",
+    "rank": "Rank",
+    "score": "Score",
+    "details": "Details",
+    "source": "Source",
+    "type": "Type",
+    "citations": "Citations",
+    "queries": "Queries",
+    "quality": "Quality"
+  },
+  "empty": {
+    "resultsTitle": "No results yet",
+    "resultsBody": "Run the audit before inspecting per-run outputs.",
+    "noFilterMatch": "No results match the current filters.",
+    "sourcesTitle": "No sources yet",
+    "sourcesBody": "Source citations appear after audit runs return cited answers."
+  },
+  "details": {
+    "prominence": "Prominence",
+    "sentiment": "Sentiment",
+    "recommendation": "Recommendation",
+    "sourceQuality": "Source quality",
+    "competitors": "Competitors",
+    "sources": "Sources",
+    "none": "None",
+    "unknown": "Unknown"
+  },
+  "summaryCards": {
+    "queries": "Queries",
+    "runs": "Runs",
+    "completion": "Completion",
+    "visibility": "Visibility",
+    "avgScore": "Avg score",
+    "weighted": "Weighted",
+    "critical": "Critical"
+  },
+  "sections": {
+    "noRunData": "No run data is available yet.",
+    "queryTypeDiagnostics": "Query-type diagnostics",
+    "queryType": "Query type",
+    "processed": "Processed",
+    "failed": "Failed",
+    "brandFound": "Brand found",
+    "queryTypeEmpty": "Query-type diagnostics will appear after the audit has processed typed seed queries.",
+    "providerSummary": "Provider summary",
+    "noProviderScores": "No provider scores yet.",
+    "criticalQueries": "Critical queries",
+    "viewRelatedRows": "View related rows",
+    "noCriticalQueries": "No critical queries detected.",
+    "competitorVisibility": "Competitor visibility",
+    "competitor": "Competitor",
+    "mentions": "Mentions",
+    "noCompetitors": "No competitors detected.",
+    "topSources": "Top sources",
+    "noSourceCitations": "No source citations yet.",
+    "untitledSource": "Untitled source",
+    "noUrl": "No URL"
+  },
+  "sort": {
+    "label": "Sort sources",
+    "citations": "Citation count",
+    "provider": "Provider",
+    "sourceType": "Source type"
+  },
+  "verdict": {
+    "correct": "Correct",
+    "partial": "Partial",
+    "incorrect": "Error",
+    "unknown": "Unknown"
+  }
+}

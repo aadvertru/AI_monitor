@@ -1,6 +1,8 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { UserPlus } from "lucide-react";
+import { useMemo } from "react";
 import { useForm } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router-dom";
 import { z } from "zod";
 
@@ -11,22 +13,30 @@ import { ApiError } from "../../lib/api/client";
 import { AuthLayout } from "./AuthLayout";
 import { useRegisterMutation } from "./session";
 
-const schema = z
-  .object({
-    email: z.string().email("Enter a valid email address."),
-    password: z.string().min(1, "Enter a password."),
-    confirmPassword: z.string().min(1, "Confirm your password."),
-  })
-  .refine((value) => value.password === value.confirmPassword, {
-    message: "Passwords must match.",
-    path: ["confirmPassword"],
-  });
-
-type RegisterForm = z.infer<typeof schema>;
+type RegisterForm = {
+  email: string;
+  password: string;
+  confirmPassword: string;
+};
 
 export function RegisterPage() {
   const navigate = useNavigate();
   const registerAccount = useRegisterMutation();
+  const { t } = useTranslation("auth");
+  const schema = useMemo(
+    () =>
+      z
+        .object({
+          email: z.string().email(t("errors.email")),
+          password: z.string().min(1, t("errors.passwordRegister")),
+          confirmPassword: z.string().min(1, t("errors.confirmPassword")),
+        })
+        .refine((value) => value.password === value.confirmPassword, {
+          message: t("errors.passwordsMatch"),
+          path: ["confirmPassword"],
+        }),
+    [t],
+  );
   const {
     formState: { errors },
     handleSubmit,
@@ -48,9 +58,9 @@ export function RegisterPage() {
   });
 
   return (
-    <AuthLayout title="Create account" subtitle="Start with an owned audit space">
+    <AuthLayout title={t("register")} subtitle={t("startWorkspace")}>
       <form className="space-y-4" noValidate onSubmit={onSubmit}>
-        <Field htmlFor="register-email" label="Email" error={errors.email?.message}>
+        <Field htmlFor="register-email" label={t("email")} error={errors.email?.message}>
           <Input
             id="register-email"
             type="email"
@@ -60,7 +70,7 @@ export function RegisterPage() {
         </Field>
         <Field
           htmlFor="register-password"
-          label="Password"
+          label={t("password")}
           error={errors.password?.message}
         >
           <Input
@@ -72,7 +82,7 @@ export function RegisterPage() {
         </Field>
         <Field
           htmlFor="register-confirm-password"
-          label="Confirm password"
+          label={t("confirmPassword")}
           error={errors.confirmPassword?.message}
         >
           <Input
@@ -86,18 +96,18 @@ export function RegisterPage() {
           <p className="text-sm text-red-700">
             {registerAccount.error instanceof ApiError
               ? registerAccount.error.message
-              : "Unable to create account."}
+              : t("errors.register")}
           </p>
         ) : null}
         <Button type="submit" className="w-full" disabled={registerAccount.isPending}>
           <UserPlus className="size-4" aria-hidden="true" />
-          Create account
+          {t("register")}
         </Button>
       </form>
       <p className="mt-4 text-center text-sm text-subtle">
-        Already registered?{" "}
+        {t("alreadyRegistered")}{" "}
         <Link className="font-medium text-brand-700 hover:underline" to="/login">
-          Sign in
+          {t("signIn")}
         </Link>
       </p>
     </AuthLayout>

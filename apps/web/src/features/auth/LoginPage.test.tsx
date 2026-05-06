@@ -42,6 +42,21 @@ describe("login page", () => {
     expect(await screen.findByText("Enter a valid email address.")).toBeInTheDocument();
   });
 
+  it("renders login labels and validation in Russian", async () => {
+    mockFetchSequence([{ body: { detail: "Unauthorized" }, status: 401 }]);
+    const user = userEvent.setup();
+
+    renderRoute("/login");
+
+    await user.selectOptions(await screen.findByLabelText("Interface language"), "ru");
+    expect(await screen.findByRole("heading", { name: "Войти" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Пароль")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Email"), "bad-email");
+    await user.click(screen.getByRole("button", { name: "Войти" }));
+
+    expect(await screen.findByText("Введите корректный email.")).toBeInTheDocument();
+  });
+
   it("shows login API errors", async () => {
     mockFetchSequence([
       { body: { detail: "Unauthorized" }, status: 401 },

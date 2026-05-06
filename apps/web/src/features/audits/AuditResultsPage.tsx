@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, ArrowLeft, ChevronDown, ChevronUp } from "lucide-react";
 import { Fragment, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Link, useParams } from "react-router-dom";
 
 import { Button } from "../../components/ui/Button";
@@ -17,14 +18,14 @@ function formatScore(value: number | null | undefined) {
   return value === null || value === undefined ? "N/A" : value.toFixed(2);
 }
 
-function visibilityLabel(value: boolean | null) {
+function visibilityLabel(value: boolean | null, t: (key: string) => string) {
   if (value === true) {
-    return "Visible";
+    return t("visibility.visible");
   }
   if (value === false) {
-    return "Not visible";
+    return t("visibility.notVisible");
   }
-  return "Unknown";
+  return t("visibility.unknown");
 }
 
 function visibilityClasses(value: boolean | null) {
@@ -50,7 +51,7 @@ function rowMatchesVisibility(row: AuditResultRow, filter: VisibilityFilter) {
   return row.visible_brand === null;
 }
 
-function componentScoreText(row: AuditResultRow) {
+function componentScoreText(row: AuditResultRow, t: (key: string) => string) {
   const scores = row.component_scores;
   if (!scores) {
     return "N/A";
@@ -58,14 +59,15 @@ function componentScoreText(row: AuditResultRow) {
 
   // Display backend component scores as-is; scoring formulas stay server-side.
   return [
-    `Prominence ${formatScore(scores.prominence_score)}`,
-    `Sentiment ${formatScore(scores.sentiment_score)}`,
-    `Recommendation ${formatScore(scores.recommendation_score)}`,
-    `Source quality ${formatScore(scores.source_quality_score)}`,
+    `${t("details.prominence")} ${formatScore(scores.prominence_score)}`,
+    `${t("details.sentiment")} ${formatScore(scores.sentiment_score)}`,
+    `${t("details.recommendation")} ${formatScore(scores.recommendation_score)}`,
+    `${t("details.sourceQuality")} ${formatScore(scores.source_quality_score)}`,
   ].join(" · ");
 }
 
 export function AuditResultsPage() {
+  const { t } = useTranslation(["results", "audits"]);
   const params = useParams();
   const auditId = Number(params.auditId);
   const isValidAuditId = Number.isInteger(auditId) && auditId > 0;
@@ -98,7 +100,7 @@ export function AuditResultsPage() {
   if (results.isLoading) {
     return (
       <section className="rounded-md border border-border bg-surface px-5 py-10 text-sm text-subtle shadow-panel" role="status">
-        Loading results...
+        {t("loadingResults")}
       </section>
     );
   }
@@ -108,7 +110,7 @@ export function AuditResultsPage() {
       <section className="rounded-md border border-border bg-surface p-5 shadow-panel">
         <div className="flex items-center gap-2 text-sm text-red-700">
           <AlertTriangle className="size-4" aria-hidden="true" />
-          Unable to load results.
+          {t("loadResultsError")}
         </div>
       </section>
     );
@@ -121,17 +123,20 @@ export function AuditResultsPage() {
           <AuditBreadcrumbs
             auditId={auditId}
             auditNumber={results.data.audit_number}
-            current="Results"
+            current={t("results")}
           />
-          <h1 className="text-xl font-semibold text-ink">Audit results</h1>
+          <h1 className="text-xl font-semibold text-ink">{t("auditResults")}</h1>
           <p className="mt-1 text-sm text-subtle">
-            Audit #{results.data.audit_number} · {results.data.total} rows
+            {t("auditRows", {
+              count: results.data.total,
+              number: results.data.audit_number,
+            })}
           </p>
         </div>
         <Button asChild variant="ghost">
           <Link to={`/audits/${auditId}`}>
             <ArrowLeft className="size-4" aria-hidden="true" />
-            Back to detail
+            {t("backToDetail")}
           </Link>
         </Button>
       </div>
@@ -141,13 +146,13 @@ export function AuditResultsPage() {
       {results.data.rows.length > 0 ? (
         <div className="grid gap-3 border-b border-border px-5 py-3 md:grid-cols-3">
           <label className="text-sm font-medium text-ink">
-            Provider
+            {t("filters.provider")}
             <select
               className="mt-1 h-10 w-full rounded-md border border-border bg-white px-3 text-sm text-ink"
               value={providerFilter}
               onChange={(event) => setProviderFilter(event.target.value)}
             >
-              <option value="all">All providers</option>
+              <option value="all">{t("filters.allProviders")}</option>
               {providers.map((provider) => (
                 <option value={provider} key={provider}>
                   {provider}
@@ -156,31 +161,31 @@ export function AuditResultsPage() {
             </select>
           </label>
           <label className="text-sm font-medium text-ink">
-            Run status
+            {t("filters.runStatus")}
             <select
               className="mt-1 h-10 w-full rounded-md border border-border bg-white px-3 text-sm text-ink"
               value={statusFilter}
               onChange={(event) => setStatusFilter(event.target.value as RunStatus | "all")}
             >
-              <option value="all">All statuses</option>
-              <option value="pending">Pending</option>
-              <option value="success">Success</option>
-              <option value="error">Error</option>
-              <option value="timeout">Timeout</option>
-              <option value="rate_limited">Rate limited</option>
+              <option value="all">{t("filters.allStatuses")}</option>
+              <option value="pending">{t("audits:runStatus.pending")}</option>
+              <option value="success">{t("audits:runStatus.success")}</option>
+              <option value="error">{t("audits:runStatus.error")}</option>
+              <option value="timeout">{t("audits:runStatus.timeout")}</option>
+              <option value="rate_limited">{t("audits:runStatus.rate_limited")}</option>
             </select>
           </label>
           <label className="text-sm font-medium text-ink">
-            Visibility
+            {t("filters.visibility")}
             <select
               className="mt-1 h-10 w-full rounded-md border border-border bg-white px-3 text-sm text-ink"
               value={visibilityFilter}
               onChange={(event) => setVisibilityFilter(event.target.value as VisibilityFilter)}
             >
-              <option value="all">All visibility</option>
-              <option value="visible">Visible</option>
-              <option value="not_visible">Not visible</option>
-              <option value="unknown">Unknown</option>
+              <option value="all">{t("filters.allVisibility")}</option>
+              <option value="visible">{t("visibility.visible")}</option>
+              <option value="not_visible">{t("visibility.notVisible")}</option>
+              <option value="unknown">{t("visibility.unknown")}</option>
             </select>
           </label>
         </div>
@@ -188,13 +193,13 @@ export function AuditResultsPage() {
 
       {results.data.rows.length === 0 ? (
         <div className="px-5 py-10">
-          <p className="text-sm font-medium text-ink">No results yet</p>
-          <p className="mt-1 text-sm text-subtle">Run the audit before inspecting per-run outputs.</p>
+          <p className="text-sm font-medium text-ink">{t("empty.resultsTitle")}</p>
+          <p className="mt-1 text-sm text-subtle">{t("empty.resultsBody")}</p>
         </div>
       ) : null}
 
       {results.data.rows.length > 0 && filteredRows.length === 0 ? (
-        <div className="px-5 py-10 text-sm text-subtle">No results match the current filters.</div>
+        <div className="px-5 py-10 text-sm text-subtle">{t("empty.noFilterMatch")}</div>
       ) : null}
 
       {filteredRows.length > 0 ? (
@@ -202,15 +207,15 @@ export function AuditResultsPage() {
           <table className="min-w-full divide-y divide-border text-sm">
             <thead className="bg-muted text-left text-xs uppercase text-subtle">
               <tr>
-                <th className="px-5 py-3 font-semibold">Query</th>
-                <th className="px-3 py-3 font-semibold">Provider</th>
-                <th className="px-3 py-3 font-semibold">Run</th>
-                <th className="px-3 py-3 font-semibold">Status</th>
-                <th className="px-3 py-3 font-semibold">Level</th>
-                <th className="px-3 py-3 font-semibold">Visibility</th>
-                <th className="px-3 py-3 font-semibold">Rank</th>
-                <th className="px-3 py-3 font-semibold">Score</th>
-                <th className="px-3 py-3 font-semibold">Details</th>
+                <th className="px-5 py-3 font-semibold">{t("table.query")}</th>
+                <th className="px-3 py-3 font-semibold">{t("table.provider")}</th>
+                <th className="px-3 py-3 font-semibold">{t("table.run")}</th>
+                <th className="px-3 py-3 font-semibold">{t("table.status")}</th>
+                <th className="px-3 py-3 font-semibold">{t("table.level")}</th>
+                <th className="px-3 py-3 font-semibold">{t("table.visibility")}</th>
+                <th className="px-3 py-3 font-semibold">{t("table.rank")}</th>
+                <th className="px-3 py-3 font-semibold">{t("table.score")}</th>
+                <th className="px-3 py-3 font-semibold">{t("table.details")}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -232,7 +237,7 @@ export function AuditResultsPage() {
                     <td className="px-3 py-3 text-subtle">{row.scdl_level}</td>
                     <td className="px-3 py-3">
                       <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${visibilityClasses(row.visible_brand)}`}>
-                        {visibilityLabel(row.visible_brand)}
+                        {visibilityLabel(row.visible_brand, t)}
                       </span>
                     </td>
                     <td className="px-3 py-3 text-subtle">
@@ -252,22 +257,23 @@ export function AuditResultsPage() {
                         ) : (
                           <ChevronDown className="size-4" aria-hidden="true" />
                         )}
-                        Details
+                        {t("table.details")}
                       </Button>
                     </td>
                   </tr>
                   {expandedRunId === row.run_id ? (
                     <tr>
                       <td className="bg-slate-50 px-5 py-3 text-sm text-subtle" colSpan={9}>
-                        <p>{componentScoreText(row)}</p>
+                        <p>{componentScoreText(row, t)}</p>
                         <p className="mt-2">
-                          Competitors: {row.competitors.length > 0 ? row.competitors.join(", ") : "None"}
+                          {t("details.competitors")}:{" "}
+                          {row.competitors.length > 0 ? row.competitors.join(", ") : t("details.none")}
                         </p>
                         <p className="mt-1">
-                          Sources:{" "}
+                          {t("details.sources")}:{" "}
                           {row.sources.length > 0
-                            ? row.sources.map((source) => source.domain ?? source.url ?? "Unknown").join(", ")
-                            : "None"}
+                            ? row.sources.map((source) => source.domain ?? source.url ?? t("details.unknown")).join(", ")
+                            : t("details.none")}
                         </p>
                       </td>
                     </tr>

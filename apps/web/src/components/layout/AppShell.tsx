@@ -1,12 +1,15 @@
 import { BarChart3, LogOut, ShieldCheck } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { NavLink, Outlet } from "react-router-dom";
 
 import { Button } from "../ui/Button";
+import { LanguageSwitcher } from "./LanguageSwitcher";
 import { useCurrentUser, useLogoutMutation } from "../../features/auth/session";
 
 export function AppShell() {
   const { data: user } = useCurrentUser();
   const logout = useLogoutMutation();
+  const { t } = useTranslation(["common", "navigation"]);
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -18,25 +21,28 @@ export function AppShell() {
             </div>
             <div>
               <p className="text-sm font-semibold leading-5 text-ink">
-                AI Brand Visibility Monitor
+                {t("common:appName")}
               </p>
               <p className="text-xs text-subtle">{user?.email}</p>
             </div>
           </div>
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => logout.mutate()}
-            disabled={logout.isPending}
-          >
-            <LogOut className="size-4" aria-hidden="true" />
-            Sign out
-          </Button>
+          <div className="flex items-center gap-2">
+            <LanguageSwitcher />
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => logout.mutate()}
+              disabled={logout.isPending}
+            >
+              <LogOut className="size-4" aria-hidden="true" />
+              {t("navigation:signOut")}
+            </Button>
+          </div>
         </div>
       </header>
       <div className="mx-auto grid max-w-7xl grid-cols-1 gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[220px_1fr] lg:px-8">
         <aside className="rounded-md border border-border bg-surface p-2 shadow-panel">
-          <nav aria-label="Primary">
+          <nav aria-label={t("navigation:primary")}>
             <NavLink
               to="/audits"
               className={({ isActive }) =>
@@ -49,7 +55,7 @@ export function AppShell() {
               }
             >
               <BarChart3 className="size-4" aria-hidden="true" />
-              Audits
+              {t("navigation:audits")}
             </NavLink>
           </nav>
         </aside>

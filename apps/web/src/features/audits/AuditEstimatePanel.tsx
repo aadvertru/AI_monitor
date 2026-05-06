@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+
 import { ApiError } from "../../lib/api/client";
 import type { AuditEstimateResponse } from "../../lib/api/types";
 
@@ -8,11 +10,11 @@ type AuditEstimatePanelProps = {
   optimisticTokens: number;
 };
 
-function estimateErrorText(error: unknown) {
+function estimateErrorText(error: unknown, fallback: string) {
   if (error instanceof ApiError) {
     return error.message;
   }
-  return "Unable to estimate audit.";
+  return fallback;
 }
 
 export function AuditEstimatePanel({
@@ -21,19 +23,24 @@ export function AuditEstimatePanel({
   isLoading,
   optimisticTokens,
 }: AuditEstimatePanelProps) {
+  const { t } = useTranslation("audits");
+
   return (
     <div className="space-y-2 text-sm">
       <p className="font-medium text-ink">
-        Estimated audit cost: <span className="text-brand-700">{optimisticTokens} tokens</span>
+        {t("estimate.cost")}{" "}
+        <span className="text-brand-700">
+          {t("estimate.tokens", { count: optimisticTokens })}
+        </span>
       </p>
       {isLoading ? (
         <p className="text-subtle" role="status">
-          Estimating checks...
+          {t("estimate.estimating")}
         </p>
       ) : null}
       {estimate ? (
         <p className={estimate.over_cap ? "font-medium text-red-700" : "text-subtle"}>
-          This audit will run {estimate.estimated_runs} checks.
+          {t("estimate.checks", { count: estimate.estimated_runs })}
         </p>
       ) : null}
       {(estimate?.violations ?? []).map((violation) => (
@@ -46,7 +53,11 @@ export function AuditEstimatePanel({
           {warning}
         </p>
       ))}
-      {error ? <p className="text-red-700">{estimateErrorText(error)}</p> : null}
+      {error ? (
+        <p className="text-red-700">
+          {estimateErrorText(error, t("estimate.error"))}
+        </p>
+      ) : null}
     </div>
   );
 }

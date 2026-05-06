@@ -11,6 +11,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { Button } from "../../components/ui/Button";
@@ -61,11 +62,8 @@ function pipelineStatus(response: AuditPipelineRunResponse) {
   return response.final_audit_status ?? response.post_processing?.audit_status ?? null;
 }
 
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : "Unable to start audit.";
-}
-
 export function AuditDetailPage() {
+  const { t } = useTranslation("audits");
   const params = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -173,11 +171,13 @@ export function AuditDetailPage() {
     void detail.refetch();
     void summary.refetch();
   };
+  const errorMessage = (error: unknown) =>
+    error instanceof Error ? error.message : t("errors.start");
 
   if (isLoading) {
     return (
       <section className="rounded-md border border-border bg-surface px-5 py-10 text-sm text-subtle shadow-panel" role="status">
-        Loading audit...
+        {t("errors.loadingAudit")}
       </section>
     );
   }
@@ -187,10 +187,10 @@ export function AuditDetailPage() {
       <section className="rounded-md border border-border bg-surface p-5 shadow-panel">
         <div className="flex items-center gap-2 text-sm text-red-700">
           <AlertTriangle className="size-4" aria-hidden="true" />
-          Audit unavailable.
+          {t("errors.auditUnavailable")}
         </div>
         <Button asChild className="mt-4" variant="secondary">
-          <Link to="/audits">Back to audits</Link>
+          <Link to="/audits">{t("backToAudits")}</Link>
         </Button>
       </section>
     );
@@ -215,18 +215,18 @@ export function AuditDetailPage() {
           <Button asChild variant="ghost">
             <Link to="/audits">
               <ArrowLeft className="size-4" aria-hidden="true" />
-              Back
+              {t("back")}
             </Link>
           </Button>
           <Button type="button" variant="secondary" onClick={refresh}>
             <RefreshCw className="size-4" aria-hidden="true" />
-            Refresh
+            {t("refresh")}
           </Button>
           {canEdit ? (
             <Button asChild variant="secondary">
               <Link to={`/audits/${auditId}/edit`}>
                 <Pencil className="size-4" aria-hidden="true" />
-                Edit setup
+                {t("editSetup")}
               </Link>
             </Button>
           ) : null}
@@ -236,7 +236,7 @@ export function AuditDetailPage() {
               state={{ auditDefaults: auditDetailToFormDefaults(detail.data) }}
             >
               <Copy className="size-4" aria-hidden="true" />
-              Duplicate audit
+              {t("duplicateAudit")}
             </Link>
           </Button>
           {isArchived ? (
@@ -247,7 +247,7 @@ export function AuditDetailPage() {
                 onClick={() => restoreAuditMutation.mutate()}
               >
                 <RotateCcw className="size-4" aria-hidden="true" />
-                Restore
+                {t("restore")}
               </Button>
               <Button
                 type="button"
@@ -259,7 +259,7 @@ export function AuditDetailPage() {
                 }}
               >
                 <Trash2 className="size-4" aria-hidden="true" />
-                Delete permanently
+                {t("deletePermanently")}
               </Button>
             </>
           ) : (
@@ -273,7 +273,7 @@ export function AuditDetailPage() {
               }}
             >
               <Archive className="size-4" aria-hidden="true" />
-              Archive
+              {t("archive")}
             </Button>
           )}
           <Button
@@ -282,7 +282,11 @@ export function AuditDetailPage() {
             onClick={() => runAuditMutation.mutate()}
           >
             <Play className="size-4" aria-hidden="true" />
-            {runAuditMutation.isPending ? "Starting" : isRunning ? "Running" : "Start audit"}
+            {runAuditMutation.isPending
+              ? t("starting")
+              : isRunning
+                ? t("running")
+                : t("startAudit")}
           </Button>
         </div>
       </div>

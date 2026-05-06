@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 type AuditView = "summary" | "results" | "sources";
@@ -7,15 +8,17 @@ type AuditViewTabsProps = {
   active?: AuditView;
 };
 
-const auditViews: Array<{ key: AuditView; label: string; path: string }> = [
-  { key: "summary", label: "Summary", path: "" },
-  { key: "results", label: "Results", path: "results" },
-  { key: "sources", label: "Sources", path: "sources" },
+const auditViews: Array<{ key: AuditView; labelKey: string; path: string }> = [
+  { key: "summary", labelKey: "views.summary", path: "" },
+  { key: "results", labelKey: "views.results", path: "results" },
+  { key: "sources", labelKey: "views.sources", path: "sources" },
 ];
 
 export function AuditViewTabs({ auditId, active }: AuditViewTabsProps) {
+  const { t } = useTranslation("audits");
+
   return (
-    <nav aria-label="Audit views" className="border-b border-border px-5">
+    <nav aria-label={t("views.label")} className="border-b border-border px-5">
       <div className="flex flex-wrap gap-1 py-2">
         {auditViews.map((view) => {
           const isActive = active === view.key;
@@ -31,7 +34,7 @@ export function AuditViewTabs({ auditId, active }: AuditViewTabsProps) {
               key={view.key}
               to={view.path ? `/audits/${auditId}/${view.path}` : `/audits/${auditId}`}
             >
-              {view.label}
+              {t(view.labelKey)}
             </Link>
           );
         })}

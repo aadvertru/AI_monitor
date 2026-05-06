@@ -1,5 +1,6 @@
 import { Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import type {
   AuditTarget,
@@ -125,6 +126,7 @@ function targetSignature(targets: AuditTarget[] | undefined) {
 }
 
 export function AuditTargetSelector({ value, onChange }: AuditTargetSelectorProps) {
+  const { t } = useTranslation("audits");
   const catalog = useModelCatalog();
   const families = catalog.data?.families ?? [];
   const [blocks, setBlocks] = useState<FamilyBlock[]>([]);
@@ -151,7 +153,7 @@ export function AuditTargetSelector({ value, onChange }: AuditTargetSelectorProp
   if (catalog.isLoading || catalog.isPending) {
     return (
       <div className="rounded-md border border-border bg-muted p-4 text-sm text-subtle" role="status">
-        Loading model catalog...
+        {t("targets.loading")}
       </div>
     );
   }
@@ -159,7 +161,7 @@ export function AuditTargetSelector({ value, onChange }: AuditTargetSelectorProp
   if (catalog.isError) {
     return (
       <div className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700" role="alert">
-        Unable to load model catalog.
+        {t("targets.loadError")}
       </div>
     );
   }
@@ -167,7 +169,7 @@ export function AuditTargetSelector({ value, onChange }: AuditTargetSelectorProp
   if (families.length === 0) {
     return (
       <div className="rounded-md border border-border bg-muted p-4 text-sm text-subtle" role="status">
-        No model catalog entries are available.
+        {t("targets.empty")}
       </div>
     );
   }
@@ -179,9 +181,9 @@ export function AuditTargetSelector({ value, onChange }: AuditTargetSelectorProp
     <div className="grid gap-3">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold text-ink">AI model targets</h2>
+          <h2 className="text-sm font-semibold text-ink">{t("targets.title")}</h2>
           <p className="mt-1 text-sm text-subtle">
-            Select AI families, models, and SCDL levels for this audit.
+            {t("targets.subtitle")}
           </p>
         </div>
         <button
@@ -196,7 +198,7 @@ export function AuditTargetSelector({ value, onChange }: AuditTargetSelectorProp
           type="button"
         >
           <Plus className="h-4 w-4" aria-hidden="true" />
-          Add family
+          {t("targets.addFamily")}
         </button>
       </div>
 
@@ -216,13 +218,13 @@ export function AuditTargetSelector({ value, onChange }: AuditTargetSelectorProp
               : undefined
           }
           selectedFamilyIds={selectedFamilyIds}
-          title={`AI family ${index + 1}`}
+          title={t("targets.family", { index: index + 1 })}
         />
       ))}
 
       {targets.length === 0 ? (
         <p className="text-sm text-red-600" role="alert">
-          Select at least one model target.
+          {t("targets.selectOne")}
         </p>
       ) : null}
     </div>
@@ -244,6 +246,7 @@ function FamilySelectorBlock({
   selectedFamilyIds: Set<string>;
   title: string;
 }) {
+  const { t } = useTranslation("audits");
   const family = families.find((item) => item.id === block.familyId) ?? families[0];
   const selectedModels = family.models.filter((model) =>
     block.selectedModelIds.includes(model.modelId),
@@ -279,7 +282,7 @@ function FamilySelectorBlock({
         </label>
         {onRemove ? (
           <button
-            aria-label={`Remove ${family.label}`}
+            aria-label={t("targets.removeFamily", { family: family.label })}
             className="mt-6 inline-flex h-10 w-10 items-center justify-center rounded-md border border-border text-subtle hover:bg-muted"
             onClick={onRemove}
             type="button"
@@ -290,7 +293,7 @@ function FamilySelectorBlock({
       </div>
 
       <fieldset className="mt-4">
-        <legend className="text-sm font-medium text-ink">Models</legend>
+        <legend className="text-sm font-medium text-ink">{t("targets.models")}</legend>
         <div className="mt-2 grid gap-2 sm:grid-cols-2">
           {family.models.map((model) => (
             <label
@@ -346,6 +349,7 @@ function ModelLevelToggles({
   model: ModelCatalogModel;
   onChange: (block: FamilyBlock) => void;
 }) {
+  const { t } = useTranslation("audits");
   const levels = block.levelsByModelId[model.modelId] ?? { L1: true };
 
   function setLevel(level: SCDLLevel, checked: boolean) {
@@ -378,7 +382,7 @@ function ModelLevelToggles({
         </label>
         <label
           className="inline-flex items-center gap-2 text-sm"
-          title={model.supportsL2Gateway ? undefined : "L2 is not available for this model."}
+          title={model.supportsL2Gateway ? undefined : t("targets.l2Unavailable")}
         >
           <input
             aria-label={`${model.displayName} L2`}
@@ -391,7 +395,7 @@ function ModelLevelToggles({
           L2
           {model.l2Experimental ? (
             <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
-              Experimental
+              {t("targets.experimental")}
             </span>
           ) : null}
         </label>

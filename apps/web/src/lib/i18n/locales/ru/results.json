@@ -1,0 +1,103 @@
+{
+  "summary": "Сводка",
+  "results": "Результаты",
+  "sources": "Источники",
+  "backToDetail": "Назад к аудиту",
+  "loadingResults": "Загрузка результатов...",
+  "loadResultsError": "Не удалось загрузить результаты.",
+  "auditResults": "Результаты аудита",
+  "auditRows": "Аудит #{{number}} · строк: {{count}}",
+  "auditSources": "Аудит #{{number}} · источников: {{count}}",
+  "sourceIntelligence": "Анализ источников",
+  "loadingSources": "Загрузка источников...",
+  "loadSourcesError": "Не удалось загрузить источники.",
+  "filters": {
+    "provider": "Провайдер",
+    "allProviders": "Все провайдеры",
+    "runStatus": "Статус запуска",
+    "allStatuses": "Все статусы",
+    "visibility": "Видимость",
+    "allVisibility": "Вся видимость"
+  },
+  "visibility": {
+    "visible": "Виден",
+    "notVisible": "Не виден",
+    "unknown": "Неизвестно"
+  },
+  "table": {
+    "query": "Запрос",
+    "provider": "Провайдер",
+    "run": "Запуск",
+    "status": "Статус",
+    "level": "Уровень",
+    "visibility": "Видимость",
+    "rank": "Позиция",
+    "score": "Оценка",
+    "details": "Детали",
+    "source": "Источник",
+    "type": "Тип",
+    "citations": "Цитаты",
+    "queries": "Запросы",
+    "quality": "Качество"
+  },
+  "empty": {
+    "resultsTitle": "Результатов пока нет",
+    "resultsBody": "Запустите аудит, чтобы посмотреть ответы по каждому запуску.",
+    "noFilterMatch": "Под текущие фильтры нет результатов.",
+    "sourcesTitle": "Источников пока нет",
+    "sourcesBody": "Цитаты источников появятся после запусков с ответами со ссылками."
+  },
+  "details": {
+    "prominence": "Заметность",
+    "sentiment": "Тональность",
+    "recommendation": "Рекомендация",
+    "sourceQuality": "Качество источников",
+    "competitors": "Конкуренты",
+    "sources": "Источники",
+    "none": "Нет",
+    "unknown": "Неизвестно"
+  },
+  "summaryCards": {
+    "queries": "Запросы",
+    "runs": "Запуски",
+    "completion": "Завершение",
+    "visibility": "Видимость",
+    "avgScore": "Средняя оценка",
+    "weighted": "Взвешенная",
+    "critical": "Критичные"
+  },
+  "sections": {
+    "noRunData": "Данных запусков пока нет.",
+    "queryTypeDiagnostics": "Диагностика по типам запросов",
+    "queryType": "Тип запроса",
+    "processed": "Обработано",
+    "failed": "Ошибки",
+    "brandFound": "Бренд найден",
+    "queryTypeEmpty": "Диагностика по типам запросов появится после обработки типизированных стартовых запросов.",
+    "providerSummary": "Сводка по провайдерам",
+    "noProviderScores": "Оценок провайдеров пока нет.",
+    "criticalQueries": "Критичные запросы",
+    "viewRelatedRows": "Открыть связанные строки",
+    "noCriticalQueries": "Критичные запросы не найдены.",
+    "competitorVisibility": "Видимость конкурентов",
+    "competitor": "Конкурент",
+    "mentions": "Упоминания",
+    "noCompetitors": "Конкуренты не найдены.",
+    "topSources": "Топ источников",
+    "noSourceCitations": "Цитат источников пока нет.",
+    "untitledSource": "Источник без названия",
+    "noUrl": "URL отсутствует"
+  },
+  "sort": {
+    "label": "Сортировка источников",
+    "citations": "Количество цитат",
+    "provider": "Провайдер",
+    "sourceType": "Тип источника"
+  },
+  "verdict": {
+    "correct": "Верно",
+    "partial": "Частично",
+    "incorrect": "Ошибка",
+    "unknown": "Неизвестно"
+  }
+}

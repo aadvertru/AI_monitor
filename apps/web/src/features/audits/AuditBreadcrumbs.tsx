@@ -1,4 +1,5 @@
 import { ChevronRight } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 type AuditBreadcrumbsProps = {
@@ -8,12 +9,15 @@ type AuditBreadcrumbsProps = {
 };
 
 export function AuditBreadcrumbs({ auditId, auditNumber, current }: AuditBreadcrumbsProps) {
-  const auditLabel = auditNumber ? `Audit #${auditNumber}` : "Audit";
+  const { t } = useTranslation("audits");
+  const auditLabel = auditNumber
+    ? t("breadcrumbs.auditNumber", { number: auditNumber })
+    : t("breadcrumbs.audit");
 
   return (
-    <nav aria-label="Breadcrumb" className="mb-3 flex flex-wrap items-center gap-1 text-xs text-subtle">
+    <nav aria-label={t("breadcrumbs.label")} className="mb-3 flex flex-wrap items-center gap-1 text-xs text-subtle">
       <Link className="font-medium text-brand-700 hover:underline" to="/audits">
-        Audits
+        {t("title")}
       </Link>
       {auditId ? (
         <>

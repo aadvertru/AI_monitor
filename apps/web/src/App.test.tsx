@@ -50,4 +50,20 @@ describe("app shell", () => {
       expect.objectContaining({ method: "POST", credentials: "include" }),
     );
   });
+
+  it("renders shell navigation in Russian after locale switch", async () => {
+    mockFetchSequence([
+      { body: currentUserFixture },
+      { body: auditListFixture },
+    ]);
+    const user = userEvent.setup();
+
+    renderRoute("/audits");
+
+    await screen.findByRole("heading", { name: "Audits" });
+    await user.selectOptions(screen.getByLabelText("Interface language"), "ru");
+
+    expect(await screen.findByRole("link", { name: /Аудиты/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Выйти/ })).toBeInTheDocument();
+  });
 });

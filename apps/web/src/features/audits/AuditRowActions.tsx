@@ -1,5 +1,6 @@
 import { MoreVertical } from "lucide-react";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 import { Button } from "../../components/ui/Button";
@@ -22,6 +23,7 @@ export function AuditRowActions({
   onRefresh,
   onRestore,
 }: AuditRowActionsProps) {
+  const { t } = useTranslation("audits");
   const [isOpen, setIsOpen] = useState(false);
   const auditId = audit.audit_id;
   const duplicateState = {
@@ -40,7 +42,7 @@ export function AuditRowActions({
         variant="ghost"
         aria-expanded={isOpen}
         aria-haspopup="menu"
-        aria-label={`Actions for audit #${auditId}`}
+        aria-label={t("rowActions.menuLabel", { id: auditId })}
         onClick={() => setIsOpen((current) => !current)}
       >
         <MoreVertical className="size-4" aria-hidden="true" />
@@ -61,7 +63,7 @@ export function AuditRowActions({
                   onRestore();
                 }}
               >
-                Restore
+                {t("rowActions.restore")}
               </button>
               <button
                 className="block w-full px-3 py-2 text-left text-red-700 hover:bg-red-50"
@@ -72,7 +74,7 @@ export function AuditRowActions({
                   onDelete();
                 }}
               >
-                Delete permanently
+                {t("rowActions.deletePermanently")}
               </button>
             </>
           ) : (
@@ -83,7 +85,7 @@ export function AuditRowActions({
                 to={`/audits/${auditId}`}
                 onClick={() => setIsOpen(false)}
               >
-                Open
+                {t("rowActions.open")}
               </Link>
               <button
                 className="block w-full px-3 py-2 text-left text-ink hover:bg-muted"
@@ -94,7 +96,7 @@ export function AuditRowActions({
                   onRefresh();
                 }}
               >
-                Refresh
+                {t("rowActions.refresh")}
               </button>
               <Link
                 className="block px-3 py-2 text-ink hover:bg-muted"
@@ -103,7 +105,7 @@ export function AuditRowActions({
                 state={duplicateState}
                 onClick={() => setIsOpen(false)}
               >
-                Duplicate
+                {t("rowActions.duplicate")}
               </Link>
               <button
                 className="block w-full px-3 py-2 text-left text-red-700 hover:bg-red-50"
@@ -114,7 +116,7 @@ export function AuditRowActions({
                   onArchive();
                 }}
               >
-                Archive
+                {t("rowActions.archive")}
               </button>
             </>
           )}

@@ -45,6 +45,22 @@ describe("register page", () => {
     expect(screen.getByText("Enter a password.")).toBeInTheDocument();
   });
 
+  it("renders register labels and validation in Russian", async () => {
+    mockFetchSequence([{ body: { detail: "Unauthorized" }, status: 401 }]);
+    const user = userEvent.setup();
+
+    renderRoute("/register");
+
+    await user.selectOptions(await screen.findByLabelText("Interface language"), "ru");
+    expect(
+      await screen.findByRole("heading", { name: "Создать аккаунт" }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Создать аккаунт" }));
+
+    expect(await screen.findByText("Введите корректный email.")).toBeInTheDocument();
+    expect(screen.getByText("Введите пароль.")).toBeInTheDocument();
+  });
+
   it("shows register API errors", async () => {
     mockFetchSequence([
       { body: { detail: "Unauthorized" }, status: 401 },

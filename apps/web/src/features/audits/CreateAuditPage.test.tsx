@@ -93,6 +93,20 @@ describe("create audit page", () => {
     expect(await screen.findByText("Enter a brand name.")).toBeInTheDocument();
   });
 
+  it("renders create labels and validation in Russian without translating raw input", async () => {
+    await openCreatePage();
+    const user = userEvent.setup();
+
+    await user.selectOptions(screen.getByLabelText("Interface language"), "ru");
+    expect(await screen.findByRole("heading", { name: "Создать аудит" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Название бренда")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Стартовый запрос 1"), "Nike raw query");
+    await user.click(screen.getByRole("button", { name: "Создать аудит" }));
+
+    expect(await screen.findByText("Введите название бренда.")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Nike raw query")).toBeInTheDocument();
+  });
+
   it("validates required brand domain before API submission", async () => {
     await openCreatePage();
     const user = userEvent.setup();

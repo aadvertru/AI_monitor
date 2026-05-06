@@ -1,0 +1,16 @@
+{
+  "appName": "AI Brand Visibility Monitor",
+  "actions": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "back": "Back",
+    "refresh": "Refresh",
+    "loading": "Loading..."
+  },
+  "language": {
+    "label": "Language",
+    "switcherLabel": "Interface language",
+    "english": "English",
+    "russian": "Russian"
+  }
+}

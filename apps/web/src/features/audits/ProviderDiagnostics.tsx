@@ -1,4 +1,5 @@
 import { AlertTriangle } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import type { ProviderDiagnostic } from "../../lib/api/types";
 
@@ -39,6 +40,7 @@ export function ProviderDiagnostics({
   diagnostics?: ProviderDiagnostic[] | null;
   compact?: boolean;
 }) {
+  const { t } = useTranslation("audits");
   const safeDiagnostics = dedupeDiagnostics(diagnostics ?? []);
 
   if (safeDiagnostics.length === 0) {
@@ -49,20 +51,22 @@ export function ProviderDiagnostics({
     <div className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-900">
       <div className="flex items-center gap-2 font-semibold">
         <AlertTriangle className="size-4" aria-hidden="true" />
-        Provider issue
+        {t("diagnostics.title")}
       </div>
       <ul className={compact ? "mt-2 space-y-2" : "mt-3 space-y-3"}>
         {safeDiagnostics.map((diagnostic) => (
           <li
             key={`${diagnostic.code}-${diagnostic.provider}-${diagnostic.level ?? ""}-${diagnostic.model ?? ""}`}
           >
-            <p>{safeText(diagnostic.message)}</p>
+            <p>{safeText(diagnostic.message, t("diagnostics.fallback"))}</p>
             <p className="mt-1 text-xs text-red-800">
-              {safeText(diagnostic.provider, "provider")}
+              {safeText(diagnostic.provider, t("diagnostics.providerFallback"))}
               {diagnostic.level ? ` - ${safeText(diagnostic.level)}` : ""}
               {diagnostic.model ? ` - ${safeText(diagnostic.model)}` : ""}
-              {diagnostic.retryable ? " - retryable" : ""}
-              {diagnostic.count > 1 ? ` - ${diagnostic.count} runs` : ""}
+              {diagnostic.retryable ? ` - ${t("diagnostics.retryable")}` : ""}
+              {diagnostic.count > 1
+                ? ` - ${t("diagnostics.runs", { count: diagnostic.count })}`
+                : ""}
             </p>
           </li>
         ))}
@@ -76,12 +80,15 @@ export function ProviderIssueText({
 }: {
   diagnostic?: ProviderDiagnostic | null;
 }) {
+  const { t } = useTranslation("audits");
   if (!diagnostic) {
     return null;
   }
   return (
     <p className="mt-1 text-xs text-red-700">
-      Provider issue: {safeText(diagnostic.message)}
+      {t("diagnostics.inline", {
+        message: safeText(diagnostic.message, t("diagnostics.fallback")),
+      })}
     </p>
   );
 }
