@@ -164,6 +164,59 @@ class SeedQueryGenerationEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(service_payload.brand_domain, "seopaja.fi")
         self.assertEqual(service_payload.existing_queries[0].source, "user")
 
+    async def test_paa_request_fields_and_source_are_forwarded(self) -> None:
+        user = await self._create_user()
+        payload = GenerateSeedQuerySuggestionsRequest.model_validate(
+            {
+                "brand_name": "Seopaja",
+                "use_paa": True,
+                "language": "en",
+                "country": "US",
+                "paa_seed_query": "SEO tools",
+                "existing_queries": [
+                    {
+                        "text": "Existing PAA query",
+                        "type": "brand_direct",
+                        "source": "paa",
+                    }
+                ],
+            }
+        )
+        service = AsyncMock(
+            return_value=GeneratedSeedQueriesResult(
+                suggestions=[
+                    GeneratedSeedQuerySuggestion(
+                        text="People also ask query",
+                        type="problem_solution",
+                        source="paa",
+                        metadata={"paa_provider": "mock", "language": "en"},
+                    )
+                ],
+                warnings=["PAA warning"],
+            )
+        )
+
+        async with self.session_factory() as session:
+            with (
+                patch.dict("os.environ", AUTH_ENV, clear=True),
+                patch("apps.api.main.generate_seed_query_suggestions", service),
+            ):
+                response = await suggest_seed_queries(
+                    payload=payload,
+                    request=self._authenticated_request(user),
+                    session=session,
+                )
+
+        self.assertEqual(response.suggestions[0].source, "paa")
+        self.assertEqual(response.suggestions[0].metadata["paa_provider"], "mock")
+        self.assertEqual(response.warnings, ["PAA warning"])
+        service_payload = service.await_args.args[0]
+        self.assertTrue(service_payload.use_paa)
+        self.assertEqual(service_payload.language, "en")
+        self.assertEqual(service_payload.country, "US")
+        self.assertEqual(service_payload.paa_seed_query, "SEO tools")
+        self.assertEqual(service_payload.existing_queries[0].source, "paa")
+
     async def test_generation_validation_error_returns_422(self) -> None:
         user = await self._create_user()
         payload = GenerateSeedQuerySuggestionsRequest.model_validate(
@@ -363,6 +416,22 @@ class SeedQueryGenerationEndpointTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "brand_domain": "https://seopaja.fi/page",
                     "use_domain": True,
+                }
+            )
+
+    def test_unknown_seed_query_source_is_rejected_by_request_schema(self) -> None:
+        with self.assertRaises(ValidationError):
+            GenerateSeedQuerySuggestionsRequest.model_validate(
+                {
+                    "brand_name": "Seopaja",
+                    "use_paa": True,
+                    "existing_queries": [
+                        {
+                            "text": "Existing query",
+                            "type": "brand_direct",
+                            "source": "crawler",
+                        }
+                    ],
                 }
             )
 

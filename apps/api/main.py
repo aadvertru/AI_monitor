@@ -69,6 +69,10 @@ from libs.analysis.aggregation import (
 )
 from libs.control.job_scheduler import schedule_jobs_for_audit
 from libs.control.query_deduplication import deduplicate_queries
+from libs.execution.domain_check import (
+    DOMAIN_CHECK_CACHE_TTL_SECONDS,
+    check_brand_domain_availability,
+)
 from libs.execution.openrouter_model_catalog import (
     ModelCatalogResponse,
     get_openrouter_model_catalog,
@@ -213,7 +217,7 @@ class SeedQueryItemRequest(BaseModel):
         "alternative",
         "problem_solution",
     ] | None = None
-    source: Literal["user", "ai"] = "user"
+    source: Literal["user", "ai", "paa"] = "user"
 
     @field_validator("text")
     @classmethod
@@ -222,8 +226,8 @@ class SeedQueryItemRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_ai_query_type(self) -> SeedQueryItemRequest:
-        if self.source == "ai" and self.type is None:
-            raise ValueError("seed query type is required when source is ai.")
+        if self.source in {"ai", "paa"} and self.type is None:
+            raise ValueError("seed query type is required when source is ai or paa.")
         return self
 
 
@@ -511,6 +515,10 @@ class GenerateSeedQuerySuggestionsRequest(BaseModel):
     brand_description: str | None = None
     use_domain: bool = False
     use_description: bool = False
+    use_paa: bool = False
+    language: str | None = None
+    country: str | None = None
+    paa_seed_query: str | None = None
     count: int = Field(default=10, ge=1, le=10)
     existing_queries: list[SeedQueryItemRequest] = Field(default_factory=list)
 
@@ -609,6 +617,33 @@ class ProfilePreferencesUpdateRequest(BaseModel):
     email_notifications: bool
     audit_completed_notifications: bool
     provider_error_notifications: bool
+
+
+class BrandDomainCheckRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    domain: str = Field(min_length=1, max_length=2048)
+
+
+class BrandDomainCheckResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    input: str
+    normalized_domain: str | None
+    status: Literal[
+        "reachable",
+        "dns_failed",
+        "http_failed",
+        "timeout",
+        "invalid_domain",
+        "blocked_private_network",
+        "unknown",
+    ]
+    http_status: int | None
+    checked_at: datetime
+    query_generation_allowed: bool
+    reason: str | None
+    cache_ttl_seconds: int = DOMAIN_CHECK_CACHE_TTL_SECONDS
 
 
 class LoginRequest(BaseModel):
@@ -2101,6 +2136,17 @@ async def update_profile_preferences(
         ) from exc
 
 
+@app.post("/brand-domain/check", response_model=BrandDomainCheckResponse)
+async def check_brand_domain(
+    payload: BrandDomainCheckRequest,
+    request: Request,
+    session: AsyncSession = DB_SESSION_DEPENDENCY,
+) -> BrandDomainCheckResponse:
+    await get_authenticated_user_from_request(session, request)
+    result = await check_brand_domain_availability(payload.domain)
+    return BrandDomainCheckResponse.model_validate(result.__dict__)
+
+
 @app.post(
     "/audit-seed-query-suggestions",
     response_model=GenerateSeedQuerySuggestionsResponse,
@@ -2119,6 +2165,10 @@ async def suggest_seed_queries(
                 brand_description=payload.brand_description,
                 use_domain=payload.use_domain,
                 use_description=payload.use_description,
+                use_paa=payload.use_paa,
+                language=payload.language,
+                country=payload.country,
+                paa_seed_query=payload.paa_seed_query,
                 count=payload.count,
                 existing_queries=[
                     SeedQueryDraft(
@@ -2136,6 +2186,7 @@ async def suggest_seed_queries(
                     text=suggestion.text,
                     type=suggestion.type,
                     source=suggestion.source,
+                    metadata=suggestion.metadata,
                 )
                 for suggestion in result.suggestions
             ],

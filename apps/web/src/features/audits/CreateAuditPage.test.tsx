@@ -199,6 +199,10 @@ describe("create audit page", () => {
           brand_description: "Draft description.",
           use_domain: true,
           use_description: true,
+          use_paa: false,
+          language: "en",
+          country: "US",
+          paa_seed_query: null,
           count: 10,
           existing_queries: [
             {
@@ -264,6 +268,87 @@ describe("create audit page", () => {
     });
   });
 
+  it("generates PAA suggestions, preserves source, and does not save removed rows", async () => {
+    const fetchMock = mockFetchSequence([
+      { body: currentUserFixture },
+      { body: modelCatalogWireFixture },
+      {
+        body: {
+          suggestions: [
+            { text: "manual seed", type: "brand_direct", source: "paa" },
+            {
+              text: "How does Acme compare with alternatives?",
+              type: "alternative",
+              source: "paa",
+              metadata: { paa_provider: "serpapi", raw_response: "unsafe raw" },
+            },
+            {
+              text: "What is Acme known for?",
+              type: "brand_direct",
+              source: "paa",
+            },
+          ],
+          warnings: ["People Also Ask enrichment returned fewer results."],
+        },
+      },
+      { body: auditEstimateFixture },
+      { body: createAuditResponse },
+    ]);
+    const user = userEvent.setup();
+
+    renderRoute("/audits/new");
+    await user.type(await screen.findByLabelText("Brand name"), "Acme AI");
+    await user.type(screen.getByLabelText("Brand domain"), "acme.example");
+    await user.type(screen.getByLabelText("Seed query 1"), "manual seed");
+    await user.selectOptions(screen.getByLabelText("Language"), "uk");
+    await user.selectOptions(screen.getByLabelText("Country"), "UA");
+    await user.click(screen.getByRole("button", { name: "Generate seed queries" }));
+    expect(screen.getByLabelText("Include People Also Ask questions")).toBeInTheDocument();
+    await user.click(screen.getByLabelText("Include People Also Ask questions"));
+    await user.click(screen.getByRole("button", { name: "Generate 10 queries" }));
+
+    const paaQuery = await screen.findByDisplayValue(
+      "How does Acme compare with alternatives?",
+    );
+    expect(paaQuery).toBeInTheDocument();
+    expect(screen.getAllByText("PAA")).toHaveLength(2);
+    expect(
+      screen.getByText("People Also Ask enrichment returned fewer results."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("unsafe raw")).not.toBeInTheDocument();
+    expect(jsonRequestBodyFor(
+      fetchMock,
+      "http://localhost:8000/audit-seed-query-suggestions",
+      "POST",
+    )).toMatchObject({
+      use_paa: true,
+      language: "uk",
+      country: "UA",
+      paa_seed_query: "manual seed",
+      existing_queries: [{ text: "manual seed", type: null, source: "user" }],
+    });
+
+    await user.clear(paaQuery);
+    await user.type(paaQuery, "edited PAA query");
+    await user.click(screen.getByRole("button", { name: "Remove seed query 3" }));
+    await user.click(await screen.findByLabelText("GPT-4o mini"));
+    await user.click(screen.getByRole("button", { name: "Create audit" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://localhost:8000/audits",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    expect(jsonRequestBodyFor(fetchMock, "http://localhost:8000/audits", "POST"))
+      .toMatchObject({
+        seed_query_items: [
+          { text: "manual seed", type: null, source: "user" },
+          { text: "edited PAA query", type: "alternative", source: "paa" },
+        ],
+      });
+  });
+
   it("requires at least one seed query before creating an audit", async () => {
     const fetchMock = mockFetchSequence([
       { body: currentUserFixture },
@@ -304,6 +389,123 @@ describe("create audit page", () => {
     expect(screen.getByRole("button", { name: "Generate 10 queries" })).toBeDisabled();
     expect(screen.getByLabelText("Use brand domain")).toBeDisabled();
     expect(screen.getByLabelText("Use brand description")).toBeDisabled();
+  });
+
+  it("checks brand domain availability and renders reachable status", async () => {
+    const fetchMock = mockFetchSequence([
+      { body: currentUserFixture },
+      { body: modelCatalogWireFixture },
+      {
+        body: {
+          input: "acme.example",
+          normalized_domain: "acme.example",
+          status: "reachable",
+          http_status: 200,
+          checked_at: "2026-01-01T00:00:00Z",
+          query_generation_allowed: true,
+          reason: null,
+          cache_ttl_seconds: 86400,
+          raw_html: "<html>unsafe</html>",
+        },
+      },
+    ]);
+    const user = userEvent.setup();
+
+    renderRoute("/audits/new");
+    await user.type(await screen.findByLabelText("Brand domain"), "acme.example");
+    await user.click(screen.getByRole("button", { name: "Check domain" }));
+
+    expect(await screen.findByText("Domain is reachable")).toBeInTheDocument();
+    expect(screen.queryByText("<html>unsafe</html>")).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/brand-domain/check",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        body: JSON.stringify({ domain: "acme.example" }),
+      }),
+    );
+  });
+
+  it("soft-blocks domain generation when domain is unavailable but keeps manual save available", async () => {
+    mockFetchSequence([
+      { body: currentUserFixture },
+      { body: modelCatalogWireFixture },
+      {
+        body: {
+          input: "missing.example",
+          normalized_domain: "missing.example",
+          status: "dns_failed",
+          http_status: null,
+          checked_at: "2026-01-01T00:00:00Z",
+          query_generation_allowed: false,
+          reason: "dns_failed",
+          cache_ttl_seconds: 86400,
+          stack_trace: "unsafe-stack",
+        },
+      },
+    ]);
+    const user = userEvent.setup();
+
+    renderRoute("/audits/new");
+    await user.type(await screen.findByLabelText("Brand domain"), "missing.example");
+    await user.type(screen.getByLabelText("Seed query 1"), "manual query");
+    await user.click(screen.getByRole("button", { name: "Check domain" }));
+    expect(await screen.findByText("Domain DNS could not be resolved")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Generate seed queries" }));
+    expect(screen.getByLabelText("Use brand domain")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Generate 10 queries" })).toBeDisabled();
+    expect(screen.getByLabelText("Seed query 1")).toHaveValue("manual query");
+    expect(screen.getByRole("button", { name: "Create audit" })).toBeEnabled();
+    expect(screen.queryByText("unsafe-stack")).not.toBeInTheDocument();
+  });
+
+  it("keeps description generation available when domain check soft-blocks domain generation", async () => {
+    mockFetchSequence([
+      { body: currentUserFixture },
+      { body: modelCatalogWireFixture },
+      {
+        body: {
+          input: "missing.example",
+          normalized_domain: "missing.example",
+          status: "timeout",
+          http_status: null,
+          checked_at: "2026-01-01T00:00:00Z",
+          query_generation_allowed: false,
+          reason: "http_timeout",
+          cache_ttl_seconds: 86400,
+        },
+      },
+    ]);
+    const user = userEvent.setup();
+
+    renderRoute("/audits/new");
+    await user.type(await screen.findByLabelText("Brand domain"), "missing.example");
+    await user.type(screen.getByLabelText("Brand description"), "Useful description.");
+    await user.click(screen.getByRole("button", { name: "Check domain" }));
+    expect(await screen.findByText("Domain check timed out")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Generate seed queries" }));
+    expect(screen.getByLabelText("Use brand domain")).toBeDisabled();
+    expect(screen.getByLabelText("Use brand description")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Generate 10 queries" })).toBeEnabled();
+  });
+
+  it("shows safe domain check network errors", async () => {
+    mockFetchSequence([
+      { body: currentUserFixture },
+      { body: modelCatalogWireFixture },
+      { body: { detail: "stack trace with secret" }, status: 500 },
+    ]);
+    const user = userEvent.setup();
+
+    renderRoute("/audits/new");
+    await user.type(await screen.findByLabelText("Brand domain"), "acme.example");
+    await user.click(screen.getByRole("button", { name: "Check domain" }));
+
+    expect(await screen.findByText("Unable to check domain availability.")).toBeInTheDocument();
+    expect(screen.queryByText("stack trace with secret")).not.toBeInTheDocument();
   });
 
   it("lets the user select and clear available generation sources", async () => {

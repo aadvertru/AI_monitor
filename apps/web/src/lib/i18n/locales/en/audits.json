@@ -114,17 +114,41 @@
     "problem_solution": "Problem-solution",
     "unknown": "Unknown"
   },
+  "querySources": {
+    "user": "User",
+    "ai": "AI",
+    "paa": "PAA"
+  },
   "generation": {
     "toggle": "Generate seed queries",
     "addQuery": "Add query",
     "title": "Generate seed queries",
     "useDomain": "Use brand domain",
     "useDescription": "Use brand description",
+    "usePaa": "Include People Also Ask questions",
+    "paaUsesLocale": "PAA uses {{language}} / {{country}} from this audit setup.",
     "generating": "Generating...",
     "generate10": "Generate 10 queries",
     "error": "Could not generate seed queries. Please try again or enter queries manually.",
     "duplicatesSkipped": "{{count}} duplicate queries were skipped.",
     "limitSkipped": "Only {{count}} queries were added because the audit limit is 20 seed queries."
+  },
+  "domainCheck": {
+    "title": "Domain availability",
+    "check": "Check domain",
+    "checking": "Checking...",
+    "idle": "Enter a domain, then check availability for domain-based generation.",
+    "error": "Unable to check domain availability.",
+    "generationBlocked": "Domain-based generation is unavailable for this domain. Manual queries and description-based generation are still available.",
+    "status": {
+      "reachable": "Domain is reachable",
+      "dns_failed": "Domain DNS could not be resolved",
+      "http_failed": "Domain did not respond successfully",
+      "timeout": "Domain check timed out",
+      "invalid_domain": "Invalid domain",
+      "blocked_private_network": "Domain was blocked for safety",
+      "unknown": "Domain status is unknown"
+    }
   },
   "errors": {
     "create": "Unable to create audit.",

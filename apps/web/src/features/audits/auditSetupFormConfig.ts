@@ -79,7 +79,7 @@ function message(
 type SeedQueryFormItem = {
   text?: string;
   type?: SeedQueryType | null;
-  source?: "user" | "ai";
+  source?: "user" | "ai" | "paa";
 };
 const brandDomainPattern =
   /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
@@ -134,7 +134,7 @@ export function createAuditSetupSchema(t?: MessageResolver) {
       .enum(queryTypeValues)
       .nullable()
       .optional(),
-    source: z.enum(["user", "ai"]).optional(),
+    source: z.enum(["user", "ai", "paa"]).optional(),
   });
 
   return z
@@ -293,7 +293,7 @@ export function appendGeneratedSeedQueries(
     queries.push({
       text,
       type: suggestion.type,
-      source: "ai",
+      source: suggestion.source,
     });
   }
 

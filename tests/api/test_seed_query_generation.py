@@ -12,6 +12,7 @@ from apps.api.services.seed_query_generation import (
     SeedQueryGenerationUnavailable,
     generate_seed_query_suggestions,
 )
+from libs.execution.paa_provider import PeopleAlsoAskQuestion, PeopleAlsoAskResult
 
 
 class SeedQueryGenerationServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -230,6 +231,105 @@ class SeedQueryGenerationServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(result.suggestions), 10)
 
+    async def test_paa_provider_returns_paa_suggestions_without_ai_provider_call(
+        self,
+    ) -> None:
+        async def provider(_prompt: str) -> str:
+            raise AssertionError("AI provider should not be called")
+
+        paa_provider = _FakePaaProvider(
+            [
+                PeopleAlsoAskQuestion(
+                    text="How does Seopaja compare with alternatives?",
+                    provider="mock",
+                    metadata={"paa_provider": "mock", "language": "en", "country": "US"},
+                )
+            ]
+        )
+
+        result = await generate_seed_query_suggestions(
+            GenerateSeedQueriesInput(
+                brand_name="Seopaja",
+                use_paa=True,
+                language="en",
+                country="US",
+                existing_queries=[],
+            ),
+            provider=provider,
+            paa_provider=paa_provider,
+        )
+
+        self.assertEqual(len(result.suggestions), 1)
+        self.assertEqual(result.suggestions[0].source, "paa")
+        self.assertEqual(result.suggestions[0].type, "alternative")
+        self.assertEqual(
+            result.suggestions[0].metadata,
+            {"paa_provider": "mock", "language": "en", "country": "US"},
+        )
+        self.assertEqual(paa_provider.calls, [("Seopaja", "en", "US", 10)])
+
+    async def test_paa_suggestions_are_deduplicated_against_existing_and_ai(
+        self,
+    ) -> None:
+        async def provider(_prompt: str) -> str:
+            return json.dumps(
+                {
+                    "queries": [
+                        {"text": "Best SEO agencies", "type": "category_discovery"}
+                    ]
+                }
+            )
+
+        paa_provider = _FakePaaProvider(
+            [
+                PeopleAlsoAskQuestion(text="best seo agencies", provider="mock"),
+                PeopleAlsoAskQuestion(text="What is Seopaja known for?", provider="mock"),
+            ]
+        )
+
+        result = await generate_seed_query_suggestions(
+            GenerateSeedQueriesInput(
+                brand_name="Seopaja",
+                brand_description="SEO services",
+                use_description=True,
+                use_paa=True,
+                existing_queries=[],
+            ),
+            provider=provider,
+            paa_provider=paa_provider,
+        )
+
+        self.assertEqual(
+            [suggestion.text for suggestion in result.suggestions],
+            ["Best SEO agencies", "What is Seopaja known for?"],
+        )
+        self.assertEqual(
+            [suggestion.source for suggestion in result.suggestions],
+            ["ai", "paa"],
+        )
+        self.assertEqual(result.skipped_duplicates, 1)
+
+    async def test_disabled_paa_returns_warning_without_raising(self) -> None:
+        paa_provider = _FakePaaProvider(
+            [],
+            warnings=["People Also Ask enrichment is currently disabled."],
+        )
+
+        result = await generate_seed_query_suggestions(
+            GenerateSeedQueriesInput(
+                brand_name="Seopaja",
+                use_paa=True,
+                existing_queries=[],
+            ),
+            paa_provider=paa_provider,
+        )
+
+        self.assertEqual(result.suggestions, [])
+        self.assertIn(
+            "People Also Ask enrichment is currently disabled.",
+            result.warnings,
+        )
+
     async def test_disabled_generation_raises_safe_unavailable_error(self) -> None:
         with self.assertRaises(SeedQueryGenerationUnavailable):
             await generate_seed_query_suggestions(
@@ -270,6 +370,31 @@ def _valid_input() -> GenerateSeedQueriesInput:
         use_description=True,
         existing_queries=[],
     )
+
+
+class _FakePaaProvider:
+    def __init__(
+        self,
+        questions: list[PeopleAlsoAskQuestion],
+        *,
+        warnings: list[str] | None = None,
+    ) -> None:
+        self.questions = questions
+        self.warnings = warnings or []
+        self.calls: list[tuple[str, str | None, str | None, int]] = []
+
+    async def get_questions(
+        self,
+        query: str,
+        language: str | None,
+        country: str | None,
+        limit: int,
+    ) -> PeopleAlsoAskResult:
+        self.calls.append((query, language, country, limit))
+        return PeopleAlsoAskResult(
+            questions=self.questions[:limit],
+            warnings=self.warnings,
+        )
 
 
 async def _async_json(value: object) -> str:

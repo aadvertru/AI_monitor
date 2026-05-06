@@ -10,9 +10,10 @@ import { Button } from "../../components/ui/Button";
 import { Field } from "../../components/ui/Field";
 import { Input } from "../../components/ui/Input";
 import { ApiError, createAudit, generateSeedQuerySuggestions } from "../../lib/api/client";
-import type { AuditTarget } from "../../lib/api/types";
+import type { AuditTarget, BrandDomainCheckResponse } from "../../lib/api/types";
 import { AuditEstimatePanel } from "./AuditEstimatePanel";
 import { AuditTargetSelector } from "./AuditTargetSelector";
+import { DomainAvailabilityCheck } from "./DomainAvailabilityCheck";
 import { useAuditEstimate } from "./auditEstimate";
 import {
   brandDescriptionMaxLength,
@@ -46,7 +47,10 @@ export function CreateAuditPage() {
   const [useDescriptionForGeneration, setUseDescriptionForGeneration] = useState<boolean | null>(
     null,
   );
+  const [usePaaForGeneration, setUsePaaForGeneration] = useState(false);
   const [generationWarnings, setGenerationWarnings] = useState<string[]>([]);
+  const [domainCheckResult, setDomainCheckResult] =
+    useState<BrandDomainCheckResponse | null>(null);
   const formSchema = useMemo(() => createAuditSetupSchema(t), [t]);
   const createAuditMutation = useMutation({
     mutationFn: createAudit,
@@ -145,14 +149,25 @@ export function CreateAuditPage() {
   const modelTargetsError =
     typeof errors.modelTargets?.message === "string" ? errors.modelTargets.message : null;
   const hasGenerationDomain = Boolean(watchedValues.brandDomain?.trim());
+  const isDomainGenerationBlocked =
+    domainCheckResult !== null && !domainCheckResult.query_generation_allowed;
   const hasGenerationDescription = Boolean(watchedValues.brandDescription?.trim());
+  const parsedGenerationQueries = parseSeedQueryItems(watchedValues.seedQueryItems);
+  const paaSeedQuery = parsedGenerationQueries[0]?.text ?? null;
+  const hasPaaGenerationInput =
+    Boolean(watchedValues.brandName?.trim()) ||
+    Boolean(watchedValues.brandDomain?.trim()) ||
+    Boolean(paaSeedQuery);
+  const effectiveUsePaaForGeneration = usePaaForGeneration && hasPaaGenerationInput;
   const effectiveUseDomainForGeneration =
-    hasGenerationDomain && (useDomainForGeneration ?? true);
+    hasGenerationDomain && !isDomainGenerationBlocked && (useDomainForGeneration ?? true);
   const effectiveUseDescriptionForGeneration =
     hasGenerationDescription && (useDescriptionForGeneration ?? true);
   const canGenerateQueries =
     !generateMutation.isPending &&
-    (effectiveUseDomainForGeneration || effectiveUseDescriptionForGeneration);
+    (effectiveUseDomainForGeneration ||
+      effectiveUseDescriptionForGeneration ||
+      effectiveUsePaaForGeneration);
 
   const onSubmit = handleSubmit((values) => {
     createAuditMutation.mutate(buildPayload(values));
@@ -169,6 +184,10 @@ export function CreateAuditPage() {
       brandDescription: getValues("brandDescription"),
       useDomain: effectiveUseDomainForGeneration,
       useDescription: effectiveUseDescriptionForGeneration,
+      usePaa: effectiveUsePaaForGeneration,
+      language: getValues("language"),
+      country: getValues("country"),
+      paaSeedQuery: effectiveUsePaaForGeneration ? paaSeedQuery : null,
       count: 10,
       existingQueries: parseSeedQueryItems(getValues("seedQueryItems")),
     });
@@ -196,6 +215,10 @@ export function CreateAuditPage() {
           </Field>
           <Field htmlFor="brand-domain" label={t("fields.brandDomain")} error={errors.brandDomain?.message}>
             <Input id="brand-domain" placeholder="example.com" {...register("brandDomain")} />
+            <DomainAvailabilityCheck
+              domain={watchedValues.brandDomain}
+              onResultChange={setDomainCheckResult}
+            />
           </Field>
         </div>
 
@@ -219,12 +242,15 @@ export function CreateAuditPage() {
           <fieldset className="space-y-2">
             <legend className="text-sm font-medium text-ink">{t("fields.seedQueries")}</legend>
             {seedQueryFields.fields.map((field, index) => (
-              <div className="grid gap-2 sm:grid-cols-[1fr_12rem_auto]" key={field.id}>
+              <div className="grid gap-2 sm:grid-cols-[1fr_auto_12rem_auto]" key={field.id}>
                 <Input
                   aria-label={t("fields.seedQuery", { index: index + 1 })}
                   placeholder="best ai visibility tools"
                   {...register(`seedQueryItems.${index}.text`)}
                 />
+                <span className="inline-flex h-10 items-center justify-center rounded-md border border-border bg-muted px-2 text-xs font-medium uppercase text-subtle">
+                  {t(`querySources.${watchedValues.seedQueryItems?.[index]?.source ?? "user"}`)}
+                </span>
                 <select
                   aria-label={t("fields.queryType", { index: index + 1 })}
                   className="h-10 w-full rounded-md border border-border bg-white px-3 text-sm text-ink outline-none transition-colors focus:border-brand-600 focus:ring-2 focus:ring-brand-100"
@@ -277,7 +303,7 @@ export function CreateAuditPage() {
                     className="size-4 accent-brand-600"
                     type="checkbox"
                     checked={effectiveUseDomainForGeneration}
-                    disabled={!hasGenerationDomain}
+                    disabled={!hasGenerationDomain || isDomainGenerationBlocked}
                     onChange={(event) => setUseDomainForGeneration(event.target.checked)}
                   />
                   {t("generation.useDomain")}
@@ -292,7 +318,23 @@ export function CreateAuditPage() {
                   />
                   {t("generation.useDescription")}
                 </label>
+                <label className="flex items-center gap-2 text-sm text-ink">
+                  <input
+                    className="size-4 accent-brand-600"
+                    type="checkbox"
+                    checked={effectiveUsePaaForGeneration}
+                    disabled={!hasPaaGenerationInput}
+                    onChange={(event) => setUsePaaForGeneration(event.target.checked)}
+                  />
+                  {t("generation.usePaa")}
+                </label>
               </div>
+              <p className="text-xs text-subtle">
+                {t("generation.paaUsesLocale", {
+                  language: watchedValues.language ?? "en",
+                  country: watchedValues.country ?? "US",
+                })}
+              </p>
               <Button type="button" disabled={!canGenerateQueries} onClick={generateQueries}>
                 {generateMutation.isPending ? (
                   <Loader2 className="size-4 animate-spin" aria-hidden="true" />
@@ -301,6 +343,11 @@ export function CreateAuditPage() {
                 )}
                 {generateMutation.isPending ? t("generation.generating") : t("generation.generate10")}
               </Button>
+              {isDomainGenerationBlocked ? (
+                <p className="text-sm text-amber-700">
+                  {t("domainCheck.generationBlocked")}
+                </p>
+              ) : null}
               {generateMutation.isError ? (
                 <p className="text-sm text-red-700">
                   {t("generation.error")}

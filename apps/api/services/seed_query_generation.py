@@ -16,6 +16,12 @@ from libs.execution.openai_config import (
     load_openai_provider_config,
 )
 from libs.execution.openai_provider import OpenAIResponsesClient
+from libs.execution.paa_config import load_paa_provider_config
+from libs.execution.paa_provider import (
+    PeopleAlsoAskProvider,
+    PeopleAlsoAskQuestion,
+    build_paa_provider,
+)
 from libs.storage.models import SeedQuerySource, SeedQueryType
 
 logger = logging.getLogger(__name__)
@@ -67,6 +73,10 @@ class GenerateSeedQueriesInput:
     brand_description: str | None = None
     use_domain: bool = False
     use_description: bool = False
+    use_paa: bool = False
+    language: str | None = None
+    country: str | None = None
+    paa_seed_query: str | None = None
     count: int = DEFAULT_GENERATED_QUERY_COUNT
     existing_queries: list[SeedQueryDraft] = field(default_factory=list)
 
@@ -76,6 +86,7 @@ class GeneratedSeedQuerySuggestion:
     text: str
     type: str
     source: str = SeedQuerySource.AI.value
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -134,6 +145,7 @@ async def generate_seed_query_suggestions(
     payload: GenerateSeedQueriesInput,
     *,
     provider: SeedQueryJSONProvider | ProviderCallable | None = None,
+    paa_provider: PeopleAlsoAskProvider | None = None,
     config: SeedQueryGenerationConfig | None = None,
 ) -> GeneratedSeedQueriesResult:
     """Generate typed seed query suggestions without persisting them."""
@@ -156,21 +168,38 @@ async def generate_seed_query_suggestions(
             warnings=["Seed query limit is already reached."],
         )
 
-    resolved_provider = provider or _build_provider(config)
-    prompt = _build_prompt(normalized_payload)
+    combined = GeneratedSeedQueriesResult()
+    seen = set(existing_keys)
+    available_for_ai = available_slots
 
-    try:
-        raw_output = await _call_provider(resolved_provider, prompt)
-    except Exception:
-        logger.warning("Seed query provider call failed.", exc_info=True)
-        return _unavailable_result()
+    if normalized_payload.use_domain or normalized_payload.use_description:
+        resolved_provider = provider or _build_provider(config)
+        prompt = _build_prompt(normalized_payload)
 
-    return _suggestions_from_provider_output(
-        raw_output=raw_output,
-        requested_count=normalized_payload.count,
-        existing_keys=existing_keys,
-        available_slots=available_slots,
-    )
+        try:
+            raw_output = await _call_provider(resolved_provider, prompt)
+        except Exception:
+            logger.warning("Seed query provider call failed.", exc_info=True)
+            ai_result = _unavailable_result()
+        else:
+            ai_result = _suggestions_from_provider_output(
+                raw_output=raw_output,
+                requested_count=normalized_payload.count,
+                existing_keys=seen,
+                available_slots=available_for_ai,
+            )
+        combined = _merge_generation_results(combined, ai_result, seen=seen)
+
+    if normalized_payload.use_paa:
+        paa_result = await _generate_paa_suggestions(
+            normalized_payload,
+            paa_provider=paa_provider,
+            seen=seen,
+            available_slots=MAX_TOTAL_SEED_QUERY_COUNT - len(seen),
+        )
+        combined = _merge_generation_results(combined, paa_result, seen=seen)
+
+    return combined
 
 
 def load_seed_query_generation_config(
@@ -205,7 +234,7 @@ def _validate_generation_input(
         raise ValueError("count must be less than or equal to 10.")
     if payload.count <= 0:
         raise ValueError("count must be greater than 0.")
-    if not payload.use_domain and not payload.use_description:
+    if not payload.use_domain and not payload.use_description and not payload.use_paa:
         raise ValueError("At least one generation source must be selected.")
 
     brand_domain = _normalize_optional_text(payload.brand_domain)
@@ -226,6 +255,10 @@ def _validate_generation_input(
         brand_description=brand_description,
         use_domain=payload.use_domain,
         use_description=payload.use_description,
+        use_paa=payload.use_paa,
+        language=_normalize_optional_text(payload.language),
+        country=_normalize_optional_text(payload.country),
+        paa_seed_query=_normalize_optional_text(payload.paa_seed_query),
         count=payload.count,
         existing_queries=payload.existing_queries,
     )
@@ -331,6 +364,136 @@ def _parse_provider_item(item: Any) -> GeneratedSeedQuerySuggestion | None:
     return GeneratedSeedQuerySuggestion(text=normalized_text, type=query_type)
 
 
+async def _generate_paa_suggestions(
+    payload: GenerateSeedQueriesInput,
+    *,
+    paa_provider: PeopleAlsoAskProvider | None,
+    seen: set[str],
+    available_slots: int,
+) -> GeneratedSeedQueriesResult:
+    if available_slots <= 0:
+        return GeneratedSeedQueriesResult(
+            skipped_limit=payload.count,
+            warnings=["Seed query limit is already reached."],
+        )
+
+    provider = paa_provider or build_paa_provider(load_paa_provider_config())
+    paa_query = _paa_query(payload)
+    if paa_query is None:
+        return GeneratedSeedQueriesResult(
+            warnings=["People Also Ask requires a brand name, domain, or seed query."]
+        )
+
+    try:
+        result = await provider.get_questions(
+            paa_query,
+            payload.language,
+            payload.country,
+            min(payload.count, available_slots),
+        )
+    except Exception:
+        logger.warning("People Also Ask provider call failed.", exc_info=True)
+        return GeneratedSeedQueriesResult(
+            warnings=["People Also Ask enrichment is currently unavailable."]
+        )
+
+    suggestions: list[GeneratedSeedQuerySuggestion] = []
+    skipped_duplicates = 0
+    skipped_limit = 0
+    local_seen = set(seen)
+
+    for question in result.questions:
+        suggestion = _suggestion_from_paa_question(question)
+        if suggestion is None:
+            continue
+
+        key = _query_key(suggestion.text)
+        if key in local_seen:
+            skipped_duplicates += 1
+            continue
+
+        if len(suggestions) >= min(payload.count, available_slots):
+            skipped_limit += 1
+            continue
+
+        local_seen.add(key)
+        suggestions.append(suggestion)
+
+    warnings = list(result.warnings)
+    if skipped_duplicates:
+        warnings.append(f"{skipped_duplicates} duplicate query suggestion(s) skipped.")
+    if skipped_limit:
+        warnings.append(
+            f"{skipped_limit} query suggestion(s) skipped because the limit is 20."
+        )
+    if len(suggestions) < payload.count:
+        warnings.append("Fewer seed query suggestions were returned than requested.")
+
+    return GeneratedSeedQueriesResult(
+        suggestions=suggestions,
+        skipped_duplicates=skipped_duplicates,
+        skipped_limit=skipped_limit,
+        warnings=warnings,
+    )
+
+
+def _paa_query(payload: GenerateSeedQueriesInput) -> str | None:
+    return (
+        _normalize_optional_text(payload.paa_seed_query)
+        or _normalize_optional_text(payload.brand_name)
+        or _normalize_optional_text(payload.brand_domain)
+    )
+
+
+def _suggestion_from_paa_question(
+    question: PeopleAlsoAskQuestion,
+) -> GeneratedSeedQuerySuggestion | None:
+    text = _normalize_optional_text(question.text)
+    if text is None:
+        return None
+    return GeneratedSeedQuerySuggestion(
+        text=text,
+        type=_infer_paa_query_type(text),
+        source=SeedQuerySource.PAA.value,
+        metadata=_public_metadata(question.metadata, provider=question.provider),
+    )
+
+
+def _infer_paa_query_type(text: str) -> str:
+    normalized = text.casefold()
+    if "alternative" in normalized or " vs " in normalized:
+        return SeedQueryType.ALTERNATIVE.value
+    if "compare" in normalized or "comparison" in normalized:
+        return SeedQueryType.COMPARISON.value
+    if (
+        "best " in normalized
+        or "top " in normalized
+        or "recommend" in normalized
+        or "vendor" in normalized
+        or "provider" in normalized
+    ):
+        return SeedQueryType.RECOMMENDATION.value
+    if "how " in normalized or "solve" in normalized or "problem" in normalized:
+        return SeedQueryType.PROBLEM_SOLUTION.value
+    if "what is" in normalized or "known for" in normalized:
+        return SeedQueryType.BRAND_DIRECT.value
+    return SeedQueryType.CATEGORY_DISCOVERY.value
+
+
+def _public_metadata(
+    metadata: Mapping[str, object],
+    *,
+    provider: str,
+) -> dict[str, Any]:
+    public: dict[str, Any] = {"paa_provider": provider}
+    for key, value in metadata.items():
+        if key in {"paa_provider", "language", "country"} and isinstance(
+            value, str | int | float | bool
+        ):
+            public[key] = value
+    return public
+
+
 def _is_valid_existing_query(query: SeedQueryDraft) -> bool:
     return _normalize_optional_text(query.text) is not None
 
@@ -394,6 +557,23 @@ def _unavailable_result() -> GeneratedSeedQueriesResult:
         skipped_duplicates=0,
         skipped_limit=0,
         warnings=[GENERATION_UNAVAILABLE_WARNING],
+    )
+
+
+def _merge_generation_results(
+    current: GeneratedSeedQueriesResult,
+    incoming: GeneratedSeedQueriesResult,
+    *,
+    seen: set[str],
+) -> GeneratedSeedQueriesResult:
+    suggestions = [*current.suggestions, *incoming.suggestions]
+    for suggestion in incoming.suggestions:
+        seen.add(_query_key(suggestion.text))
+    return GeneratedSeedQueriesResult(
+        suggestions=suggestions,
+        skipped_duplicates=current.skipped_duplicates + incoming.skipped_duplicates,
+        skipped_limit=current.skipped_limit + incoming.skipped_limit,
+        warnings=[*current.warnings, *incoming.warnings],
     )
 
 

@@ -8,7 +8,7 @@ returning ORM instances directly.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -23,7 +23,7 @@ SeedQueryTypeValue = Literal[
     "alternative",
     "problem_solution",
 ]
-SeedQuerySourceValue = Literal["user", "ai"]
+SeedQuerySourceValue = Literal["user", "ai", "paa"]
 RunStatusValue = Literal[
     "pending",
     "success",
@@ -72,7 +72,8 @@ class AuditTargetResponse(FrontendAuditSchema):
 class GeneratedSeedQuerySuggestionResponse(FrontendAuditSchema):
     text: str
     type: SeedQueryTypeValue
-    source: Literal["ai"] = "ai"
+    source: Literal["ai", "paa"] = "ai"
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class GenerateSeedQuerySuggestionsResponse(FrontendAuditSchema):

@@ -90,6 +90,7 @@ class SeedQueryType(str, Enum):
 class SeedQuerySource(str, Enum):
     USER = "user"
     AI = "ai"
+    PAA = "paa"
 
 
 class User(Base):

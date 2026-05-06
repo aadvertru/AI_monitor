@@ -11,6 +11,7 @@ import type {
   AuditRunTriggerResponse,
   AuditStatusResponse,
   AuditSummaryResponse,
+  BrandDomainCheckResponse,
   CurrentUser,
   GenerateSeedQuerySuggestionsRequest,
   GenerateSeedQuerySuggestionsResponse,
@@ -257,6 +258,13 @@ export function updateProfilePreferences(payload: ProfilePreferences) {
   });
 }
 
+export function checkBrandDomain(domain: string) {
+  return apiFetch<BrandDomainCheckResponse>("/brand-domain/check", {
+    method: "POST",
+    body: jsonBody({ domain }),
+  });
+}
+
 export function listAudits({ archived = false }: { archived?: boolean } = {}) {
   const params = archived ? "?archived=true" : "";
   return apiFetch<AuditListItem[]>(`/audits${params}`);
@@ -290,6 +298,10 @@ export async function generateSeedQuerySuggestions(
         brand_description: payload.brandDescription,
         use_domain: payload.useDomain,
         use_description: payload.useDescription,
+        use_paa: payload.usePaa,
+        language: payload.language,
+        country: payload.country,
+        paa_seed_query: payload.paaSeedQuery,
         count: payload.count,
         existing_queries: payload.existingQueries,
       }),

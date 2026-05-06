@@ -23,7 +23,7 @@ export type SeedQueryType =
   | "comparison"
   | "alternative"
   | "problem_solution";
-export type SeedQuerySource = "user" | "ai";
+export type SeedQuerySource = "user" | "ai" | "paa";
 
 export type AuditTarget = {
   id?: string | number;
@@ -145,6 +145,26 @@ export type ProfileResponse = {
   preferences: ProfilePreferences;
 };
 
+export type BrandDomainCheckStatus =
+  | "reachable"
+  | "dns_failed"
+  | "http_failed"
+  | "timeout"
+  | "invalid_domain"
+  | "blocked_private_network"
+  | "unknown";
+
+export type BrandDomainCheckResponse = {
+  input: string;
+  normalized_domain: string | null;
+  status: BrandDomainCheckStatus;
+  http_status: number | null;
+  checked_at: string;
+  query_generation_allowed: boolean;
+  reason: string | null;
+  cache_ttl_seconds: number;
+};
+
 export type AuditListItem = {
   audit_id: number;
   audit_number: number;
@@ -254,6 +274,10 @@ export type GenerateSeedQuerySuggestionsRequest = {
   brandDescription?: string | null;
   useDomain: boolean;
   useDescription: boolean;
+  usePaa?: boolean;
+  language?: string | null;
+  country?: string | null;
+  paaSeedQuery?: string | null;
   count?: number;
   existingQueries: SeedQueryDraft[];
 };
@@ -261,7 +285,8 @@ export type GenerateSeedQuerySuggestionsRequest = {
 export type GeneratedSeedQuerySuggestion = {
   text: string;
   type: SeedQueryType;
-  source: "ai";
+  source: "ai" | "paa";
+  metadata?: Record<string, unknown>;
 };
 
 export type GenerateSeedQuerySuggestionsResponse = {
