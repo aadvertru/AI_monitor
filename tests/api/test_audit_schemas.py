@@ -105,6 +105,8 @@ def test_audit_detail_serializes_metadata_and_optional_fields() -> None:
     assert payload["brand_domain"] is None
     assert payload["scdl_level"] == "L1"
     assert payload["seed_queries"] == ["best ai visibility monitor"]
+    assert payload["concepts"] == []
+    assert payload["competitor_candidates"] == []
     assert payload["enable_source_intelligence"] is True
     _assert_no_sensitive_keys(payload)
 

@@ -7,10 +7,12 @@ import type {
   AuditDetail,
   AuditListItem,
   AuditPipelineRunResponse,
+  AnswerMatrixResponse,
   AuditResultsResponse,
   AuditRunTriggerResponse,
   AuditStatusResponse,
   AuditSummaryResponse,
+  AuditSummaryV2Response,
   BrandDomainCheckResponse,
   CurrentUser,
   GenerateSeedQuerySuggestionsRequest,
@@ -27,6 +29,7 @@ import type {
   ModelCatalogResponseWire,
   ProfilePreferences,
   ProfileResponse,
+  SourceDomainsResponse,
 } from "./types";
 
 export type ApiErrorPayload = {
@@ -221,6 +224,42 @@ function mapSeedQueryGenerationResponse(
   };
 }
 
+function mapAuditSummaryV2FromWire(response: AuditSummaryV2Response): AuditSummaryV2Response {
+  return {
+    ...response,
+    model_summaries: response.model_summaries ?? [],
+    concepts: response.concepts ?? [],
+    competitor_candidates: response.competitor_candidates ?? [],
+    provider_diagnostics: response.provider_diagnostics ?? [],
+  };
+}
+
+function mapAnswerMatrixFromWire(response: AnswerMatrixResponse): AnswerMatrixResponse {
+  return {
+    ...response,
+    columns: response.columns ?? [],
+    rows: (response.rows ?? []).map((row) => ({
+      ...row,
+      cells: (row.cells ?? []).map((cell) => ({
+        ...cell,
+        evaluation: cell.evaluation ?? null,
+        concepts: cell.concepts ?? [],
+        competitor_candidates: cell.competitor_candidates ?? [],
+        provider_error: cell.provider_error ?? null,
+      })),
+    })),
+    provider_diagnostics: response.provider_diagnostics ?? [],
+  };
+}
+
+function mapSourceDomainsFromWire(response: SourceDomainsResponse): SourceDomainsResponse {
+  return {
+    ...response,
+    domains: response.domains ?? [],
+    warnings: response.warnings ?? [],
+  };
+}
+
 export function getCurrentUser() {
   return apiFetch<CurrentUser>("/auth/me");
 }
@@ -332,6 +371,24 @@ export function getAuditResults(auditId: number) {
 
 export function getAuditSummary(auditId: number) {
   return apiFetch<AuditSummaryResponse>(`/audits/${auditId}/summary`);
+}
+
+export function getAuditSummaryV2(auditId: number) {
+  return apiFetch<AuditSummaryV2Response>(`/audits/${auditId}/summary-v2`).then(
+    mapAuditSummaryV2FromWire,
+  );
+}
+
+export function getAuditAnswerMatrix(auditId: number) {
+  return apiFetch<AnswerMatrixResponse>(`/audits/${auditId}/answer-matrix`).then(
+    mapAnswerMatrixFromWire,
+  );
+}
+
+export function getAuditSourceDomains(auditId: number) {
+  return apiFetch<SourceDomainsResponse>(`/audits/${auditId}/source-domains`).then(
+    mapSourceDomainsFromWire,
+  );
 }
 
 export function runAudit(auditId: number) {

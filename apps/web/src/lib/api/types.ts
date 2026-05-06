@@ -263,6 +263,8 @@ export type AuditDetail = AuditListItem & {
   seed_query_items: SeedQueryDraft[];
   model_targets?: AuditTargetWire[];
   modelTargets?: AuditTarget[];
+  concepts?: Concept[];
+  competitor_candidates?: CompetitorCandidate[];
   enable_query_expansion: boolean;
   enable_source_intelligence: boolean;
   follow_up_depth: number;
@@ -388,6 +390,138 @@ export type ProviderDiagnostic = {
   retryable?: boolean;
   run_id?: number | string | null;
   query_id?: number | string | null;
+};
+
+export type MentionabilityMetric = {
+  found: number;
+  total: number;
+  percentage: number | null;
+};
+
+export type ToneBreakdown = {
+  positive: number;
+  neutral: number;
+  negative: number;
+  unknown: number;
+};
+
+export type Concept = {
+  text: string;
+  type: "concept";
+  count: number;
+  evidence_count: number;
+};
+
+export type CompetitorCandidate = {
+  name: string;
+  domain: string | null;
+  confidence: number | null;
+  evidence_type: string | null;
+  evidence_count: number;
+};
+
+export type AuditSummaryV2Totals = {
+  query_count: number;
+  target_count: number;
+  run_count: number;
+  completed_runs: number;
+  failed_runs: number;
+  levels: SCDLLevel[];
+};
+
+export type AuditSummaryV2Overall = {
+  mentionability_l1: MentionabilityMetric;
+  mentionability_l2: MentionabilityMetric;
+  accuracy_l1: number | null;
+  accuracy_l2: number | null;
+  tone: ToneBreakdown;
+};
+
+export type AuditSummaryV2ModelSummary = {
+  target_group_label: string;
+  ai_family: string | null;
+  execution_provider: string;
+  model_provider: string | null;
+  model_id: string | null;
+  mr_l1: number | null;
+  mr_l2: number | null;
+  delta_mr: number | null;
+  accuracy_l1: number | null;
+  accuracy_l2: number | null;
+  delta_accuracy: number | null;
+  tone_l1: "positive" | "neutral" | "negative" | "unknown" | null;
+  tone_l2: "positive" | "neutral" | "negative" | "unknown" | null;
+  concepts?: Concept[];
+  competitor_candidates?: CompetitorCandidate[];
+};
+
+export type AuditSummaryV2Response = {
+  audit_id: number;
+  status: AuditStatus;
+  totals: AuditSummaryV2Totals;
+  overall: AuditSummaryV2Overall;
+  model_summaries: AuditSummaryV2ModelSummary[];
+  concepts: Concept[];
+  competitor_candidates: CompetitorCandidate[];
+  provider_diagnostics?: ProviderDiagnostic[];
+};
+
+export type AnswerMatrixCellStatus =
+  | "completed"
+  | "failed"
+  | "partial"
+  | "not_run"
+  | "processing"
+  | "missing";
+
+export type CellEvaluationPlaceholder = null;
+
+export type AnswerMatrixColumn = {
+  target_id: string;
+  label: string;
+  ai_family: string | null;
+  execution_provider: string;
+  model_provider: string | null;
+  model_id: string | null;
+  level: SCDLLevel;
+  gateway?: boolean;
+  gateway_l2_experimental?: boolean;
+};
+
+export type AnswerMatrixCell = {
+  target_id: string;
+  run_id: number | null;
+  status: AnswerMatrixCellStatus;
+  answer_excerpt: string | null;
+  brand_mentioned: boolean | null;
+  score: number | null;
+  evaluation: CellEvaluationPlaceholder;
+  sources_count: number;
+  provider_error: ProviderDiagnostic | null;
+  concepts: Concept[];
+  competitor_candidates: CompetitorCandidate[];
+};
+
+export type AnswerMatrixRow = {
+  query_id: string;
+  query_text: string;
+  query_type?: SeedQueryType | "unknown" | null;
+  cells: AnswerMatrixCell[];
+};
+
+export type AnswerMatrixResponse = {
+  audit_id: number;
+  columns: AnswerMatrixColumn[];
+  rows: AnswerMatrixRow[];
+  provider_diagnostics?: ProviderDiagnostic[];
+};
+
+export type SourceDomainGroup = Record<string, unknown>;
+
+export type SourceDomainsResponse = {
+  audit_id: number;
+  domains: SourceDomainGroup[];
+  warnings: string[];
 };
 
 export type ComponentScores = {

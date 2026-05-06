@@ -8,9 +8,11 @@ import type {
 } from "../lib/api/types";
 import {
   auditDetailWithModelTargetsFixture,
+  auditAnswerMatrixFixture,
   auditListFixture,
   auditPipelineRunFixture,
   auditResultsFixture,
+  auditSummaryV2Fixture,
   auditSummaryFixture,
   auditTargetWireFixture,
   createAuditModelTargetsPayloadFixture,
@@ -22,6 +24,7 @@ import {
   legacyAuditDetailWithoutModelTargetsFixture,
   openRouterL2AuditTargetWireFixture,
   partialAuditSummaryFixture,
+  sourceDomainsFixture,
 } from "./fixtures";
 
 const documentedAuditStatuses = new Set<AuditStatus>([
@@ -114,6 +117,31 @@ describe("frontend-backend contract fixtures", () => {
       true,
     );
     expect(legacyAuditDetailWithoutModelTargetsFixture.model_targets).toBeUndefined();
+  });
+
+  it("covers results v2 summary, matrix, and source-domain fixtures", () => {
+    expect(auditSummaryV2Fixture.overall.accuracy_l1).toBeNull();
+    expect(auditSummaryV2Fixture.overall.accuracy_l2).toBeNull();
+    expect(auditSummaryV2Fixture.concepts).toEqual([]);
+    expect(auditSummaryV2Fixture.competitor_candidates).toEqual([]);
+    expect(auditSummaryV2Fixture.model_summaries[0]?.execution_provider).toBe("openrouter");
+
+    expect(auditAnswerMatrixFixture.columns[1]?.gateway_l2_experimental).toBe(true);
+    expect(auditAnswerMatrixFixture.rows[0]?.cells[0]?.evaluation).toBeNull();
+    expect(auditAnswerMatrixFixture.rows[0]?.cells[1]?.provider_error?.code).toBe("TIMEOUT");
+
+    expect(sourceDomainsFixture.domains).toEqual([]);
+    expect(sourceDomainsFixture.warnings).toEqual([]);
+
+    const dumped = JSON.stringify({
+      auditSummaryV2Fixture,
+      auditAnswerMatrixFixture,
+      sourceDomainsFixture,
+    });
+    expect(dumped).not.toContain("raw_answer");
+    expect(dumped).not.toContain("request_snapshot");
+    expect(dumped).not.toContain("api_key");
+    expect(dumped).not.toContain("authorization");
   });
 
   it("keeps frontend create fixture separate from backend wire payload shape", () => {

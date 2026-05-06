@@ -23,6 +23,10 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.audit_schemas import (
+    AnswerMatrixCellResponse,
+    AnswerMatrixColumnResponse,
+    AnswerMatrixResponse,
+    AnswerMatrixRowResponse,
     AuditDetailResponse,
     AuditListItemResponse,
     AuditPipelineRunResponse,
@@ -31,17 +35,24 @@ from apps.api.audit_schemas import (
     AuditRunTriggerResponse,
     AuditStatusResponse,
     AuditSummaryResponse,
+    AuditSummaryV2ModelSummaryResponse,
+    AuditSummaryV2OverallResponse,
+    AuditSummaryV2Response,
+    AuditSummaryV2TotalsResponse,
     AuditTargetResponse,
     CompetitorSummaryItemResponse,
     ComponentScoresResponse,
     CriticalQueryItemResponse,
     GeneratedSeedQuerySuggestionResponse,
     GenerateSeedQuerySuggestionsResponse,
+    MentionabilityMetricResponse,
     ProviderDiagnosticResponse,
     QueryTypeCoverageItemResponse,
     RawResponseInspectionResponse,
     SeedQueryItemResponse,
+    SourceDomainsResponse,
     SourceSummaryItemResponse,
+    ToneBreakdownResponse,
 )
 from apps.api.database import get_db_session, init_models, should_auto_create_schema
 from apps.api.security import (
@@ -1325,6 +1336,8 @@ async def build_audit_detail_response(
         seed_queries=[query.text for query in queries],
         seed_query_items=[build_seed_query_item_response(query) for query in queries],
         model_targets=[build_audit_target_response(target) for target in targets],
+        concepts=[],
+        competitor_candidates=[],
         enable_query_expansion=audit.enable_query_expansion,
         enable_source_intelligence=audit.enable_source_intelligence,
         follow_up_depth=audit.follow_up_depth,
@@ -1995,6 +2008,399 @@ async def build_audit_summary_response(
     )
 
 
+async def build_audit_summary_v2_response(
+    session: AsyncSession,
+    audit: Audit,
+) -> AuditSummaryV2Response:
+    results = await build_audit_results_response(session, audit)
+    targets = (
+        await session.execute(
+            select(AuditTarget)
+            .where(AuditTarget.audit_id == audit.id)
+            .order_by(AuditTarget.id)
+        )
+    ).scalars().all()
+    query_count = (
+        await session.execute(
+            select(func.count()).select_from(Query).where(Query.audit_id == audit.id)
+        )
+    ).scalar_one()
+    levels = _summary_v2_levels(audit, list(targets), results.rows)
+
+    completed_runs = sum(1 for row in results.rows if row.run_status == "success")
+    failed_runs = sum(
+        1
+        for row in results.rows
+        if row.run_status in {"error", "timeout", "rate_limited"}
+    )
+    partial_runs = max(results.total - completed_runs - failed_runs, 0)
+
+    return AuditSummaryV2Response(
+        audit_id=audit.id,
+        status=_status_value(audit.status),
+        totals=AuditSummaryV2TotalsResponse(
+            query_count=query_count,
+            target_count=len(targets) if targets else len(audit.providers or []),
+            run_count=results.total,
+            completed_runs=completed_runs,
+            failed_runs=failed_runs,
+            partial_runs=partial_runs,
+            levels=levels,
+        ),
+        overall=AuditSummaryV2OverallResponse(
+            mentionability_l1=_mentionability_for_level(results.rows, "L1"),
+            mentionability_l2=_mentionability_for_level(results.rows, "L2"),
+            accuracy_l1=None,
+            accuracy_l2=None,
+            tone=_tone_breakdown(results.rows),
+        ),
+        model_summaries=_model_summaries_v2(results.rows, audit),
+        concepts=[],
+        competitor_candidates=[],
+        provider_diagnostics=results.provider_diagnostics,
+    )
+
+
+def _summary_v2_levels(
+    audit: Audit,
+    targets: list[AuditTarget],
+    rows: list[AuditResultRowResponse],
+) -> list[str]:
+    levels = {_scdl_level_value(audit.scdl_level)}
+    levels.update(_scdl_level_value(target.level) for target in targets)
+    levels.update(row.scdl_level for row in rows)
+    return [level for level in ["L1", "L2"] if level in levels]
+
+
+def _mentionability_for_level(
+    rows: list[AuditResultRowResponse],
+    level: str,
+) -> MentionabilityMetricResponse:
+    processed = [
+        row
+        for row in rows
+        if row.scdl_level == level
+        and row.run_status == "success"
+        and row.visible_brand is not None
+    ]
+    found = sum(1 for row in processed if row.visible_brand)
+    total = len(processed)
+    percentage = round((found / total) * 100, 2) if total else None
+    return MentionabilityMetricResponse(percentage=percentage, found=found, total=total)
+
+
+def _tone_breakdown(rows: list[AuditResultRowResponse]) -> ToneBreakdownResponse:
+    counts: Counter[str] = Counter()
+    for row in rows:
+        sentiment = (
+            row.component_scores.sentiment_score
+            if row.component_scores is not None
+            else None
+        )
+        counts[_tone_label(sentiment)] += 1
+    return ToneBreakdownResponse(
+        positive=counts["positive"],
+        neutral=counts["neutral"],
+        negative=counts["negative"],
+        unknown=counts["unknown"],
+    )
+
+
+def _tone_label(score: float | None) -> str:
+    if score is None:
+        return "unknown"
+    if score > 0.1:
+        return "positive"
+    if score < -0.1:
+        return "negative"
+    return "neutral"
+
+
+def _dominant_tone(rows: list[AuditResultRowResponse], level: str) -> str | None:
+    level_rows = [row for row in rows if row.scdl_level == level]
+    if not level_rows:
+        return None
+    counts = _tone_breakdown(level_rows)
+    values = {
+        "positive": counts.positive,
+        "neutral": counts.neutral,
+        "negative": counts.negative,
+        "unknown": counts.unknown,
+    }
+    return sorted(values.items(), key=lambda item: (-item[1], item[0]))[0][0]
+
+
+def _model_summaries_v2(
+    rows: list[AuditResultRowResponse],
+    audit: Audit,
+) -> list[AuditSummaryV2ModelSummaryResponse]:
+    grouped: dict[tuple[str, str, str | None, str | None, str], list[AuditResultRowResponse]] = (
+        defaultdict(list)
+    )
+    for row in rows:
+        target = row.target
+        model_id = target.model_id if target is not None else row.provider
+        execution_provider = (
+            target.execution_provider if target is not None else row.provider
+        )
+        model_provider = target.model_provider if target is not None else row.provider
+        ai_family = target.ai_family if target is not None else None
+        label = target.display_name if target is not None else row.provider
+        grouped[(model_id, execution_provider, model_provider, ai_family, label)].append(row)
+
+    if not grouped and audit.providers:
+        for provider in audit.providers:
+            grouped[(provider, provider, provider, None, provider)] = []
+
+    summaries: list[AuditSummaryV2ModelSummaryResponse] = []
+    for (model_id, execution_provider, model_provider, ai_family, label), group_rows in sorted(
+        grouped.items(),
+        key=lambda item: item[0],
+    ):
+        mr_l1 = _mentionability_for_level(group_rows, "L1").percentage
+        mr_l2 = _mentionability_for_level(group_rows, "L2").percentage
+        delta_mr = (
+            round(mr_l2 - mr_l1, 2)
+            if mr_l1 is not None and mr_l2 is not None
+            else None
+        )
+        summaries.append(
+            AuditSummaryV2ModelSummaryResponse(
+                target_group_label=label,
+                ai_family=ai_family,
+                execution_provider=execution_provider,
+                model_provider=model_provider,
+                model_id=model_id,
+                mr_l1=mr_l1,
+                mr_l2=mr_l2,
+                delta_mr=delta_mr,
+                accuracy_l1=None,
+                accuracy_l2=None,
+                delta_accuracy=None,
+                tone_l1=_dominant_tone(group_rows, "L1"),
+                tone_l2=_dominant_tone(group_rows, "L2"),
+                concepts=[],
+                competitor_candidates=[],
+            )
+        )
+    return summaries
+
+
+ANSWER_EXCERPT_MAX_CHARS = 500
+AnswerMatrixRunTuple = tuple[
+    Run,
+    ParsedResult | None,
+    Score | None,
+    RawResponse | None,
+    AuditTarget | None,
+]
+
+
+async def build_answer_matrix_response(
+    session: AsyncSession,
+    audit: Audit,
+) -> AnswerMatrixResponse:
+    targets = (
+        await session.execute(
+            select(AuditTarget)
+            .where(AuditTarget.audit_id == audit.id)
+            .order_by(AuditTarget.id)
+        )
+    ).scalars().all()
+    queries = (
+        await session.execute(
+            select(Query).where(Query.audit_id == audit.id).order_by(Query.id)
+        )
+    ).scalars().all()
+    run_rows = (
+        await session.execute(
+            select(Run, ParsedResult, Score, RawResponse, AuditTarget)
+            .outerjoin(ParsedResult, ParsedResult.run_id == Run.id)
+            .outerjoin(Score, Score.run_id == Run.id)
+            .outerjoin(RawResponse, RawResponse.run_id == Run.id)
+            .outerjoin(AuditTarget, AuditTarget.id == Run.audit_target_id)
+            .where(Run.audit_id == audit.id)
+            .order_by(Run.query_id, Run.audit_target_id, Run.provider, Run.run_number, Run.id)
+        )
+    ).all()
+
+    columns = _answer_matrix_columns(audit, list(targets), run_rows)
+    run_by_cell = _answer_matrix_run_lookup(audit, run_rows, columns)
+    provider_diagnostics: list[ProviderDiagnosticResponse] = []
+
+    rows: list[AnswerMatrixRowResponse] = []
+    for query in queries:
+        cells: list[AnswerMatrixCellResponse] = []
+        for column in columns:
+            run_tuple = run_by_cell.get((query.id, column.target_id))
+            cell = _answer_matrix_cell(audit, column, run_tuple)
+            if cell.provider_error is not None:
+                provider_diagnostics.append(cell.provider_error)
+            cells.append(cell)
+        rows.append(
+            AnswerMatrixRowResponse(
+                query_id=str(query.id),
+                query_text=query.text,
+                query_type=(
+                    query.query_type.value
+                    if hasattr(query.query_type, "value")
+                    else query.query_type
+                ),
+                cells=cells,
+            )
+        )
+
+    return AnswerMatrixResponse(
+        audit_id=audit.id,
+        columns=columns,
+        rows=rows,
+        provider_diagnostics=_dedupe_provider_diagnostics(provider_diagnostics),
+    )
+
+
+def _answer_matrix_columns(
+    audit: Audit,
+    targets: list[AuditTarget],
+    run_rows: list[AnswerMatrixRunTuple],
+) -> list[AnswerMatrixColumnResponse]:
+    if targets:
+        return [
+            AnswerMatrixColumnResponse(
+                target_id=str(target.id),
+                label=f"{target.display_name} / {_scdl_level_value(target.level)}",
+                ai_family=target.ai_family,
+                execution_provider=target.execution_provider,
+                model_provider=target.model_provider,
+                model_id=target.model_id,
+                level=_scdl_level_value(target.level),
+                gateway=target.gateway,
+                gateway_l2_experimental=target.gateway_l2_experimental,
+            )
+            for target in targets
+        ]
+
+    providers = list(audit.providers or [])
+    if not providers:
+        providers = sorted({run.provider for run, *_rest in run_rows}) or ["unknown"]
+    level = _scdl_level_value(audit.scdl_level)
+    return [
+        AnswerMatrixColumnResponse(
+            target_id=f"legacy:{provider}:{level}",
+            label=f"{provider} / {level}",
+            ai_family=None,
+            execution_provider=provider,
+            model_provider=provider,
+            model_id=provider,
+            level=level,
+            gateway=False,
+            gateway_l2_experimental=False,
+        )
+        for provider in providers
+    ]
+
+
+def _answer_matrix_run_lookup(
+    audit: Audit,
+    run_rows: list[AnswerMatrixRunTuple],
+    columns: list[AnswerMatrixColumnResponse],
+) -> dict[tuple[int, str], AnswerMatrixRunTuple]:
+    column_ids = {column.target_id for column in columns}
+    legacy_level = _scdl_level_value(audit.scdl_level)
+    lookup: dict[tuple[int, str], AnswerMatrixRunTuple] = {}
+    for row in run_rows:
+        run = row[0]
+        target = row[4]
+        target_id = (
+            str(target.id)
+            if target is not None
+            else f"legacy:{run.provider}:{legacy_level}"
+        )
+        if target_id not in column_ids:
+            continue
+        lookup.setdefault((run.query_id, target_id), row)
+    return lookup
+
+
+def _answer_matrix_cell(
+    audit: Audit,
+    column: AnswerMatrixColumnResponse,
+    run_tuple: AnswerMatrixRunTuple | None,
+) -> AnswerMatrixCellResponse:
+    if run_tuple is None:
+        return AnswerMatrixCellResponse(target_id=column.target_id, status="not_run")
+
+    run, parsed_result, score, raw_response, target = run_tuple
+    provider_error = _provider_diagnostic_response(
+        error_object=raw_response.error_object if raw_response is not None else None,
+        provider=run.provider,
+        run_status=run.status,
+        model=_provider_model_from_metadata(
+            raw_response.provider_metadata if raw_response is not None else None
+        ),
+        level=_target_level(target, audit),
+        run_id=run.id,
+        query_id=run.query_id,
+    )
+    return AnswerMatrixCellResponse(
+        target_id=column.target_id,
+        run_id=run.id,
+        status=_answer_matrix_cell_status(run, parsed_result, score),
+        answer_excerpt=_answer_excerpt(raw_response.raw_answer if raw_response else None),
+        brand_mentioned=(
+            parsed_result.visible_brand if parsed_result is not None else None
+        ),
+        score=score.final_score if score is not None else None,
+        evaluation=None,
+        sources_count=_sources_count(parsed_result, raw_response),
+        provider_error=provider_error,
+        concepts=[],
+        competitor_candidates=[],
+    )
+
+
+def _answer_matrix_cell_status(
+    run: Run,
+    parsed_result: ParsedResult | None,
+    score: Score | None,
+) -> str:
+    status = _run_status_value(run.status)
+    if status == "success" and parsed_result is not None and score is not None:
+        return "completed"
+    if status == "success":
+        return "partial"
+    if status in {"error", "timeout", "rate_limited"}:
+        return "failed"
+    if status == "pending":
+        return "processing"
+    return "missing"
+
+
+def _answer_excerpt(raw_answer: str | None) -> str | None:
+    if raw_answer is None:
+        return None
+    normalized = " ".join(raw_answer.strip().split())
+    if not normalized:
+        return None
+    if len(normalized) <= ANSWER_EXCERPT_MAX_CHARS:
+        return normalized
+    return f"{normalized[:ANSWER_EXCERPT_MAX_CHARS].rstrip()}..."
+
+
+def _sources_count(
+    parsed_result: ParsedResult | None,
+    raw_response: RawResponse | None,
+) -> int:
+    if parsed_result is not None and isinstance(parsed_result.sources, list):
+        return len(parsed_result.sources)
+    if raw_response is not None and isinstance(raw_response.citations, list):
+        return len(raw_response.citations)
+    return 0
+
+
+def build_source_domains_response(audit: Audit) -> SourceDomainsResponse:
+    return SourceDomainsResponse(audit_id=audit.id, domains=[], warnings=[])
+
+
 async def build_raw_response_inspection_response(
     session: AsyncSession,
     audit: Audit,
@@ -2482,6 +2888,54 @@ async def get_audit_summary(
         raise
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=500, detail="Failed to load audit summary.") from exc
+
+
+@app.get("/audits/{audit_id}/summary-v2", response_model=AuditSummaryV2Response)
+async def get_audit_summary_v2(
+    audit_id: int,
+    request: Request,
+    session: AsyncSession = DB_SESSION_DEPENDENCY,
+) -> AuditSummaryV2Response:
+    try:
+        current_user = await get_authenticated_user_from_request(session, request)
+        audit, _brand = await load_accessible_audit(session, audit_id, current_user)
+        return await build_audit_summary_v2_response(session, audit)
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=500, detail="Failed to load audit summary v2.") from exc
+
+
+@app.get("/audits/{audit_id}/answer-matrix", response_model=AnswerMatrixResponse)
+async def get_audit_answer_matrix(
+    audit_id: int,
+    request: Request,
+    session: AsyncSession = DB_SESSION_DEPENDENCY,
+) -> AnswerMatrixResponse:
+    try:
+        current_user = await get_authenticated_user_from_request(session, request)
+        audit, _brand = await load_accessible_audit(session, audit_id, current_user)
+        return await build_answer_matrix_response(session, audit)
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=500, detail="Failed to load answer matrix.") from exc
+
+
+@app.get("/audits/{audit_id}/source-domains", response_model=SourceDomainsResponse)
+async def get_audit_source_domains(
+    audit_id: int,
+    request: Request,
+    session: AsyncSession = DB_SESSION_DEPENDENCY,
+) -> SourceDomainsResponse:
+    try:
+        current_user = await get_authenticated_user_from_request(session, request)
+        audit, _brand = await load_accessible_audit(session, audit_id, current_user)
+        return build_source_domains_response(audit)
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=500, detail="Failed to load source domains.") from exc
 
 
 @app.get(

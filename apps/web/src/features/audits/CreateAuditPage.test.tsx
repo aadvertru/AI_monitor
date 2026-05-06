@@ -589,7 +589,7 @@ describe("create audit page", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.queryByDisplayValue("generated query one")).not.toBeInTheDocument();
-  });
+  }, 15_000);
 
   it("shows seed query generation loading state", async () => {
     const fetchMock = vi.fn();

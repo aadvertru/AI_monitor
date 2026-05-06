@@ -101,6 +101,10 @@ class AuditDetailResponse(FrontendAuditSchema):
     seed_queries: list[str] = Field(default_factory=list)
     seed_query_items: list[SeedQueryItemResponse] = Field(default_factory=list)
     model_targets: list[AuditTargetResponse] = Field(default_factory=list)
+    concepts: list["ConceptResponse"] = Field(default_factory=list)
+    competitor_candidates: list["CompetitorCandidateResponse"] = Field(
+        default_factory=list
+    )
     enable_query_expansion: bool = False
     enable_source_intelligence: bool = False
     follow_up_depth: int = 0
@@ -288,6 +292,141 @@ class AuditSummaryResponse(FrontendAuditSchema):
     competitors: list[CompetitorSummaryItemResponse] = Field(default_factory=list)
     sources: list[SourceSummaryItemResponse] = Field(default_factory=list)
     provider_diagnostics: list[ProviderDiagnosticResponse] = Field(default_factory=list)
+
+
+class MentionabilityMetricResponse(FrontendAuditSchema):
+    percentage: float | None = None
+    found: int = 0
+    total: int = 0
+
+
+class ToneBreakdownResponse(FrontendAuditSchema):
+    positive: int = 0
+    neutral: int = 0
+    negative: int = 0
+    unknown: int = 0
+
+
+class ConceptResponse(FrontendAuditSchema):
+    text: str
+    type: Literal["concept"] = "concept"
+    count: int = 0
+    evidence_count: int = 0
+
+
+class CompetitorCandidateResponse(FrontendAuditSchema):
+    name: str
+    domain: str | None = None
+    confidence: float | None = None
+    evidence_type: str | None = None
+    evidence_count: int = 0
+
+
+class AuditSummaryV2TotalsResponse(FrontendAuditSchema):
+    query_count: int = 0
+    target_count: int = 0
+    run_count: int = 0
+    completed_runs: int = 0
+    failed_runs: int = 0
+    partial_runs: int = 0
+    levels: list[SCDLLevelValue] = Field(default_factory=list)
+
+
+class AuditSummaryV2OverallResponse(FrontendAuditSchema):
+    mentionability_l1: MentionabilityMetricResponse = Field(
+        default_factory=MentionabilityMetricResponse
+    )
+    mentionability_l2: MentionabilityMetricResponse = Field(
+        default_factory=MentionabilityMetricResponse
+    )
+    accuracy_l1: float | None = None
+    accuracy_l2: float | None = None
+    tone: ToneBreakdownResponse = Field(default_factory=ToneBreakdownResponse)
+
+
+class AuditSummaryV2ModelSummaryResponse(FrontendAuditSchema):
+    target_group_label: str
+    ai_family: str | None = None
+    execution_provider: str
+    model_provider: str | None = None
+    model_id: str
+    mr_l1: float | None = None
+    mr_l2: float | None = None
+    delta_mr: float | None = None
+    accuracy_l1: float | None = None
+    accuracy_l2: float | None = None
+    delta_accuracy: float | None = None
+    tone_l1: Literal["positive", "neutral", "negative", "unknown"] | None = None
+    tone_l2: Literal["positive", "neutral", "negative", "unknown"] | None = None
+    concepts: list[ConceptResponse] = Field(default_factory=list)
+    competitor_candidates: list[CompetitorCandidateResponse] = Field(default_factory=list)
+
+
+class AuditSummaryV2Response(FrontendAuditSchema):
+    audit_id: int
+    status: AuditStatusValue
+    totals: AuditSummaryV2TotalsResponse
+    overall: AuditSummaryV2OverallResponse
+    model_summaries: list[AuditSummaryV2ModelSummaryResponse] = Field(default_factory=list)
+    concepts: list[ConceptResponse] = Field(default_factory=list)
+    competitor_candidates: list[CompetitorCandidateResponse] = Field(default_factory=list)
+    provider_diagnostics: list[ProviderDiagnosticResponse] = Field(default_factory=list)
+
+
+AnswerMatrixCellStatusValue = Literal[
+    "completed",
+    "failed",
+    "partial",
+    "not_run",
+    "processing",
+    "missing",
+]
+
+
+class AnswerMatrixColumnResponse(FrontendAuditSchema):
+    target_id: str
+    label: str
+    ai_family: str | None = None
+    execution_provider: str
+    model_provider: str | None = None
+    model_id: str
+    level: SCDLLevelValue
+    gateway: bool = False
+    gateway_l2_experimental: bool = False
+
+
+class AnswerMatrixCellResponse(FrontendAuditSchema):
+    target_id: str
+    run_id: int | None = None
+    status: AnswerMatrixCellStatusValue
+    answer_excerpt: str | None = None
+    brand_mentioned: bool | None = None
+    score: float | None = None
+    evaluation: None = None
+    sources_count: int = 0
+    provider_error: ProviderDiagnosticResponse | None = None
+    concepts: list[ConceptResponse] = Field(default_factory=list)
+    competitor_candidates: list[CompetitorCandidateResponse] = Field(default_factory=list)
+
+
+class AnswerMatrixRowResponse(FrontendAuditSchema):
+    query_id: str
+    query_text: str
+    query_type: SeedQueryTypeValue | Literal["unknown"] | None = None
+    cells: list[AnswerMatrixCellResponse] = Field(default_factory=list)
+
+
+class AnswerMatrixResponse(FrontendAuditSchema):
+    audit_id: int
+    columns: list[AnswerMatrixColumnResponse] = Field(default_factory=list)
+    rows: list[AnswerMatrixRowResponse] = Field(default_factory=list)
+    provider_diagnostics: list[ProviderDiagnosticResponse] = Field(default_factory=list)
+
+
+class SourceDomainsResponse(FrontendAuditSchema):
+    audit_id: int
+    domains: list[dict[str, object]] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class RawResponseInspectionResponse(FrontendAuditSchema):

@@ -16,6 +16,9 @@ import type {
   ModelCatalogResponseWire,
   AuditEstimateResponse,
   ProfileResponse,
+  AnswerMatrixResponse,
+  AuditSummaryV2Response,
+  SourceDomainsResponse,
 } from "../lib/api/types";
 import type { ApiErrorPayload } from "../lib/api/client";
 
@@ -467,6 +470,131 @@ export const auditSummaryFixture: AuditSummaryResponse = {
   competitors: competitorsSummaryFixture,
   sources: sourcesSummaryFixture,
   provider_diagnostics: [],
+};
+
+export const auditSummaryV2Fixture: AuditSummaryV2Response = {
+  audit_id: 42,
+  status: "partial",
+  totals: {
+    query_count: 2,
+    target_count: 2,
+    run_count: 3,
+    completed_runs: 2,
+    failed_runs: 1,
+    levels: ["L1", "L2"],
+  },
+  overall: {
+    mentionability_l1: {
+      found: 1,
+      total: 1,
+      percentage: 100,
+    },
+    mentionability_l2: {
+      found: 0,
+      total: 1,
+      percentage: 0,
+    },
+    accuracy_l1: null,
+    accuracy_l2: null,
+    tone: {
+      positive: 1,
+      neutral: 0,
+      negative: 1,
+      unknown: 0,
+    },
+  },
+  model_summaries: [
+    {
+      target_group_label: "GPT-4o mini",
+      ai_family: "chatgpt",
+      execution_provider: "openrouter",
+      model_provider: "openai",
+      model_id: "openai/gpt-4o-mini",
+      mr_l1: 100,
+      mr_l2: 0,
+      delta_mr: -100,
+      accuracy_l1: null,
+      accuracy_l2: null,
+      delta_accuracy: null,
+      tone_l1: "positive",
+      tone_l2: "negative",
+      concepts: [],
+      competitor_candidates: [],
+    },
+  ],
+  concepts: [],
+  competitor_candidates: [],
+  provider_diagnostics: [providerDiagnosticFixture],
+};
+
+export const auditAnswerMatrixFixture: AnswerMatrixResponse = {
+  audit_id: 42,
+  columns: [
+    {
+      target_id: "10",
+      label: "GPT-4o mini / L1",
+      ai_family: "chatgpt",
+      execution_provider: "openrouter",
+      model_provider: "openai",
+      model_id: "openai/gpt-4o-mini",
+      level: "L1",
+      gateway: true,
+      gateway_l2_experimental: false,
+    },
+    {
+      target_id: "11",
+      label: "GPT-4o mini with web / L2",
+      ai_family: "chatgpt",
+      execution_provider: "openrouter",
+      model_provider: "openai",
+      model_id: "openai/gpt-4o-mini",
+      level: "L2",
+      gateway: true,
+      gateway_l2_experimental: true,
+    },
+  ],
+  rows: [
+    {
+      query_id: "101",
+      query_text: "best ai visibility tools",
+      query_type: "category_discovery",
+      cells: [
+        {
+          target_id: "10",
+          run_id: 1001,
+          status: "completed",
+          answer_excerpt: "Acme AI is visible in this answer.",
+          brand_mentioned: true,
+          score: 0.82,
+          evaluation: null,
+          sources_count: 1,
+          provider_error: null,
+          concepts: [],
+          competitor_candidates: [],
+        },
+        {
+          target_id: "11",
+          run_id: 1002,
+          status: "failed",
+          answer_excerpt: null,
+          brand_mentioned: null,
+          score: null,
+          evaluation: null,
+          sources_count: 0,
+          provider_error: providerDiagnosticFixture,
+          concepts: [],
+          competitor_candidates: [],
+        },
+      ],
+    },
+  ],
+  provider_diagnostics: [providerDiagnosticFixture],
+};
+
+export const sourceDomainsFixture: SourceDomainsResponse = {
+  audit_id: 42,
+  domains: [],
+  warnings: [],
 };
 
 export const emptyAuditSummaryFixture: AuditSummaryResponse = {

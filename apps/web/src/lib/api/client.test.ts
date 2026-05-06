@@ -7,9 +7,12 @@ import {
   deleteArchivedAudit,
   estimateAudit,
   generateSeedQuerySuggestions,
+  getAuditAnswerMatrix,
   getAuditDetail,
   getAuditResults,
+  getAuditSourceDomains,
   getAuditSummary,
+  getAuditSummaryV2,
   getCurrentUser,
   getModelCatalog,
   loginUser,
@@ -23,9 +26,11 @@ import {
   auditDetailFixture,
   auditDetailWithModelTargetsFixture,
   auditEstimateFixture,
+  auditAnswerMatrixFixture,
   auditListFixture,
   auditPipelineRunFixture,
   auditResultsFixture,
+  auditSummaryV2Fixture,
   auditSummaryFixture,
   auditTargetFixture,
   auditTargetWireFixture,
@@ -36,6 +41,7 @@ import {
   modelCatalogWireFixture,
   openRouterL2AuditTargetFixture,
   openRouterL2AuditTargetWireFixture,
+  sourceDomainsFixture,
   unauthenticatedAuthErrorFixture,
 } from "../../test/fixtures";
 import { mockFetchSequence } from "../../test/mockFetch";
@@ -367,6 +373,94 @@ describe("api client", () => {
     mockFetchSequence([{ body: auditSummaryFixture }]);
 
     await expect(getAuditSummary(42)).resolves.toEqual(auditSummaryFixture);
+  });
+
+  it("loads audit summary v2 responses with safe empty placeholders", async () => {
+    const fetchMock = mockFetchSequence([{ body: auditSummaryV2Fixture }]);
+
+    await expect(getAuditSummaryV2(42)).resolves.toEqual(auditSummaryV2Fixture);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/audits/42/summary-v2",
+      expect.objectContaining({ credentials: "include" }),
+    );
+    expect(auditSummaryV2Fixture.overall.accuracy_l1).toBeNull();
+    expect(auditSummaryV2Fixture.concepts).toEqual([]);
+    expect(auditSummaryV2Fixture.competitor_candidates).toEqual([]);
+  });
+
+  it("loads answer matrix responses with nullable evaluation and provider errors", async () => {
+    const fetchMock = mockFetchSequence([{ body: auditAnswerMatrixFixture }]);
+
+    await expect(getAuditAnswerMatrix(42)).resolves.toEqual(auditAnswerMatrixFixture);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/audits/42/answer-matrix",
+      expect.objectContaining({ credentials: "include" }),
+    );
+    expect(auditAnswerMatrixFixture.columns[1]?.gateway_l2_experimental).toBe(true);
+    expect(auditAnswerMatrixFixture.rows[0]?.cells[0]?.evaluation).toBeNull();
+    expect(auditAnswerMatrixFixture.rows[0]?.cells[1]?.provider_error?.code).toBe("TIMEOUT");
+  });
+
+  it("loads source domains strict placeholder responses", async () => {
+    const fetchMock = mockFetchSequence([{ body: sourceDomainsFixture }]);
+
+    await expect(getAuditSourceDomains(42)).resolves.toEqual(sourceDomainsFixture);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/audits/42/source-domains",
+      expect.objectContaining({ credentials: "include" }),
+    );
+  });
+
+  it("normalizes partial results v2 payloads to safe arrays", async () => {
+    mockFetchSequence([
+      {
+        body: {
+          audit_id: 42,
+          status: "created",
+          totals: {
+            query_count: 0,
+            target_count: 0,
+            run_count: 0,
+            completed_runs: 0,
+            failed_runs: 0,
+            levels: [],
+          },
+          overall: {
+            mentionability_l1: { found: 0, total: 0, percentage: null },
+            mentionability_l2: { found: 0, total: 0, percentage: null },
+            accuracy_l1: null,
+            accuracy_l2: null,
+            tone: { positive: 0, neutral: 0, negative: 0, unknown: 0 },
+          },
+        },
+      },
+      {
+        body: {
+          audit_id: 42,
+          columns: [],
+          rows: [{ query_id: "1", query_text: "legacy query" }],
+        },
+      },
+      {
+        body: { audit_id: 42 },
+      },
+    ]);
+
+    await expect(getAuditSummaryV2(42)).resolves.toMatchObject({
+      model_summaries: [],
+      concepts: [],
+      competitor_candidates: [],
+      provider_diagnostics: [],
+    });
+    await expect(getAuditAnswerMatrix(42)).resolves.toMatchObject({
+      rows: [{ cells: [] }],
+      provider_diagnostics: [],
+    });
+    await expect(getAuditSourceDomains(42)).resolves.toEqual({
+      audit_id: 42,
+      domains: [],
+      warnings: [],
+    });
   });
 
   it("starts the owner audit pipeline with a credentialed request", async () => {
