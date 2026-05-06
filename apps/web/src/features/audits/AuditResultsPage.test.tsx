@@ -112,8 +112,60 @@ describe("audit results page", () => {
     expect(screen.getByText(/Sentiment 0.80/)).toBeInTheDocument();
     expect(screen.getByText(/Recommendation 0.60/)).toBeInTheDocument();
     expect(screen.getByText(/Source quality 0.75/)).toBeInTheDocument();
-    expect(screen.getByText("Competitors: Contoso Monitor")).toBeInTheDocument();
+    expect(screen.getByText("Concepts / Phrases")).toBeInTheDocument();
+    expect(screen.getByText("AI visibility benchmarks")).toBeInTheDocument();
+    expect(screen.getByText(/legacy_phrase/)).toBeInTheDocument();
+    expect(screen.getByText("Competitor Candidates")).toBeInTheDocument();
+    expect(screen.getByText("Contoso Monitor")).toBeInTheDocument();
+    expect(screen.getByText(/contoso.example/)).toBeInTheDocument();
+    expect(screen.getByText(/confidence: 82%/)).toBeInTheDocument();
     expect(screen.getByText("Sources: example.com")).toBeInTheDocument();
+  });
+
+  it("renders concept and competitor empty states separately", async () => {
+    const user = userEvent.setup();
+    renderResults({
+      ...auditResultsFixture,
+      rows: [
+        {
+          ...auditResultsFixture.rows[0],
+          competitors: [],
+          concepts: [],
+          competitor_candidates: [],
+        },
+      ],
+      total: 1,
+    });
+
+    await screen.findByText("best ai visibility tools");
+    await user.click(screen.getAllByRole("button", { name: "Details" })[0]);
+
+    expect(screen.getByText("No concepts extracted yet.")).toBeInTheDocument();
+    expect(screen.getByText("No competitor candidates found.")).toBeInTheDocument();
+  });
+
+  it("renders legacy competitors under concepts instead of competitor candidates", async () => {
+    const user = userEvent.setup();
+    renderResults({
+      ...auditResultsFixture,
+      rows: [
+        {
+          ...auditResultsFixture.rows[0],
+          competitors: ["generic category phrase"],
+          concepts: [],
+          competitor_candidates: [],
+        },
+      ],
+      total: 1,
+    });
+
+    await screen.findByText("best ai visibility tools");
+    await user.click(screen.getAllByRole("button", { name: "Details" })[0]);
+
+    const conceptSection = screen.getByText("Concepts / Phrases").closest("section");
+    const competitorSection = screen.getByText("Competitor Candidates").closest("section");
+    expect(conceptSection).toHaveTextContent("generic category phrase");
+    expect(competitorSection).not.toHaveTextContent("generic category phrase");
   });
 
   it("filters by provider and status", async () => {

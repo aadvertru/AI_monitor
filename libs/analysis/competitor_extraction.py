@@ -1,130 +1,345 @@
-"""Rule-based competitor candidate extraction."""
+"""Deterministic competitor candidate extraction.
+
+This module is intentionally conservative: it only emits candidates when a
+competitive context and a brand-like signal appear together. It does not call
+LLMs and it does not persist full provider answers as evidence.
+"""
 
 from __future__ import annotations
 
 import re
-from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Protocol
+from urllib.parse import urlparse
 
-from libs.analysis.preprocessing import PreprocessedText
+MIN_CONFIDENCE = 0.6
+ANSWER_EXCERPT_LIMIT = 240
 
-_SENTENCE_DELIMITERS = re.compile(r"[.!?]+")
-_CAPITALIZED_PHRASE_RE = re.compile(
-    r"\b(?:[A-Z][A-Za-z0-9&'\-]*)(?:\s+[A-Z][A-Za-z0-9&'\-]*)+\b"
+EN_CONTEXT_PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
+    ("alternatives", re.compile(r"\balternatives?\s+to\b", re.IGNORECASE), "comparison"),
+    ("competitors", re.compile(r"\bcompetitors?\s+of\b", re.IGNORECASE), "comparison"),
+    ("vs", re.compile(r"\b(?:vs\.?|versus)\b", re.IGNORECASE), "comparison"),
+    ("similar_tools", re.compile(r"\bsimilar\s+tools\b", re.IGNORECASE), "comparison"),
+    (
+        "similar_services",
+        re.compile(r"\bsimilar\s+services\b", re.IGNORECASE),
+        "comparison",
+    ),
+    ("best", re.compile(r"\bbest\s+[\w -]{2,80}", re.IGNORECASE), "category_list"),
+    ("top", re.compile(r"\btop\s+[\w -]{2,80}", re.IGNORECASE), "category_list"),
 )
-_SUFFIX_CANDIDATE_RE = re.compile(
-    r"\b([A-Z][A-Za-z0-9&'\-]*)\s+(AI|Pro|Cloud|Labs|Studio|App|HQ)\b"
+
+RU_CONTEXT_PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
+    ("alternatives_ru", re.compile(r"альтернатив", re.IGNORECASE), "comparison"),
+    ("competitors_ru", re.compile(r"конкурент", re.IGNORECASE), "comparison"),
+    ("similar_ru", re.compile(r"похож", re.IGNORECASE), "comparison"),
+    (
+        "similar_services_ru",
+        re.compile(r"похожие\s+сервисы", re.IGNORECASE),
+        "comparison",
+    ),
+    (
+        "similar_companies_ru",
+        re.compile(r"похожие\s+компании", re.IGNORECASE),
+        "comparison",
+    ),
+    ("best_ru", re.compile(r"лучшие", re.IGNORECASE), "category_list"),
+    ("top_ru", re.compile(r"\bтоп\b", re.IGNORECASE), "category_list"),
+    ("comparison_ru", re.compile(r"сравнен", re.IGNORECASE), "comparison"),
+    ("against_ru", re.compile(r"против", re.IGNORECASE), "comparison"),
 )
-_SENTENCE_START_STOPWORDS = {
-    "a",
-    "an",
-    "another",
-    "it",
-    "later",
-    "the",
-    "this",
-    "today",
-    "we",
+
+DOMAIN_PATTERN = re.compile(
+    r"\b(?:https?://)?(?:www\.)?([a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+)\b",
+    re.IGNORECASE,
+)
+BRAND_SPAN_PATTERN = re.compile(
+    r"\b(?:[A-Z][A-Za-z0-9&'-]*|[А-ЯЁ][А-ЯЁа-яё0-9&'-]*)"
+    r"(?:\s+(?:[A-Z][A-Za-z0-9&'-]*|[А-ЯЁ][А-ЯЁа-яё0-9&'-]*)){0,3}\b"
+)
+WEAK_BRAND_SUFFIX_PATTERN = re.compile(
+    r"\b([A-Z][A-Za-z0-9&'-]*(?:\s+[A-Z][A-Za-z0-9&'-]*){0,2})"
+    r"\s+(?:Inc|Corp|LLC|Ltd|AI|CRM|SaaS)\b"
+)
+
+GENERIC_CANDIDATES = {
+    "best",
+    "top",
+    "alternatives",
+    "competitors",
+    "similar",
+    "tools",
+    "services",
+    "software",
+    "platform",
+    "company",
+    "companies",
+    "solution",
+    "solutions",
+    "dance studio",
+    "ballet classes",
+    "children's programs",
+    "лучшие",
+    "топ",
+    "альтернативы",
+    "конкуренты",
+    "похожие",
+}
+
+TITLE_STOPWORDS = {
+    "The",
+    "A",
+    "An",
+    "Best",
+    "Top",
+    "Alternative",
+    "Alternatives",
+    "Competitor",
+    "Competitors",
+    "Similar",
+    "Compare",
+    "Comparison",
+    "Recommended",
+    "Many",
+    "Which",
+    "What",
+    "How",
 }
 
 
+class PreprocessedTextLike(Protocol):
+    original: str
+
+
 @dataclass(frozen=True)
-class CompetitorCandidate:
+class CompetitorMention:
     name: str
-    frequency: int
+    mention_count: int = 1
+    evidence_type: str = "legacy_phrase"
 
 
-def _split_original_sentences(original: str) -> list[str]:
-    parts = _SENTENCE_DELIMITERS.split(original)
-    return [part.strip() for part in parts if part.strip()]
+@dataclass(frozen=True)
+class CompetitorExtractionInput:
+    answer_text: str
+    query_text: str = ""
+    brand_name: str | None = None
+    brand_domain: str | None = None
+    known_competitors: tuple[str, ...] = ()
+    query_id: int | None = None
+    run_id: int | None = None
+    target_id: int | None = None
+    level: str | None = None
+    model_id: str | None = None
 
 
-def _collapse_spaces(value: str) -> str:
-    return " ".join(value.split())
+@dataclass(frozen=True)
+class CompetitorEvidence:
+    query_id: int | None = None
+    run_id: int | None = None
+    target_id: int | None = None
+    answer_excerpt: str = ""
+    matched_phrase: str = ""
+    evidence_type: str = "comparison"
+    level: str | None = None
+    model_id: str | None = None
+    language: str | None = None
+    pattern: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "query_id": self.query_id,
+            "run_id": self.run_id,
+            "target_id": self.target_id,
+            "answer_excerpt": self.answer_excerpt,
+            "matched_phrase": self.matched_phrase,
+            "evidence_type": self.evidence_type,
+            "level": self.level,
+            "model_id": self.model_id,
+            "language": self.language,
+            "pattern": self.pattern,
+        }
 
 
-def _name_key(value: str) -> str:
-    return "".join(char for char in value.casefold() if char.isalnum())
+@dataclass(frozen=True)
+class CompetitorCandidateExtraction:
+    name: str
+    domain: str | None
+    confidence: float
+    evidence_type: str
+    evidence: tuple[CompetitorEvidence, ...] = field(default_factory=tuple)
 
 
-def _is_sentence_start_match(sentence: str, start_index: int) -> bool:
-    trimmed = sentence.lstrip()
-    leading_spaces = len(sentence) - len(trimmed)
-    return start_index == leading_spaces
+@dataclass(frozen=True)
+class CompetitiveContext:
+    language: str
+    pattern: str
+    evidence_type: str
+
+
+def extract_competitor_candidates(
+    payload: CompetitorExtractionInput,
+) -> list[CompetitorCandidateExtraction]:
+    text = f"{payload.query_text}\n{payload.answer_text}".strip()
+    context = _competitive_context(text)
+    if context is None:
+        return []
+
+    own_names = _own_brand_tokens(payload)
+    candidates: dict[str, CompetitorCandidateExtraction] = {}
+    for raw_name, domain, signal in _candidate_signals(payload):
+        name = _clean_candidate_name(raw_name)
+        if not _is_acceptable_candidate(name, own_names):
+            continue
+        confidence = _confidence(signal=signal, evidence_type=context.evidence_type)
+        if confidence < MIN_CONFIDENCE:
+            continue
+        evidence = CompetitorEvidence(
+            query_id=payload.query_id,
+            run_id=payload.run_id,
+            target_id=payload.target_id,
+            answer_excerpt=_excerpt(payload.answer_text, name),
+            matched_phrase=name,
+            evidence_type=context.evidence_type,
+            level=payload.level,
+            model_id=payload.model_id,
+            language=context.language,
+            pattern=context.pattern,
+        )
+        normalized = name.casefold()
+        previous = candidates.get(normalized)
+        candidate = CompetitorCandidateExtraction(
+            name=name,
+            domain=domain,
+            confidence=confidence,
+            evidence_type=context.evidence_type,
+            evidence=(evidence,),
+        )
+        if previous is None or candidate.confidence > previous.confidence:
+            candidates[normalized] = candidate
+
+    return sorted(candidates.values(), key=lambda item: (-item.confidence, item.name))
 
 
 def extract_competitors(
-    preprocessed: PreprocessedText, brand_name: str
-) -> list[CompetitorCandidate]:
-    """Extract competitor candidates with deterministic rules and sorting."""
-    try:
-        original = preprocessed.original or ""
-        if not original.strip():
-            return []
+    preprocessed: PreprocessedTextLike,
+    brand_name: str,
+) -> list[CompetitorMention]:
+    """Legacy parser hook.
 
-        target_key = _name_key(brand_name.strip())
-        frequencies: Counter[str] = Counter()
+    The parser historically stores generic extracted "competitors" as JSON in
+    ParsedResult. Phase U keeps this hook for backward compatibility; real
+    competitor candidates are produced by extract_competitor_candidates().
+    """
+    own_names = {brand_name.casefold()} if brand_name else set()
+    mentions: dict[str, CompetitorMention] = {}
+    for match in BRAND_SPAN_PATTERN.finditer(preprocessed.original):
+        name = _clean_candidate_name(match.group(0))
+        if not _is_acceptable_candidate(name, own_names):
+            continue
+        normalized = name.casefold()
+        if normalized in mentions:
+            continue
+        mentions[normalized] = CompetitorMention(name=name)
+    return list(mentions.values())
 
-        for sentence in _split_original_sentences(original):
-            seen_occurrences: set[tuple[int, int, str]] = set()
 
-            # Rule 1: sequences of 2+ capitalized words.
-            for match in _CAPITALIZED_PHRASE_RE.finditer(sentence):
-                candidate_raw = _collapse_spaces(match.group(0))
-                candidate_words = candidate_raw.split()
+def _competitive_context(text: str) -> CompetitiveContext | None:
+    for language, patterns in (("en", EN_CONTEXT_PATTERNS), ("ru", RU_CONTEXT_PATTERNS)):
+        for name, pattern, evidence_type in patterns:
+            if pattern.search(text):
+                return CompetitiveContext(
+                    language=language,
+                    pattern=name,
+                    evidence_type=evidence_type,
+                )
+    return None
 
-                if _is_sentence_start_match(sentence, match.start()):
-                    first_word = candidate_words[0].casefold()
-                    if first_word in _SENTENCE_START_STOPWORDS:
-                        if len(candidate_words) >= 3:
-                            candidate_raw = " ".join(candidate_words[1:])
-                        else:
-                            continue
 
-                candidate = candidate_raw.casefold()
-                if not candidate:
-                    continue
-                if _name_key(candidate) == target_key:
-                    continue
+def _candidate_signals(
+    payload: CompetitorExtractionInput,
+) -> list[tuple[str, str | None, str]]:
+    text = payload.answer_text
+    signals: list[tuple[str, str | None, str]] = []
+    for name in payload.known_competitors:
+        if name and re.search(rf"\b{re.escape(name)}\b", text, re.IGNORECASE):
+            signals.append((name, None, "known"))
+    for domain in _domains(text):
+        signals.append((_name_from_domain(domain), domain, "domain"))
+    for match in WEAK_BRAND_SUFFIX_PATTERN.finditer(text):
+        signals.append((match.group(1), None, "brand_like"))
+    for match in BRAND_SPAN_PATTERN.finditer(text):
+        signals.append((match.group(0), None, "brand_like"))
+    return signals
 
-                span_start = sentence.casefold().find(candidate, match.start())
-                if span_start < 0:
-                    span_start = match.start()
-                span_end = span_start + len(candidate)
-                occurrence_key = (span_start, span_end, candidate)
-                if occurrence_key in seen_occurrences:
-                    continue
 
-                seen_occurrences.add(occurrence_key)
-                frequencies[candidate] += 1
+def _domains(text: str) -> list[str]:
+    domains: list[str] = []
+    for match in DOMAIN_PATTERN.finditer(text):
+        domain = match.group(1).lower().rstrip(".")
+        parsed = urlparse(f"https://{domain}")
+        if parsed.hostname and "." in parsed.hostname:
+            domains.append(parsed.hostname)
+    return domains
 
-            # Rule 2: single capitalized word + common product suffix.
-            for match in _SUFFIX_CANDIDATE_RE.finditer(sentence):
-                if _is_sentence_start_match(sentence, match.start()):
-                    continue
 
-                candidate = _collapse_spaces(match.group(0)).casefold()
-                if not candidate:
-                    continue
-                if _name_key(candidate) == target_key:
-                    continue
+def _name_from_domain(domain: str) -> str:
+    label = domain.split(".")[0].replace("-", " ").strip()
+    return " ".join(part.capitalize() for part in label.split())
 
-                span_start, span_end = match.span()
-                occurrence_key = (span_start, span_end, candidate)
-                if occurrence_key in seen_occurrences:
-                    continue
 
-                seen_occurrences.add(occurrence_key)
-                frequencies[candidate] += 1
+def _confidence(*, signal: str, evidence_type: str) -> float:
+    # Deterministic formula from the contract:
+    # known context=0.9, domain context=0.8,
+    # brand-like+comparison=0.7, brand-like+category-list=0.5.
+    # The category-list path stays conservative: only known/domain-backed names
+    # pass the 0.6 threshold.
+    if signal == "known" and evidence_type in {"comparison", "category_list"}:
+        return 0.9
+    if signal == "domain" and evidence_type in {"comparison", "category_list"}:
+        return 0.8
+    if signal == "brand_like" and evidence_type == "comparison":
+        return 0.7
+    if signal == "brand_like" and evidence_type == "category_list":
+        return 0.5
+    return 0.0
 
-        if not frequencies:
-            return []
 
-        candidates = [
-            CompetitorCandidate(name=name, frequency=frequency)
-            for name, frequency in frequencies.items()
-        ]
-        candidates.sort(key=lambda item: (-item.frequency, item.name))
-        return candidates
-    except Exception:
-        return []
+def _own_brand_tokens(payload: CompetitorExtractionInput) -> set[str]:
+    tokens = set()
+    if payload.brand_name:
+        tokens.add(payload.brand_name.casefold())
+    if payload.brand_domain:
+        domain_label = payload.brand_domain.split(".")[0].replace("-", " ")
+        tokens.add(domain_label.casefold())
+    return tokens
+
+
+def _clean_candidate_name(value: str) -> str:
+    return re.sub(r"\s+", " ", value.strip(" ,.;:()[]{}")).strip()
+
+
+def _is_acceptable_candidate(name: str, own_names: set[str]) -> bool:
+    if not name:
+        return False
+    normalized = name.casefold()
+    if normalized in own_names or normalized in GENERIC_CANDIDATES:
+        return False
+    first_word = name.split()[0]
+    if first_word in TITLE_STOPWORDS:
+        return False
+    if len(name) < 2 or len(name) > 80:
+        return False
+    if name.islower():
+        return False
+    return True
+
+
+def _excerpt(answer_text: str, candidate: str) -> str:
+    if not answer_text:
+        return ""
+    match = re.search(re.escape(candidate), answer_text, re.IGNORECASE)
+    if match is None:
+        return answer_text[:ANSWER_EXCERPT_LIMIT]
+    start = max(match.start() - 80, 0)
+    end = min(match.end() + 80, len(answer_text))
+    return answer_text[start:end][:ANSWER_EXCERPT_LIMIT]

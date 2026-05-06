@@ -29,6 +29,8 @@ from libs.storage.models import (
     AuditTarget,
     Base,
     Brand,
+    CompetitorCandidate,
+    Concept,
     Job,
     JobStatus,
     ParsedResult,
@@ -1120,6 +1122,33 @@ class AuditReadRunResultsAPITests(unittest.IsolatedAsyncioTestCase):
                         provider_status="error",
                         error_object={"code": "mock_error", "message": "Provider failed."},
                     ),
+                    Concept(
+                        audit_id=audit.id,
+                        text="persisted concept",
+                        category="legacy_phrase",
+                        count=2,
+                        evidence_count=1,
+                        evidence=[
+                            {
+                                "run_id": success_run.id,
+                                "answer_excerpt": "safe excerpt",
+                            }
+                        ],
+                    ),
+                    CompetitorCandidate(
+                        audit_id=audit.id,
+                        name="Persisted Rival",
+                        domain="rival.example",
+                        confidence=0.8,
+                        evidence_type="comparison",
+                        evidence_count=1,
+                        evidence=[
+                            {
+                                "run_id": success_run.id,
+                                "answer_excerpt": "safe excerpt",
+                            }
+                        ],
+                    ),
                 ]
             )
             await session.commit()
@@ -1143,9 +1172,14 @@ class AuditReadRunResultsAPITests(unittest.IsolatedAsyncioTestCase):
         assert success_row.component_scores is not None
         self.assertEqual(success_row.component_scores.prominence_score, 0.8)
         self.assertEqual(success_row.competitors, ["Other Monitor"])
+        self.assertEqual(success_row.concepts[0].text, "persisted concept")
+        self.assertEqual(success_row.concepts[0].evidence_count, 1)
+        self.assertEqual(success_row.competitor_candidates[0].name, "Persisted Rival")
+        self.assertEqual(success_row.competitor_candidates[0].confidence, 0.8)
         self.assertEqual(success_row.sources[0].domain, "example.test")
         self.assertIsNotNone(success_row.raw_answer_ref)
         self.assertNotIn("raw_answer", success_row.model_dump())
+        self.assertNotIn("do not expose this full answer", str(success_row.model_dump()))
 
         self.assertEqual(failed_row.run_status, "error")
         self.assertIsNone(failed_row.final_score)

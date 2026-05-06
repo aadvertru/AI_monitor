@@ -169,6 +169,39 @@ def answer_matrix_cell_fixture(
     }
 
 
+def concept_fixture(
+    *,
+    text: str = "brand visibility",
+    category: str | None = "legacy_phrase",
+    count: int = 2,
+    evidence_count: int = 2,
+) -> dict[str, Any]:
+    return {
+        "text": text,
+        "type": "concept",
+        "category": category,
+        "count": count,
+        "evidence_count": evidence_count,
+    }
+
+
+def competitor_candidate_fixture(
+    *,
+    name: str = "Contoso Monitor",
+    domain: str | None = "contoso.example",
+    confidence: float | None = 0.82,
+    evidence_type: str | None = "comparison",
+    evidence_count: int = 2,
+) -> dict[str, Any]:
+    return {
+        "name": name,
+        "domain": domain,
+        "confidence": confidence,
+        "evidence_type": evidence_type,
+        "evidence_count": evidence_count,
+    }
+
+
 def source_domain_url_fixture(
     *,
     url: str = "https://docs.example.com/path?utm_source=test",
@@ -377,6 +410,95 @@ RESULTS_V2_FIXTURES = {
     "openrouter_gateway_l1_l2": OPENROUTER_GATEWAY_L1_L2_RESULTS_V2,
     "legacy_without_targets": LEGACY_WITHOUT_TARGETS_RESULTS_V2,
     "evaluation_null": EVALUATION_NULL_RESULTS_V2,
+}
+
+CONCEPT_COMPETITOR_FIXTURES = {
+    "concepts_only": {
+        "summary": summary_v2_fixture(
+            model_summaries=[
+                {
+                    **model_summary_fixture(),
+                    "concepts": [concept_fixture(text="answer monitoring")],
+                }
+            ]
+        )
+        | {"concepts": [concept_fixture(text="answer monitoring")]},
+        "matrix_cell": answer_matrix_cell_fixture(
+        )
+        | {"concepts": [concept_fixture(text="answer monitoring")]},
+        "legacy_competitors": ["answer monitoring"],
+    },
+    "competitor_candidates_only": {
+        "summary": summary_v2_fixture()
+        | {"competitor_candidates": [competitor_candidate_fixture()]},
+        "matrix_cell": answer_matrix_cell_fixture()
+        | {"competitor_candidates": [competitor_candidate_fixture()]},
+        "legacy_competitors": [],
+    },
+    "concepts_and_competitors": {
+        "summary": summary_v2_fixture()
+        | {
+            "concepts": [concept_fixture(text="ai search")],
+            "competitor_candidates": [competitor_candidate_fixture(name="Rival AI")],
+        },
+        "matrix_cell": answer_matrix_cell_fixture()
+        | {
+            "concepts": [concept_fixture(text="ai search")],
+            "competitor_candidates": [competitor_candidate_fixture(name="Rival AI")],
+        },
+        "legacy_competitors": ["ai search"],
+    },
+    "empty_concepts_competitors": {
+        "summary": summary_v2_fixture(),
+        "matrix_cell": answer_matrix_cell_fixture(),
+        "legacy_competitors": [],
+    },
+    "generic_phrases_not_competitors": {
+        "summary": summary_v2_fixture()
+        | {"concepts": [concept_fixture(text="children's ballet classes")]},
+        "matrix_cell": answer_matrix_cell_fixture()
+        | {"concepts": [concept_fixture(text="children's ballet classes")]},
+        "legacy_competitors": ["children's ballet classes"],
+    },
+    "russian_comparison_context": {
+        "summary": summary_v2_fixture()
+        | {"competitor_candidates": [competitor_candidate_fixture(name="Яндекс")]},
+        "matrix_cell": answer_matrix_cell_fixture()
+        | {"competitor_candidates": [competitor_candidate_fixture(name="Яндекс")]},
+        "legacy_competitors": [],
+    },
+    "multi_model_evidence": {
+        "summary": summary_v2_fixture(
+            target_count=2,
+            model_summaries=[
+                {
+                    **model_summary_fixture(label="GPT-4o mini"),
+                    "concepts": [concept_fixture(text="pricing")],
+                },
+                {
+                    **model_summary_fixture(
+                        label="Claude Sonnet",
+                        ai_family="claude",
+                        model_provider="anthropic",
+                        model_id="anthropic/claude-sonnet-4",
+                    ),
+                    "competitor_candidates": [
+                        competitor_candidate_fixture(evidence_count=3)
+                    ],
+                },
+            ],
+        )
+        | {
+            "concepts": [concept_fixture(text="pricing", evidence_count=3)],
+            "competitor_candidates": [competitor_candidate_fixture(evidence_count=3)],
+        },
+        "matrix_cell": answer_matrix_cell_fixture()
+        | {
+            "concepts": [concept_fixture(text="pricing", evidence_count=3)],
+            "competitor_candidates": [competitor_candidate_fixture(evidence_count=3)],
+        },
+        "legacy_competitors": ["pricing"],
+    },
 }
 
 SOURCE_INTELLIGENCE_V2_FIXTURES = {

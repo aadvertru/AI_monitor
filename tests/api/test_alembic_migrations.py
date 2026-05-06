@@ -33,6 +33,8 @@ def test_alembic_upgrade_head_creates_current_schema() -> None:
         "user_preferences",
         "brand_facts",
         "answer_evaluations",
+        "concepts",
+        "competitor_candidates",
         "audits",
         "queries",
         "jobs",
@@ -119,6 +121,41 @@ def test_alembic_upgrade_head_creates_current_schema() -> None:
     assert "uq_answer_evaluations_run_id" in _unique_names(
         inspector, "answer_evaluations"
     )
+    assert {
+        "audit_id",
+        "run_id",
+        "query_id",
+        "target_id",
+        "text",
+        "category",
+        "count",
+        "evidence_count",
+        "evidence",
+        "created_at",
+        "updated_at",
+    }.issubset(_column_names(inspector, "concepts"))
+    concept_checks = " ".join(
+        check["sqltext"] for check in inspector.get_check_constraints("concepts")
+    )
+    assert "count" in concept_checks
+    assert "evidence_count" in concept_checks
+    assert {
+        "audit_id",
+        "name",
+        "domain",
+        "confidence",
+        "evidence_type",
+        "evidence_count",
+        "evidence",
+        "created_at",
+        "updated_at",
+    }.issubset(_column_names(inspector, "competitor_candidates"))
+    candidate_checks = " ".join(
+        check["sqltext"]
+        for check in inspector.get_check_constraints("competitor_candidates")
+    )
+    assert "confidence" in candidate_checks
+    assert "evidence_count" in candidate_checks
     preference_checks = " ".join(
         check["sqltext"]
         for check in inspector.get_check_constraints("user_preferences")
@@ -133,7 +170,7 @@ def test_alembic_upgrade_head_creates_current_schema() -> None:
     with sqlite3.connect(db_path) as connection:
         version = connection.execute("SELECT version_num FROM alembic_version").fetchone()
 
-    assert version == ("e8f9a0b1c2d3",)
+    assert version == ("f9a0b1c2d3e4",)
 
 
 def _column_names(inspector, table_name: str) -> set[str]:

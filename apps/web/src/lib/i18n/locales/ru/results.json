@@ -53,6 +53,13 @@
     "recommendation": "Рекомендация",
     "sourceQuality": "Качество источников",
     "competitors": "Конкуренты",
+    "concepts": "Концепты / фразы",
+    "competitorCandidates": "Кандидаты в конкуренты",
+    "noConcepts": "Концепты пока не извлечены.",
+    "noCompetitorCandidates": "Кандидаты в конкуренты не найдены.",
+    "count": "количество: {{count}}",
+    "evidence": "доказательств: {{count}}",
+    "confidence": "уверенность: {{value}}",
     "sources": "Источники",
     "none": "Нет",
     "unknown": "Неизвестно"

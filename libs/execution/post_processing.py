@@ -6,17 +6,25 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from libs.analysis import parser, scoring
+from libs.analysis.competitor_extraction import (
+    CompetitorCandidateExtraction,
+    CompetitorExtractionInput,
+    extract_competitor_candidates,
+)
 from libs.execution.provider_adapter import ProviderResponse
 from libs.execution.safe_logging import duration_ms, log_event, perf_start
 from libs.storage.models import (
     Audit,
     AuditStatus,
+    AuditTarget,
     Brand,
+    CompetitorCandidate,
+    Concept,
     ParsedResult,
     Query,
     RawResponse,
@@ -132,6 +140,11 @@ async def process_audit_results(
             )
 
         await session.flush()
+        await _rebuild_concepts_and_competitor_candidates(
+            session=session,
+            audit=audit,
+            brand=brand,
+        )
         audit.status = await _derive_post_processing_status(
             session=session,
             audit=audit,
@@ -325,6 +338,177 @@ def _parsed_result_to_dict(parsed_result: ParsedResult) -> dict[str, Any]:
         "sources": parsed_result.sources,
         "parsed_payload": parsed_result.parsed_payload,
     }
+
+
+async def _rebuild_concepts_and_competitor_candidates(
+    *,
+    session: AsyncSession,
+    audit: Audit,
+    brand: Brand,
+) -> None:
+    await session.execute(delete(Concept).where(Concept.audit_id == audit.id))
+    await session.execute(
+        delete(CompetitorCandidate).where(CompetitorCandidate.audit_id == audit.id)
+    )
+
+    rows = (
+        await session.execute(
+            select(Run, Query, ParsedResult, RawResponse, AuditTarget)
+            .join(Query, Run.query_id == Query.id)
+            .join(ParsedResult, ParsedResult.run_id == Run.id)
+            .outerjoin(RawResponse, RawResponse.run_id == Run.id)
+            .outerjoin(AuditTarget, AuditTarget.id == Run.audit_target_id)
+            .where(Run.audit_id == audit.id, Run.status == RunStatus.SUCCESS)
+            .order_by(Query.id, Run.provider, Run.run_number, Run.id)
+        )
+    ).all()
+
+    concepts: dict[str, dict[str, Any]] = {}
+    candidates: dict[str, dict[str, Any]] = {}
+    for run, query, parsed_result, raw_response, target in rows:
+        _collect_legacy_concepts(
+            concepts=concepts,
+            audit=audit,
+            run=run,
+            query=query,
+            parsed_result=parsed_result,
+            raw_response=raw_response,
+            target=target,
+        )
+        if raw_response is None or not _has_raw_answer(raw_response):
+            continue
+        for candidate in extract_competitor_candidates(
+            CompetitorExtractionInput(
+                answer_text=raw_response.raw_answer or "",
+                query_text=query.text,
+                brand_name=brand.name,
+                brand_domain=brand.domain,
+                query_id=query.id,
+                run_id=run.id,
+                target_id=target.id if target is not None else None,
+                level=_run_level(audit, target),
+                model_id=_provider_model_from_metadata(raw_response.provider_metadata),
+            )
+        ):
+            _merge_competitor_candidate(candidates, candidate)
+
+    for item in concepts.values():
+        session.add(
+            Concept(
+                audit_id=audit.id,
+                text=item["text"],
+                category="legacy_phrase",
+                count=item["count"],
+                evidence_count=len(item["evidence"]),
+                evidence=item["evidence"],
+            )
+        )
+    for item in candidates.values():
+        session.add(
+            CompetitorCandidate(
+                audit_id=audit.id,
+                name=item["name"],
+                domain=item["domain"],
+                confidence=item["confidence"],
+                evidence_type=item["evidence_type"],
+                evidence_count=len(item["evidence"]),
+                evidence=item["evidence"],
+            )
+        )
+
+
+def _collect_legacy_concepts(
+    *,
+    concepts: dict[str, dict[str, Any]],
+    audit: Audit,
+    run: Run,
+    query: Query,
+    parsed_result: ParsedResult,
+    raw_response: RawResponse | None,
+    target: AuditTarget | None,
+) -> None:
+    for value in _list_or_empty(parsed_result.competitors):
+        text = _legacy_competitor_text(value)
+        if not text:
+            continue
+        normalized = text.casefold()
+        concept = concepts.setdefault(
+            normalized,
+            {"text": text, "count": 0, "evidence": []},
+        )
+        concept["count"] += 1
+        concept["evidence"].append(
+            {
+                "query_id": query.id,
+                "run_id": run.id,
+                "target_id": target.id if target is not None else None,
+                "answer_excerpt": _evidence_excerpt(raw_response, text),
+                "matched_phrase": text,
+                "evidence_type": "legacy_parser_competitor",
+                "level": _run_level(audit, target),
+                "model_id": (
+                    _provider_model_from_metadata(raw_response.provider_metadata)
+                    if raw_response is not None
+                    else None
+                ),
+                "execution_provider": run.provider,
+            }
+        )
+
+
+def _merge_competitor_candidate(
+    candidates: dict[str, dict[str, Any]],
+    candidate: CompetitorCandidateExtraction,
+) -> None:
+    key = f"{candidate.name.casefold()}|{(candidate.domain or '').casefold()}"
+    existing = candidates.setdefault(
+        key,
+        {
+            "name": candidate.name,
+            "domain": candidate.domain,
+            "confidence": candidate.confidence,
+            "evidence_type": candidate.evidence_type,
+            "evidence": [],
+        },
+    )
+    existing["confidence"] = max(existing["confidence"], candidate.confidence)
+    if existing["domain"] is None:
+        existing["domain"] = candidate.domain
+    existing["evidence"].extend(evidence.to_dict() for evidence in candidate.evidence)
+
+
+def _legacy_competitor_text(value: object) -> str | None:
+    if isinstance(value, str):
+        return value.strip() or None
+    if isinstance(value, dict):
+        name = value.get("name") or value.get("brand") or value.get("competitor")
+        if isinstance(name, str):
+            return name.strip() or None
+    return None
+
+
+def _evidence_excerpt(raw_response: RawResponse | None, text: str) -> str:
+    if raw_response is None or not _has_raw_answer(raw_response):
+        return ""
+    raw_answer = raw_response.raw_answer or ""
+    index = raw_answer.casefold().find(text.casefold())
+    if index < 0:
+        return raw_answer[:240]
+    start = max(index - 80, 0)
+    end = min(index + len(text) + 80, len(raw_answer))
+    return raw_answer[start:end][:240]
+
+
+def _run_level(audit: Audit, target: AuditTarget | None) -> str:
+    level = target.level if target is not None else audit.scdl_level
+    return level.value if hasattr(level, "value") else str(level)
+
+
+def _provider_model_from_metadata(provider_metadata: object) -> str | None:
+    if isinstance(provider_metadata, dict):
+        model = provider_metadata.get("model_id") or provider_metadata.get("model")
+        return model if isinstance(model, str) else None
+    return None
 
 
 async def _derive_post_processing_status(

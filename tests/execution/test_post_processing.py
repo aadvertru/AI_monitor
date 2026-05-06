@@ -14,6 +14,8 @@ from libs.storage.models import (
     AuditStatus,
     Base,
     Brand,
+    CompetitorCandidate,
+    Concept,
     ParsedResult,
     Query,
     RawResponse,
@@ -73,6 +75,7 @@ class AuditPostProcessingTests(unittest.IsolatedAsyncioTestCase):
         provider_status: str = "success",
         parsed: bool = False,
         scored: bool = False,
+        parsed_competitors: list[object] | None = None,
     ) -> Run:
         queries = (
             await self.session.execute(
@@ -120,7 +123,7 @@ class AuditPostProcessingTests(unittest.IsolatedAsyncioTestCase):
                     sentiment=1.0,
                     recommendation_score=1.0,
                     source_quality_score=0.0,
-                    competitors=[],
+                    competitors=parsed_competitors or [],
                     sources=[],
                     parsed_payload={"match_type": "exact"},
                 )
@@ -141,6 +144,154 @@ class AuditPostProcessingTests(unittest.IsolatedAsyncioTestCase):
         await self.session.commit()
         await self.session.refresh(run)
         return run
+
+    async def test_successful_post_processing_persists_legacy_concepts(self) -> None:
+        audit = await self._create_audit()
+        await self._add_run(
+            audit,
+            raw_answer="Acme AI is discussed alongside category concepts.",
+            parsed=True,
+            scored=True,
+            parsed_competitors=["brand visibility", {"name": "answer monitoring"}],
+        )
+
+        await process_audit_results(self.session, audit.id)
+
+        concepts = (
+            await self.session.execute(
+                select(Concept).where(Concept.audit_id == audit.id).order_by(Concept.text)
+            )
+        ).scalars().all()
+        self.assertEqual(
+            [(concept.text, concept.category, concept.count) for concept in concepts],
+            [
+                ("answer monitoring", "legacy_phrase", 1),
+                ("brand visibility", "legacy_phrase", 1),
+            ],
+        )
+        self.assertEqual(concepts[0].evidence_count, 1)
+        self.assertEqual(concepts[0].evidence[0]["execution_provider"], "openai")
+
+    async def test_successful_post_processing_persists_competitor_candidate(
+        self,
+    ) -> None:
+        audit = await self._create_audit(
+            brand_name="Acme AI",
+            query_texts=["alternatives to Acme AI"],
+        )
+        await self._add_run(
+            audit,
+            raw_answer="Alternatives to Acme AI include Beta Labs and GammaSoft.",
+            parsed=True,
+            scored=True,
+        )
+
+        await process_audit_results(self.session, audit.id)
+
+        candidates = (
+            await self.session.execute(
+                select(CompetitorCandidate)
+                .where(CompetitorCandidate.audit_id == audit.id)
+                .order_by(CompetitorCandidate.name)
+            )
+        ).scalars().all()
+        self.assertEqual([candidate.name for candidate in candidates], ["Beta Labs", "GammaSoft"])
+        self.assertEqual(candidates[0].confidence, 0.7)
+        self.assertEqual(candidates[0].evidence_count, 1)
+        self.assertEqual(candidates[0].evidence[0]["matched_phrase"], "Beta Labs")
+
+    async def test_post_processing_concept_and_candidate_rebuild_is_idempotent(
+        self,
+    ) -> None:
+        audit = await self._create_audit(query_texts=["alternatives to Acme AI"])
+        await self._add_run(
+            audit,
+            raw_answer="Alternatives to Acme AI include Beta Labs.",
+            parsed=True,
+            scored=True,
+            parsed_competitors=["brand visibility"],
+        )
+
+        await process_audit_results(self.session, audit.id)
+        await process_audit_results(self.session, audit.id)
+
+        concept_count = (
+            await self.session.execute(
+                select(func.count()).select_from(Concept).where(Concept.audit_id == audit.id)
+            )
+        ).scalar_one()
+        candidate_count = (
+            await self.session.execute(
+                select(func.count())
+                .select_from(CompetitorCandidate)
+                .where(CompetitorCandidate.audit_id == audit.id)
+            )
+        ).scalar_one()
+        self.assertEqual(concept_count, 1)
+        self.assertEqual(candidate_count, 1)
+
+    async def test_competitor_candidate_evidence_merges_across_runs(self) -> None:
+        audit = await self._create_audit(query_texts=["alternatives to Acme AI"])
+        await self._add_run(
+            audit,
+            raw_answer="Alternatives to Acme AI include Beta Labs.",
+            parsed=True,
+            scored=True,
+        )
+        await self._add_run(
+            audit,
+            run_number=2,
+            raw_answer="Teams also compare Acme AI with Beta Labs.",
+            parsed=True,
+            scored=True,
+        )
+
+        await process_audit_results(self.session, audit.id)
+
+        candidate = (
+            await self.session.execute(
+                select(CompetitorCandidate).where(
+                    CompetitorCandidate.audit_id == audit.id,
+                    CompetitorCandidate.name == "Beta Labs",
+                )
+            )
+        ).scalar_one()
+        self.assertEqual(candidate.evidence_count, 2)
+        self.assertEqual(len(candidate.evidence), 2)
+
+    async def test_failed_and_no_answer_runs_do_not_create_concepts_or_candidates(
+        self,
+    ) -> None:
+        audit = await self._create_audit(query_texts=["alternatives to Acme AI"])
+        await self._add_run(
+            audit,
+            status=RunStatus.ERROR,
+            raw_answer=None,
+            provider_status="error",
+        )
+        await self._add_run(
+            audit,
+            run_number=2,
+            raw_answer=None,
+            provider_status="missing",
+        )
+
+        await process_audit_results(self.session, audit.id)
+
+        concept_count = (
+            await self.session.execute(
+                select(func.count()).select_from(Concept).where(Concept.audit_id == audit.id)
+            )
+        ).scalar_one()
+        candidate_count = (
+            await self.session.execute(
+                select(func.count())
+                .select_from(CompetitorCandidate)
+                .where(CompetitorCandidate.audit_id == audit.id)
+            )
+        ).scalar_one()
+        self.assertEqual(concept_count, 0)
+        self.assertEqual(candidate_count, 0)
 
     async def test_processes_successful_stored_raw_response_into_parsed_result_and_score(
         self,

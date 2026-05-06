@@ -246,6 +246,12 @@ class Audit(Base):
     brand_facts: Mapped[list["BrandFact"]] = relationship(
         back_populates="audit", cascade="all, delete-orphan"
     )
+    concepts: Mapped[list["Concept"]] = relationship(
+        back_populates="audit", cascade="all, delete-orphan"
+    )
+    competitor_candidates: Mapped[list["CompetitorCandidate"]] = relationship(
+        back_populates="audit", cascade="all, delete-orphan"
+    )
 
 
 class BrandFact(Base):
@@ -527,6 +533,79 @@ class AnswerEvaluation(Base):
     audit: Mapped[Audit] = relationship()
     query: Mapped[Query] = relationship()
     target: Mapped[AuditTarget | None] = relationship()
+
+
+class Concept(Base):
+    __tablename__ = "concepts"
+    __table_args__ = (
+        CheckConstraint("count >= 0", name="ck_concepts_count_non_negative"),
+        CheckConstraint(
+            "evidence_count >= 0", name="ck_concepts_evidence_count_non_negative"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    audit_id: Mapped[int] = mapped_column(
+        ForeignKey("audits.id", ondelete="CASCADE"), nullable=False
+    )
+    run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("runs.id", ondelete="CASCADE"), nullable=True
+    )
+    query_id: Mapped[int | None] = mapped_column(
+        ForeignKey("queries.id", ondelete="CASCADE"), nullable=True
+    )
+    target_id: Mapped[int | None] = mapped_column(
+        ForeignKey("audit_targets.id", ondelete="CASCADE"), nullable=True
+    )
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    evidence_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    evidence: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, onupdate=_utc_now, nullable=False
+    )
+
+    audit: Mapped[Audit] = relationship(back_populates="concepts")
+    run: Mapped[Run | None] = relationship()
+    query: Mapped[Query | None] = relationship()
+    target: Mapped[AuditTarget | None] = relationship()
+
+
+class CompetitorCandidate(Base):
+    __tablename__ = "competitor_candidates"
+    __table_args__ = (
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
+            name="ck_competitor_candidates_confidence_range",
+        ),
+        CheckConstraint(
+            "evidence_count >= 0",
+            name="ck_competitor_candidates_evidence_count_non_negative",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    audit_id: Mapped[int] = mapped_column(
+        ForeignKey("audits.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    evidence_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    evidence_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    evidence: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, onupdate=_utc_now, nullable=False
+    )
+
+    audit: Mapped[Audit] = relationship(back_populates="competitor_candidates")
 
 
 class RawResponse(Base):

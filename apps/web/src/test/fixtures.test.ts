@@ -92,6 +92,12 @@ describe("frontend-backend contract fixtures", () => {
     expect(auditResultsFixture.rows.some((row) => row.run_status === "success")).toBe(true);
     expect(auditResultsFixture.rows.some((row) => row.run_status === "error")).toBe(true);
     expect(auditResultsFixture.rows.some((row) => row.run_status === "timeout")).toBe(true);
+    expect(auditResultsFixture.rows[0]?.concepts?.[0]?.text).toBe(
+      "AI visibility benchmarks",
+    );
+    expect(auditResultsFixture.rows[0]?.competitor_candidates?.[0]?.name).toBe(
+      "Contoso Monitor",
+    );
     for (const row of auditResultsFixture.rows) {
       expect(documentedRunStatuses.has(row.run_status)).toBe(true);
       expect(documentedScdlLevels.has(row.scdl_level)).toBe(true);

@@ -291,6 +291,8 @@ class AuditResultRowResponse(FrontendAuditSchema):
     final_score: float | None = None
     component_scores: ComponentScoresResponse | None = None
     competitors: list[str] = Field(default_factory=list)
+    concepts: list["ConceptResponse"] = Field(default_factory=list)
+    competitor_candidates: list["CompetitorCandidateResponse"] = Field(default_factory=list)
     sources: list[SourceSummaryItemResponse] = Field(default_factory=list)
     raw_answer_ref: int | None = None
     error_code: str | None = None
@@ -366,6 +368,7 @@ class ToneBreakdownResponse(FrontendAuditSchema):
 class ConceptResponse(FrontendAuditSchema):
     text: str
     type: Literal["concept"] = "concept"
+    category: str | None = None
     count: int = 0
     evidence_count: int = 0
 

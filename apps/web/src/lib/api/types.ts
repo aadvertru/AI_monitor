@@ -440,6 +440,7 @@ export type ToneBreakdown = {
 export type Concept = {
   text: string;
   type: "concept";
+  category?: string | null;
   count: number;
   evidence_count: number;
 };
@@ -620,6 +621,8 @@ export type AuditResultRow = {
   final_score: number | null;
   component_scores: ComponentScores | null;
   competitors: string[];
+  concepts?: Concept[];
+  competitor_candidates?: CompetitorCandidate[];
   sources: SourceSummaryItem[];
   raw_answer_ref: number | null;
   error_code: string | null;

@@ -18,6 +18,8 @@ from libs.storage.models import (
     AuditTarget,
     Base,
     Brand,
+    CompetitorCandidate,
+    Concept,
     ParsedResult,
     Query,
     RawResponse,
@@ -139,6 +141,7 @@ class ResultsV2AnswerMatrixAPITests(unittest.IsolatedAsyncioTestCase):
             query_id=query_ids[0],
             target_id=l1_target.id,
             provider="openrouter",
+            competitors=["workflow automation", {"name": "crm workflows"}],
         )
         await self._add_failed_run(
             audit_id=audit.id,
@@ -146,6 +149,7 @@ class ResultsV2AnswerMatrixAPITests(unittest.IsolatedAsyncioTestCase):
             target_id=l2_target.id,
             provider="openrouter",
         )
+        await self._add_persisted_concept_and_candidate(audit.id, query_ids[0])
 
         async with self.session_factory() as session:
             result = await get_audit_answer_matrix(
@@ -173,8 +177,17 @@ class ResultsV2AnswerMatrixAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(completed_cell.evaluation)
         self.assertLessEqual(len(completed_cell.answer_excerpt or ""), 503)
         self.assertNotIn("hidden-tail", completed_cell.answer_excerpt or "")
-        self.assertEqual(completed_cell.concepts, [])
-        self.assertEqual(completed_cell.competitor_candidates, [])
+        self.assertEqual(
+            [(concept.text, concept.count) for concept in completed_cell.concepts],
+            [("persisted concept", 4)],
+        )
+        self.assertEqual(
+            [
+                (candidate.name, candidate.confidence, candidate.evidence_count)
+                for candidate in completed_cell.competitor_candidates
+            ],
+            [("Persisted Rival", 0.81, 1)],
+        )
 
         failed_cell = result.rows[0].cells[1]
         self.assertEqual(failed_cell.status, "failed")
@@ -254,6 +267,43 @@ class ResultsV2AnswerMatrixAPITests(unittest.IsolatedAsyncioTestCase):
             ).scalars()
             return [int(query_id) for query_id in rows]
 
+    async def _add_persisted_concept_and_candidate(
+        self,
+        audit_id: int,
+        query_id: int,
+    ) -> None:
+        async with self.session_factory() as session:
+            run_id = (
+                await session.execute(
+                    select(Run.id).where(
+                        Run.audit_id == audit_id,
+                        Run.query_id == query_id,
+                        Run.status == RunStatus.SUCCESS,
+                    )
+                )
+            ).scalar_one()
+            session.add_all(
+                [
+                    Concept(
+                        audit_id=audit_id,
+                        text="persisted concept",
+                        category="legacy_phrase",
+                        count=4,
+                        evidence_count=1,
+                        evidence=[{"run_id": run_id, "answer_excerpt": "safe"}],
+                    ),
+                    CompetitorCandidate(
+                        audit_id=audit_id,
+                        name="Persisted Rival",
+                        confidence=0.81,
+                        evidence_type="comparison",
+                        evidence_count=1,
+                        evidence=[{"run_id": run_id, "answer_excerpt": "safe"}],
+                    ),
+                ]
+            )
+            await session.commit()
+
     async def _add_target(self, audit: Audit, *, level: SCDLLevel) -> AuditTarget:
         async with self.session_factory() as session:
             target = AuditTarget(
@@ -280,6 +330,7 @@ class ResultsV2AnswerMatrixAPITests(unittest.IsolatedAsyncioTestCase):
         target_id: int | None,
         provider: str,
         evaluation_verdict: AnswerEvaluationVerdict | None = None,
+        competitors: list[object] | None = None,
     ) -> None:
         raw_answer = "Matrix answer " + ("x" * 520) + " hidden-tail"
         async with self.session_factory() as session:
@@ -303,7 +354,7 @@ class ResultsV2AnswerMatrixAPITests(unittest.IsolatedAsyncioTestCase):
                         sentiment=0.0,
                         recommendation_score=0.5,
                         source_quality_score=0.0,
-                        competitors=[],
+                        competitors=competitors or [],
                         sources=[{"url": "https://one.example"}, {"url": "https://two.example"}],
                         parsed_payload={},
                     ),

@@ -6,7 +6,7 @@ import { Link, useParams } from "react-router-dom";
 
 import { Button } from "../../components/ui/Button";
 import { getAuditResults } from "../../lib/api/client";
-import type { AuditResultRow, RunStatus } from "../../lib/api/types";
+import type { AuditResultRow, CompetitorCandidate, Concept, RunStatus } from "../../lib/api/types";
 import { AuditBreadcrumbs } from "./AuditBreadcrumbs";
 import { AuditViewTabs } from "./AuditViewTabs";
 import { ProviderIssueText } from "./ProviderDiagnostics";
@@ -64,6 +64,95 @@ function componentScoreText(row: AuditResultRow, t: (key: string) => string) {
     `${t("details.recommendation")} ${formatScore(scores.recommendation_score)}`,
     `${t("details.sourceQuality")} ${formatScore(scores.source_quality_score)}`,
   ].join(" · ");
+}
+
+function conceptsForRow(row: AuditResultRow): Concept[] {
+  if (row.concepts && row.concepts.length > 0) {
+    return row.concepts;
+  }
+  return row.competitors.map((text) => ({
+    text,
+    type: "concept" as const,
+    category: "legacy",
+    count: 1,
+    evidence_count: 1,
+  }));
+}
+
+function confidenceText(value: number | null | undefined) {
+  if (value === null || value === undefined) {
+    return "N/A";
+  }
+  return `${Math.round(value * 100)}%`;
+}
+
+function ConceptList({
+  concepts,
+  t,
+}: {
+  concepts: Concept[];
+  t: (key: string, options?: Record<string, unknown>) => string;
+}) {
+  if (concepts.length === 0) {
+    return <p className="mt-2 text-sm text-subtle">{t("details.noConcepts")}</p>;
+  }
+
+  return (
+    <ul className="mt-2 grid gap-2 md:grid-cols-2">
+      {concepts.map((concept) => (
+        <li
+          className="rounded-md border border-border bg-white px-3 py-2"
+          key={`${concept.text}-${concept.category ?? "none"}`}
+        >
+          <p className="font-medium text-ink">{concept.text}</p>
+          <p className="mt-1 text-xs text-subtle">
+            {[
+              concept.category,
+              t("details.count", { count: concept.count }),
+              t("details.evidence", { count: concept.evidence_count }),
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function CompetitorCandidateList({
+  candidates,
+  t,
+}: {
+  candidates: CompetitorCandidate[];
+  t: (key: string, options?: Record<string, unknown>) => string;
+}) {
+  if (candidates.length === 0) {
+    return <p className="mt-2 text-sm text-subtle">{t("details.noCompetitorCandidates")}</p>;
+  }
+
+  return (
+    <ul className="mt-2 grid gap-2 md:grid-cols-2">
+      {candidates.map((candidate) => (
+        <li
+          className="rounded-md border border-border bg-white px-3 py-2"
+          key={`${candidate.name}-${candidate.domain ?? "none"}`}
+        >
+          <p className="font-medium text-ink">{candidate.name}</p>
+          <p className="mt-1 text-xs text-subtle">
+            {[
+              candidate.domain,
+              candidate.evidence_type,
+              t("details.confidence", { value: confidenceText(candidate.confidence) }),
+              t("details.evidence", { count: candidate.evidence_count }),
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 export function AuditResultsPage() {
@@ -265,10 +354,23 @@ export function AuditResultsPage() {
                     <tr>
                       <td className="bg-slate-50 px-5 py-3 text-sm text-subtle" colSpan={9}>
                         <p>{componentScoreText(row, t)}</p>
-                        <p className="mt-2">
-                          {t("details.competitors")}:{" "}
-                          {row.competitors.length > 0 ? row.competitors.join(", ") : t("details.none")}
-                        </p>
+                        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                          <section>
+                            <h2 className="text-sm font-semibold text-ink">
+                              {t("details.concepts")}
+                            </h2>
+                            <ConceptList concepts={conceptsForRow(row)} t={t} />
+                          </section>
+                          <section>
+                            <h2 className="text-sm font-semibold text-ink">
+                              {t("details.competitorCandidates")}
+                            </h2>
+                            <CompetitorCandidateList
+                              candidates={row.competitor_candidates ?? []}
+                              t={t}
+                            />
+                          </section>
+                        </div>
                         <p className="mt-1">
                           {t("details.sources")}:{" "}
                           {row.sources.length > 0

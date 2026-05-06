@@ -43,8 +43,10 @@ from apps.api.audit_schemas import (
     AuditSummaryV2Response,
     AuditSummaryV2TotalsResponse,
     AuditTargetResponse,
+    CompetitorCandidateResponse,
     CompetitorSummaryItemResponse,
     ComponentScoresResponse,
+    ConceptResponse,
     CriticalQueryItemResponse,
     GeneratedSeedQuerySuggestionResponse,
     GenerateSeedQuerySuggestionsResponse,
@@ -123,6 +125,8 @@ from libs.storage.models import (
     AuditStatus,
     AuditTarget,
     Brand,
+    CompetitorCandidate,
+    Concept,
     Job,
     ParsedResult,
     Query,
@@ -1607,6 +1611,136 @@ def _competitor_names(values: object) -> list[str]:
     return names
 
 
+def _legacy_competitor_concepts(values: object) -> list[ConceptResponse]:
+    counter: Counter[str] = Counter()
+    canonical_names: dict[str, str] = {}
+    for name in _competitor_names(values):
+        text = name.strip()
+        if not text:
+            continue
+        normalized = text.casefold()
+        canonical_names.setdefault(normalized, text)
+        counter[normalized] += 1
+
+    return [
+        ConceptResponse(
+            text=canonical_names[normalized],
+            count=count,
+            evidence_count=count,
+        )
+        for normalized, count in sorted(
+            counter.items(), key=lambda item: (-item[1], canonical_names[item[0]])
+        )
+    ]
+
+
+def _legacy_competitor_concepts_from_rows(
+    rows: list[AuditResultRowResponse],
+) -> list[ConceptResponse]:
+    counter: Counter[str] = Counter()
+    canonical_names: dict[str, str] = {}
+    for row in rows:
+        for name in row.competitors:
+            text = name.strip()
+            if not text:
+                continue
+            normalized = text.casefold()
+            canonical_names.setdefault(normalized, text)
+            counter[normalized] += 1
+
+    return [
+        ConceptResponse(
+            text=canonical_names[normalized],
+            count=count,
+            evidence_count=count,
+        )
+        for normalized, count in sorted(
+            counter.items(), key=lambda item: (-item[1], canonical_names[item[0]])
+        )
+    ]
+
+
+def _concept_response_from_model(concept: Concept) -> ConceptResponse:
+    return ConceptResponse(
+        text=concept.text,
+        category=concept.category,
+        count=concept.count,
+        evidence_count=concept.evidence_count,
+    )
+
+
+def _competitor_candidate_response_from_model(
+    candidate: CompetitorCandidate,
+) -> CompetitorCandidateResponse:
+    return CompetitorCandidateResponse(
+        name=candidate.name,
+        domain=candidate.domain,
+        confidence=candidate.confidence,
+        evidence_type=candidate.evidence_type,
+        evidence_count=candidate.evidence_count,
+    )
+
+
+async def _concepts_for_audit(
+    session: AsyncSession,
+    audit_id: int,
+) -> list[ConceptResponse]:
+    rows = (
+        await session.execute(
+            select(Concept)
+            .where(Concept.audit_id == audit_id)
+            .order_by(Concept.count.desc(), Concept.text)
+        )
+    ).scalars().all()
+    return [_concept_response_from_model(concept) for concept in rows]
+
+
+async def _competitor_candidates_for_audit(
+    session: AsyncSession,
+    audit_id: int,
+) -> list[CompetitorCandidateResponse]:
+    rows = (
+        await session.execute(
+            select(CompetitorCandidate)
+            .where(CompetitorCandidate.audit_id == audit_id)
+            .order_by(CompetitorCandidate.confidence.desc(), CompetitorCandidate.name)
+        )
+    ).scalars().all()
+    return [
+        _competitor_candidate_response_from_model(candidate) for candidate in rows
+    ]
+
+
+def _concepts_by_run_id(concepts: list[Concept]) -> dict[int, list[ConceptResponse]]:
+    grouped: dict[int, list[ConceptResponse]] = defaultdict(list)
+    for concept in concepts:
+        response = _concept_response_from_model(concept)
+        for evidence in _safe_evidence_list(concept.evidence):
+            run_id = evidence.get("run_id")
+            if isinstance(run_id, int):
+                grouped[run_id].append(response)
+    return grouped
+
+
+def _competitor_candidates_by_run_id(
+    candidates: list[CompetitorCandidate],
+) -> dict[int, list[CompetitorCandidateResponse]]:
+    grouped: dict[int, list[CompetitorCandidateResponse]] = defaultdict(list)
+    for candidate in candidates:
+        response = _competitor_candidate_response_from_model(candidate)
+        for evidence in _safe_evidence_list(candidate.evidence):
+            run_id = evidence.get("run_id")
+            if isinstance(run_id, int):
+                grouped[run_id].append(response)
+    return grouped
+
+
+def _safe_evidence_list(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
 def _component_scores(
     parsed_result: ParsedResult | None,
     score: Score | None,
@@ -1807,6 +1941,20 @@ async def build_audit_results_response(
     audit: Audit,
 ) -> AuditResultsResponse:
     audit_number = await get_relative_audit_number(session, audit)
+    persisted_concepts = (
+        await session.execute(
+            select(Concept).where(Concept.audit_id == audit.id).order_by(Concept.text)
+        )
+    ).scalars().all()
+    persisted_candidates = (
+        await session.execute(
+            select(CompetitorCandidate)
+            .where(CompetitorCandidate.audit_id == audit.id)
+            .order_by(CompetitorCandidate.confidence.desc(), CompetitorCandidate.name)
+        )
+    ).scalars().all()
+    concepts_by_run = _concepts_by_run_id(list(persisted_concepts))
+    candidates_by_run = _competitor_candidates_by_run_id(list(persisted_candidates))
     stmt = (
         select(Run, Query, ParsedResult, Score, RawResponse, AuditTarget)
         .join(Query, Run.query_id == Query.id)
@@ -1840,6 +1988,9 @@ async def build_audit_results_response(
             query_id=query.id,
         )
 
+        row_concepts = concepts_by_run.get(run.id) or _legacy_competitor_concepts(
+            parsed_result.competitors if parsed_result is not None else []
+        )
         rows.append(
             AuditResultRowResponse(
                 audit_id=audit.id,
@@ -1865,6 +2016,8 @@ async def build_audit_results_response(
                 competitors=_competitor_names(
                     parsed_result.competitors if parsed_result is not None else []
                 ),
+                concepts=row_concepts,
+                competitor_candidates=candidates_by_run.get(run.id, []),
                 sources=sources,
                 raw_answer_ref=raw_response.id if raw_response is not None else None,
                 error_code=(
@@ -2058,6 +2211,8 @@ async def build_audit_summary_v2_response(
         )
     ).scalar_one()
     levels = _summary_v2_levels(audit, list(targets), results.rows)
+    persisted_concepts = await _concepts_for_audit(session, audit.id)
+    persisted_candidates = await _competitor_candidates_for_audit(session, audit.id)
 
     completed_runs = sum(1 for row in results.rows if row.run_status == "success")
     failed_runs = sum(
@@ -2088,8 +2243,8 @@ async def build_audit_summary_v2_response(
             tone=_tone_breakdown(results.rows),
         ),
         model_summaries=_model_summaries_v2(results.rows, audit, evaluations),
-        concepts=[],
-        competitor_candidates=[],
+        concepts=persisted_concepts or _legacy_competitor_concepts_from_rows(results.rows),
+        competitor_candidates=persisted_candidates,
         provider_diagnostics=results.provider_diagnostics,
     )
 
@@ -2287,7 +2442,7 @@ def _model_summaries_v2(
                 verdict_counts=_verdict_counts_for_rows(group_rows, evaluations),
                 tone_l1=_dominant_tone(group_rows, "L1"),
                 tone_l2=_dominant_tone(group_rows, "L2"),
-                concepts=[],
+                concepts=_legacy_competitor_concepts_from_rows(group_rows),
                 competitor_candidates=[],
             )
         )
@@ -2333,6 +2488,20 @@ async def build_answer_matrix_response(
             .order_by(Run.query_id, Run.audit_target_id, Run.provider, Run.run_number, Run.id)
         )
     ).all()
+    persisted_concepts = (
+        await session.execute(
+            select(Concept).where(Concept.audit_id == audit.id).order_by(Concept.text)
+        )
+    ).scalars().all()
+    persisted_candidates = (
+        await session.execute(
+            select(CompetitorCandidate)
+            .where(CompetitorCandidate.audit_id == audit.id)
+            .order_by(CompetitorCandidate.confidence.desc(), CompetitorCandidate.name)
+        )
+    ).scalars().all()
+    concepts_by_run = _concepts_by_run_id(list(persisted_concepts))
+    candidates_by_run = _competitor_candidates_by_run_id(list(persisted_candidates))
 
     columns = _answer_matrix_columns(audit, list(targets), run_rows)
     run_by_cell = _answer_matrix_run_lookup(audit, run_rows, columns)
@@ -2343,7 +2512,13 @@ async def build_answer_matrix_response(
         cells: list[AnswerMatrixCellResponse] = []
         for column in columns:
             run_tuple = run_by_cell.get((query.id, column.target_id))
-            cell = _answer_matrix_cell(audit, column, run_tuple)
+            cell = _answer_matrix_cell(
+                audit,
+                column,
+                run_tuple,
+                concepts_by_run=concepts_by_run,
+                candidates_by_run=candidates_by_run,
+            )
             if cell.provider_error is not None:
                 provider_diagnostics.append(cell.provider_error)
             cells.append(cell)
@@ -2435,6 +2610,9 @@ def _answer_matrix_cell(
     audit: Audit,
     column: AnswerMatrixColumnResponse,
     run_tuple: AnswerMatrixRunTuple | None,
+    *,
+    concepts_by_run: dict[int, list[ConceptResponse]] | None = None,
+    candidates_by_run: dict[int, list[CompetitorCandidateResponse]] | None = None,
 ) -> AnswerMatrixCellResponse:
     if run_tuple is None:
         return AnswerMatrixCellResponse(target_id=column.target_id, status="not_run")
@@ -2463,8 +2641,13 @@ def _answer_matrix_cell(
         evaluation=_answer_evaluation_response(evaluation),
         sources_count=_sources_count(parsed_result, raw_response),
         provider_error=provider_error,
-        concepts=[],
-        competitor_candidates=[],
+        concepts=(
+            (concepts_by_run or {}).get(run.id)
+            or _legacy_competitor_concepts(
+                parsed_result.competitors if parsed_result is not None else []
+            )
+        ),
+        competitor_candidates=(candidates_by_run or {}).get(run.id, []),
     )
 
 

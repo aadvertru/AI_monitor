@@ -3,11 +3,13 @@ from __future__ import annotations
 import unittest
 
 from apps.api.audit_schemas import (
+    AnswerMatrixCellResponse,
     AnswerMatrixResponse,
     AuditSummaryV2Response,
     SourceDomainsResponse,
 )
 from tests.results_v2_fixtures import (
+    CONCEPT_COMPETITOR_FIXTURES,
     RESULTS_V2_FIXTURES,
     SOURCE_INTELLIGENCE_V2_FIXTURES,
 )
@@ -90,6 +92,65 @@ class ResultsV2ContractFixtureTests(unittest.TestCase):
             "raw_answer",
             "request_snapshot",
             "raw_prompt",
+            "headers",
+            "authorization",
+            "api_key",
+            "sk-",
+            "traceback",
+        ]:
+            self.assertNotIn(forbidden, serialized)
+
+    def test_concepts_competitors_fixture_cases_exist(self) -> None:
+        self.assertEqual(
+            set(CONCEPT_COMPETITOR_FIXTURES),
+            {
+                "concepts_only",
+                "competitor_candidates_only",
+                "concepts_and_competitors",
+                "empty_concepts_competitors",
+                "generic_phrases_not_competitors",
+                "russian_comparison_context",
+                "multi_model_evidence",
+            },
+        )
+
+    def test_concepts_competitors_fixtures_validate_against_backend_dtos(self) -> None:
+        for name, fixture in CONCEPT_COMPETITOR_FIXTURES.items():
+            with self.subTest(name=name):
+                summary = AuditSummaryV2Response.model_validate(fixture["summary"])
+                cell = AnswerMatrixCellResponse.model_validate(fixture["matrix_cell"])
+
+                for concept in [*summary.concepts, *cell.concepts]:
+                    self.assertEqual(concept.type, "concept")
+                    self.assertGreaterEqual(concept.count, 0)
+                    self.assertGreaterEqual(concept.evidence_count, 0)
+
+                for candidate in [
+                    *summary.competitor_candidates,
+                    *cell.competitor_candidates,
+                ]:
+                    if candidate.confidence is not None:
+                        self.assertGreaterEqual(candidate.confidence, 0)
+                        self.assertLessEqual(candidate.confidence, 1)
+                    self.assertGreaterEqual(candidate.evidence_count, 0)
+
+    def test_generic_legacy_phrases_are_not_competitor_candidates(self) -> None:
+        generic = CONCEPT_COMPETITOR_FIXTURES["generic_phrases_not_competitors"]
+        summary = AuditSummaryV2Response.model_validate(generic["summary"])
+        cell = AnswerMatrixCellResponse.model_validate(generic["matrix_cell"])
+
+        self.assertEqual(summary.competitor_candidates, [])
+        self.assertEqual(cell.competitor_candidates, [])
+        self.assertEqual(summary.concepts[0].text, "children's ballet classes")
+
+    def test_concepts_competitors_fixtures_do_not_expose_raw_payloads(self) -> None:
+        serialized = str(CONCEPT_COMPETITOR_FIXTURES)
+
+        for forbidden in [
+            "raw_answer",
+            "request_snapshot",
+            "raw_prompt",
+            "raw_response",
             "headers",
             "authorization",
             "api_key",

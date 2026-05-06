@@ -732,6 +732,24 @@ export const auditResultsFixture: AuditResultsResponse = {
         source_quality_score: 0.75,
       },
       competitors: ["Contoso Monitor"],
+      concepts: [
+        {
+          text: "AI visibility benchmarks",
+          type: "concept",
+          category: "legacy_phrase",
+          count: 2,
+          evidence_count: 2,
+        },
+      ],
+      competitor_candidates: [
+        {
+          name: "Contoso Monitor",
+          domain: "contoso.example",
+          confidence: 0.82,
+          evidence_type: "comparison",
+          evidence_count: 1,
+        },
+      ],
       sources: [
         {
           title: "AI visibility benchmarks",
@@ -763,6 +781,8 @@ export const auditResultsFixture: AuditResultsResponse = {
       final_score: null,
       component_scores: null,
       competitors: [],
+      concepts: [],
+      competitor_candidates: [],
       sources: [],
       raw_answer_ref: null,
       error_code: "PROVIDER_REQUEST_FAILED",
@@ -792,6 +812,8 @@ export const auditResultsFixture: AuditResultsResponse = {
       final_score: null,
       component_scores: null,
       competitors: [],
+      concepts: [],
+      competitor_candidates: [],
       sources: [],
       raw_answer_ref: null,
       error_code: "TIMEOUT",

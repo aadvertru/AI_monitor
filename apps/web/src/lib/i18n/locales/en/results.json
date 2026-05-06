@@ -53,6 +53,13 @@
     "recommendation": "Recommendation",
     "sourceQuality": "Source quality",
     "competitors": "Competitors",
+    "concepts": "Concepts / Phrases",
+    "competitorCandidates": "Competitor Candidates",
+    "noConcepts": "No concepts extracted yet.",
+    "noCompetitorCandidates": "No competitor candidates found.",
+    "count": "count: {{count}}",
+    "evidence": "evidence: {{count}}",
+    "confidence": "confidence: {{value}}",
     "sources": "Sources",
     "none": "None",
     "unknown": "Unknown"

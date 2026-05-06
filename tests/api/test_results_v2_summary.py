@@ -18,6 +18,8 @@ from libs.storage.models import (
     AuditTarget,
     Base,
     Brand,
+    CompetitorCandidate,
+    Concept,
     ParsedResult,
     Query,
     RawResponse,
@@ -151,6 +153,7 @@ class ResultsV2SummaryAPITests(unittest.IsolatedAsyncioTestCase):
             visible=True,
             final_score=0.8,
             sentiment_score=0.25,
+            competitors=["database software", {"name": "cloud database"}],
         )
         await self._add_targeted_success_run(
             audit,
@@ -158,7 +161,9 @@ class ResultsV2SummaryAPITests(unittest.IsolatedAsyncioTestCase):
             visible=False,
             final_score=0.2,
             sentiment_score=-0.25,
+            competitors=["database software"],
         )
+        await self._add_persisted_concept_and_candidate(audit)
 
         async with self.session_factory() as session:
             result = await get_audit_summary_v2(
@@ -184,6 +189,27 @@ class ResultsV2SummaryAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(model.accuracy_l2)
         self.assertEqual(model.tone_l1, "positive")
         self.assertEqual(model.tone_l2, "negative")
+        self.assertEqual(
+            [(concept.text, concept.category, concept.count) for concept in result.concepts],
+            [("persisted concept", "legacy_phrase", 3)],
+        )
+        self.assertEqual(
+            [
+                (
+                    candidate.name,
+                    candidate.domain,
+                    candidate.confidence,
+                    candidate.evidence_count,
+                )
+                for candidate in result.competitor_candidates
+            ],
+            [("Persisted Rival", "rival.example", 0.82, 2)],
+        )
+        self.assertEqual(
+            [(concept.text, concept.count) for concept in model.concepts],
+            [("database software", 2), ("cloud database", 1)],
+        )
+        self.assertEqual(model.competitor_candidates, [])
 
     async def test_summary_v2_partial_audit_exposes_safe_provider_diagnostics(
         self,
@@ -288,6 +314,34 @@ class ResultsV2SummaryAPITests(unittest.IsolatedAsyncioTestCase):
             ).scalar_one()
             return int(query_id)
 
+    async def _add_persisted_concept_and_candidate(self, audit: Audit) -> None:
+        async with self.session_factory() as session:
+            session.add_all(
+                [
+                    Concept(
+                        audit_id=audit.id,
+                        text="persisted concept",
+                        category="legacy_phrase",
+                        count=3,
+                        evidence_count=3,
+                        evidence=[{"run_id": 100, "answer_excerpt": "safe"}],
+                    ),
+                    CompetitorCandidate(
+                        audit_id=audit.id,
+                        name="Persisted Rival",
+                        domain="rival.example",
+                        confidence=0.82,
+                        evidence_type="comparison",
+                        evidence_count=2,
+                        evidence=[
+                            {"run_id": 100, "answer_excerpt": "safe"},
+                            {"run_id": 101, "answer_excerpt": "safe"},
+                        ],
+                    ),
+                ]
+            )
+            await session.commit()
+
     async def _add_targeted_success_run(
         self,
         audit: Audit,
@@ -297,6 +351,7 @@ class ResultsV2SummaryAPITests(unittest.IsolatedAsyncioTestCase):
         final_score: float,
         sentiment_score: float,
         evaluation_verdict: AnswerEvaluationVerdict | None = None,
+        competitors: list[object] | None = None,
     ) -> None:
         query_id = await self._query_id(audit)
         async with self.session_factory() as session:
@@ -333,7 +388,7 @@ class ResultsV2SummaryAPITests(unittest.IsolatedAsyncioTestCase):
                         sentiment=sentiment_score,
                         recommendation_score=0.5,
                         source_quality_score=0.0,
-                        competitors=[],
+                        competitors=competitors or [],
                         sources=[],
                         parsed_payload={},
                     ),
