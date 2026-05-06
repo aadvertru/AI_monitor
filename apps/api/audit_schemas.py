@@ -69,6 +69,62 @@ class AuditTargetResponse(FrontendAuditSchema):
     gateway_l2_experimental: bool = False
 
 
+class BrandFactResponse(FrontendAuditSchema):
+    id: int
+    audit_id: int
+    brand_id: int | None = None
+    fact_text: str
+    fact_type: Literal[
+        "brand_name",
+        "official_domain",
+        "description_claim",
+        "user_provided",
+        "domain_analysis_future",
+    ]
+    source: Literal[
+        "brand_name",
+        "brand_domain",
+        "brand_description",
+        "user",
+        "system",
+    ]
+    confidence: float | None = None
+    created_at: datetime
+
+
+EvaluationVerdictValue = Literal[
+    "correct",
+    "partial",
+    "incorrect",
+    "unknown",
+    "not_applicable",
+]
+
+
+class AnswerEvaluationResponse(FrontendAuditSchema):
+    verdict: EvaluationVerdictValue
+    rationale: str | None = None
+    confidence: float | None = None
+    evaluation_version: str
+    evaluated_at: datetime
+
+
+class AnswerEvaluationVerdictCountsResponse(FrontendAuditSchema):
+    correct: int = 0
+    partial: int = 0
+    incorrect: int = 0
+    unknown: int = 0
+    not_applicable: int = 0
+
+
+class AnswerEvaluationRerunResponse(FrontendAuditSchema):
+    audit_id: int
+    evaluated_runs: int = 0
+    skipped_runs: int = 0
+    status: Literal["completed"] = "completed"
+    warnings: list[str] = Field(default_factory=list)
+
+
 class GeneratedSeedQuerySuggestionResponse(FrontendAuditSchema):
     text: str
     type: SeedQueryTypeValue
@@ -341,6 +397,9 @@ class AuditSummaryV2OverallResponse(FrontendAuditSchema):
     )
     accuracy_l1: float | None = None
     accuracy_l2: float | None = None
+    verdict_counts: AnswerEvaluationVerdictCountsResponse = Field(
+        default_factory=AnswerEvaluationVerdictCountsResponse
+    )
     tone: ToneBreakdownResponse = Field(default_factory=ToneBreakdownResponse)
 
 
@@ -356,6 +415,9 @@ class AuditSummaryV2ModelSummaryResponse(FrontendAuditSchema):
     accuracy_l1: float | None = None
     accuracy_l2: float | None = None
     delta_accuracy: float | None = None
+    verdict_counts: AnswerEvaluationVerdictCountsResponse = Field(
+        default_factory=AnswerEvaluationVerdictCountsResponse
+    )
     tone_l1: Literal["positive", "neutral", "negative", "unknown"] | None = None
     tone_l2: Literal["positive", "neutral", "negative", "unknown"] | None = None
     concepts: list[ConceptResponse] = Field(default_factory=list)
@@ -402,7 +464,7 @@ class AnswerMatrixCellResponse(FrontendAuditSchema):
     answer_excerpt: str | None = None
     brand_mentioned: bool | None = None
     score: float | None = None
-    evaluation: None = None
+    evaluation: AnswerEvaluationResponse | None = None
     sources_count: int = 0
     provider_error: ProviderDiagnosticResponse | None = None
     concepts: list[ConceptResponse] = Field(default_factory=list)

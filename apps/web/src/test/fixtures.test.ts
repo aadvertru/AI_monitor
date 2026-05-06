@@ -127,7 +127,7 @@ describe("frontend-backend contract fixtures", () => {
     expect(auditSummaryV2Fixture.model_summaries[0]?.execution_provider).toBe("openrouter");
 
     expect(auditAnswerMatrixFixture.columns[1]?.gateway_l2_experimental).toBe(true);
-    expect(auditAnswerMatrixFixture.rows[0]?.cells[0]?.evaluation).toBeNull();
+    expect(auditAnswerMatrixFixture.rows[0]?.cells[0]?.evaluation?.verdict).toBe("partial");
     expect(auditAnswerMatrixFixture.rows[0]?.cells[1]?.provider_error?.code).toBe("TIMEOUT");
 
     expect(sourceDomainsFixture.domains).toEqual([]);

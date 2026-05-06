@@ -19,6 +19,7 @@ import {
   listAudits,
   resolveApiBaseUrl,
   restoreAudit,
+  rerunAuditEvaluation,
   runAuditPipeline,
   updateAudit,
 } from "./client";
@@ -41,10 +42,12 @@ import {
   modelCatalogWireFixture,
   openRouterL2AuditTargetFixture,
   openRouterL2AuditTargetWireFixture,
+  rerunEvaluationFixture,
   sourceDomainsFixture,
   unauthenticatedAuthErrorFixture,
 } from "../../test/fixtures";
 import { mockFetchSequence } from "../../test/mockFetch";
+import { evaluationVerdictTranslationKeys } from "./types";
 
 describe("api client", () => {
   it("defaults API origin to the current browser hostname", () => {
@@ -384,6 +387,7 @@ describe("api client", () => {
       expect.objectContaining({ credentials: "include" }),
     );
     expect(auditSummaryV2Fixture.overall.accuracy_l1).toBeNull();
+    expect(auditSummaryV2Fixture.overall.verdict_counts.partial).toBe(0);
     expect(auditSummaryV2Fixture.concepts).toEqual([]);
     expect(auditSummaryV2Fixture.competitor_candidates).toEqual([]);
   });
@@ -397,8 +401,14 @@ describe("api client", () => {
       expect.objectContaining({ credentials: "include" }),
     );
     expect(auditAnswerMatrixFixture.columns[1]?.gateway_l2_experimental).toBe(true);
-    expect(auditAnswerMatrixFixture.rows[0]?.cells[0]?.evaluation).toBeNull();
+    expect(auditAnswerMatrixFixture.rows[0]?.cells[0]?.evaluation?.verdict).toBe("partial");
     expect(auditAnswerMatrixFixture.rows[0]?.cells[1]?.provider_error?.code).toBe("TIMEOUT");
+  });
+
+  it("maps evaluation verdict codes to translation keys without hardcoded labels", () => {
+    expect(evaluationVerdictTranslationKeys.correct).toBe("audits.evaluation.verdict.correct");
+    expect(evaluationVerdictTranslationKeys.unknown).toBe("audits.evaluation.verdict.unknown");
+    expect(Object.keys(evaluationVerdictTranslationKeys)).toContain("not_applicable");
   });
 
   it("loads source domains strict placeholder responses", async () => {
@@ -448,6 +458,15 @@ describe("api client", () => {
 
     await expect(getAuditSummaryV2(42)).resolves.toMatchObject({
       model_summaries: [],
+      overall: expect.objectContaining({
+        verdict_counts: {
+          correct: 0,
+          partial: 0,
+          incorrect: 0,
+          unknown: 0,
+          not_applicable: 0,
+        },
+      }),
       concepts: [],
       competitor_candidates: [],
       provider_diagnostics: [],
@@ -477,6 +496,19 @@ describe("api client", () => {
     expect(fetchMock).not.toHaveBeenCalledWith(
       expect.stringContaining("/dev/"),
       expect.anything(),
+    );
+  });
+
+  it("reruns audit evaluation with a credentialed request", async () => {
+    const fetchMock = mockFetchSequence([{ body: rerunEvaluationFixture }]);
+
+    await expect(rerunAuditEvaluation(42)).resolves.toEqual(rerunEvaluationFixture);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/audits/42/rerun-evaluation",
+      expect.objectContaining({
+        credentials: "include",
+        method: "POST",
+      }),
     );
   });
 

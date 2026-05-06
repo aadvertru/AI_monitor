@@ -397,6 +397,14 @@ export const auditPipelineRunFixture: AuditPipelineRunResponse = {
   provider_diagnostics: [],
 };
 
+export const rerunEvaluationFixture = {
+  audit_id: 42,
+  evaluated_runs: 2,
+  skipped_runs: 1,
+  status: "completed",
+  warnings: ["No brand facts were available for answer evaluation."],
+};
+
 export const providerDiagnosticFixture: ProviderDiagnostic = {
   code: "TIMEOUT",
   message: "OpenAI request timed out.",
@@ -481,6 +489,7 @@ export const auditSummaryV2Fixture: AuditSummaryV2Response = {
     run_count: 3,
     completed_runs: 2,
     failed_runs: 1,
+    partial_runs: 0,
     levels: ["L1", "L2"],
   },
   overall: {
@@ -496,6 +505,13 @@ export const auditSummaryV2Fixture: AuditSummaryV2Response = {
     },
     accuracy_l1: null,
     accuracy_l2: null,
+    verdict_counts: {
+      correct: 0,
+      partial: 0,
+      incorrect: 0,
+      unknown: 0,
+      not_applicable: 0,
+    },
     tone: {
       positive: 1,
       neutral: 0,
@@ -516,6 +532,13 @@ export const auditSummaryV2Fixture: AuditSummaryV2Response = {
       accuracy_l1: null,
       accuracy_l2: null,
       delta_accuracy: null,
+      verdict_counts: {
+        correct: 0,
+        partial: 0,
+        incorrect: 0,
+        unknown: 0,
+        not_applicable: 0,
+      },
       tone_l1: "positive",
       tone_l2: "negative",
       concepts: [],
@@ -566,7 +589,13 @@ export const auditAnswerMatrixFixture: AnswerMatrixResponse = {
           answer_excerpt: "Acme AI is visible in this answer.",
           brand_mentioned: true,
           score: 0.82,
-          evaluation: null,
+          evaluation: {
+            verdict: "partial",
+            rationale: "Answer includes useful information but misses exact details.",
+            confidence: 0.72,
+            evaluation_version: "eval-v1",
+            evaluated_at: "2026-05-06T00:00:00Z",
+          },
           sources_count: 1,
           provider_error: null,
           concepts: [],

@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from apps.api.main import get_audit_summary_v2
 from apps.api.security import create_access_token, load_auth_config
 from libs.storage.models import (
+    AnswerEvaluation,
+    AnswerEvaluationVerdict,
     Audit,
     AuditStatus,
     AuditTarget,
@@ -213,6 +215,72 @@ class ResultsV2SummaryAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("traceback", serialized)
         self.assertNotIn("raw_answer", serialized)
 
+    async def test_summary_v2_uses_strict_evaluation_accuracy_and_verdict_counts(
+        self,
+    ) -> None:
+        owner = await self._create_user()
+        audit = await self._create_audit(owner, providers=["openrouter"])
+        await self._add_targeted_success_run(
+            audit,
+            level=SCDLLevel.L1,
+            visible=True,
+            final_score=0.9,
+            sentiment_score=0.0,
+            evaluation_verdict=AnswerEvaluationVerdict.CORRECT,
+        )
+        await self._add_targeted_success_run(
+            audit,
+            level=SCDLLevel.L1,
+            visible=True,
+            final_score=0.6,
+            sentiment_score=0.0,
+            evaluation_verdict=AnswerEvaluationVerdict.PARTIAL,
+        )
+        await self._add_targeted_success_run(
+            audit,
+            level=SCDLLevel.L1,
+            visible=True,
+            final_score=0.3,
+            sentiment_score=0.0,
+            evaluation_verdict=AnswerEvaluationVerdict.UNKNOWN,
+        )
+        await self._add_targeted_success_run(
+            audit,
+            level=SCDLLevel.L2,
+            visible=False,
+            final_score=0.1,
+            sentiment_score=0.0,
+            evaluation_verdict=AnswerEvaluationVerdict.INCORRECT,
+        )
+        await self._add_targeted_success_run(
+            audit,
+            level=SCDLLevel.L2,
+            visible=False,
+            final_score=0.1,
+            sentiment_score=0.0,
+            evaluation_verdict=AnswerEvaluationVerdict.NOT_APPLICABLE,
+        )
+
+        async with self.session_factory() as session:
+            result = await get_audit_summary_v2(
+                audit_id=audit.id,
+                request=self._request(owner),
+                session=session,
+            )
+
+        self.assertEqual(result.overall.accuracy_l1, 0.5)
+        self.assertEqual(result.overall.accuracy_l2, 0.0)
+        self.assertEqual(result.overall.verdict_counts.correct, 1)
+        self.assertEqual(result.overall.verdict_counts.partial, 1)
+        self.assertEqual(result.overall.verdict_counts.incorrect, 1)
+        self.assertEqual(result.overall.verdict_counts.unknown, 1)
+        self.assertEqual(result.overall.verdict_counts.not_applicable, 1)
+        self.assertEqual(len(result.model_summaries), 1)
+        self.assertEqual(result.model_summaries[0].accuracy_l1, 0.5)
+        self.assertEqual(result.model_summaries[0].accuracy_l2, 0.0)
+        self.assertEqual(result.model_summaries[0].delta_accuracy, -0.5)
+        self.assertEqual(result.model_summaries[0].verdict_counts.partial, 1)
+
     async def _query_id(self, audit: Audit) -> int:
         async with self.session_factory() as session:
             query_id = (
@@ -228,6 +296,7 @@ class ResultsV2SummaryAPITests(unittest.IsolatedAsyncioTestCase):
         visible: bool,
         final_score: float,
         sentiment_score: float,
+        evaluation_verdict: AnswerEvaluationVerdict | None = None,
     ) -> None:
         query_id = await self._query_id(audit)
         async with self.session_factory() as session:
@@ -287,6 +356,20 @@ class ResultsV2SummaryAPITests(unittest.IsolatedAsyncioTestCase):
                     ),
                 ]
             )
+            if evaluation_verdict is not None:
+                session.add(
+                    AnswerEvaluation(
+                        audit_id=audit.id,
+                        run_id=run.id,
+                        query_id=query_id,
+                        target_id=target.id,
+                        verdict=evaluation_verdict,
+                        rationale=f"{evaluation_verdict.value} rationale",
+                        confidence=0.8,
+                        evaluation_version="eval-v1",
+                        evaluated_at=NOW,
+                    )
+                )
             await session.commit()
 
     async def _add_failed_run(self, audit: Audit) -> None:

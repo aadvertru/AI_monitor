@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from apps.api.main import get_audit_answer_matrix
 from apps.api.security import create_access_token, load_auth_config
 from libs.storage.models import (
+    AnswerEvaluation,
+    AnswerEvaluationVerdict,
     Audit,
     AuditStatus,
     AuditTarget,
@@ -215,6 +217,34 @@ class ResultsV2AnswerMatrixAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.rows[0].cells[0].status, "completed")
         self.assertEqual(result.rows[1].cells[0].status, "not_run")
 
+    async def test_answer_matrix_cell_includes_evaluation_when_present(self) -> None:
+        owner = await self._create_user()
+        audit = await self._create_audit(owner)
+        query_ids = await self._query_ids(audit)
+        target = await self._add_target(audit, level=SCDLLevel.L1)
+        await self._add_success_run(
+            audit_id=audit.id,
+            query_id=query_ids[0],
+            target_id=target.id,
+            provider="openrouter",
+            evaluation_verdict=AnswerEvaluationVerdict.PARTIAL,
+        )
+
+        async with self.session_factory() as session:
+            result = await get_audit_answer_matrix(
+                audit_id=audit.id,
+                request=self._request(owner),
+                session=session,
+            )
+
+        cell = result.rows[0].cells[0]
+        self.assertIsNotNone(cell.evaluation)
+        assert cell.evaluation is not None
+        self.assertEqual(cell.evaluation.verdict, "partial")
+        self.assertEqual(cell.evaluation.evaluation_version, "eval-v1")
+        self.assertEqual(cell.evaluation.confidence, 0.7)
+        self.assertIsNone(result.rows[1].cells[0].evaluation)
+
     async def _query_ids(self, audit: Audit) -> list[int]:
         async with self.session_factory() as session:
             rows = (
@@ -249,6 +279,7 @@ class ResultsV2AnswerMatrixAPITests(unittest.IsolatedAsyncioTestCase):
         query_id: int,
         target_id: int | None,
         provider: str,
+        evaluation_verdict: AnswerEvaluationVerdict | None = None,
     ) -> None:
         raw_answer = "Matrix answer " + ("x" * 520) + " hidden-tail"
         async with self.session_factory() as session:
@@ -295,6 +326,20 @@ class ResultsV2AnswerMatrixAPITests(unittest.IsolatedAsyncioTestCase):
                     ),
                 ]
             )
+            if evaluation_verdict is not None:
+                session.add(
+                    AnswerEvaluation(
+                        audit_id=audit_id,
+                        run_id=run.id,
+                        query_id=query_id,
+                        target_id=target_id,
+                        verdict=evaluation_verdict,
+                        rationale="Matrix evaluation rationale.",
+                        confidence=0.7,
+                        evaluation_version="eval-v1",
+                        evaluated_at=NOW,
+                    )
+                )
             await session.commit()
 
     async def _add_failed_run(

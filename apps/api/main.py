@@ -23,6 +23,9 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.audit_schemas import (
+    AnswerEvaluationRerunResponse,
+    AnswerEvaluationResponse,
+    AnswerEvaluationVerdictCountsResponse,
     AnswerMatrixCellResponse,
     AnswerMatrixColumnResponse,
     AnswerMatrixResponse,
@@ -80,6 +83,8 @@ from libs.analysis.aggregation import (
 )
 from libs.control.job_scheduler import schedule_jobs_for_audit
 from libs.control.query_deduplication import deduplicate_queries
+from libs.evaluation.brand_facts import replace_brand_facts_for_audit
+from libs.evaluation.runner import rerun_answer_evaluations_for_audit
 from libs.execution.domain_check import (
     DOMAIN_CHECK_CACHE_TTL_SECONDS,
     check_brand_domain_availability,
@@ -104,6 +109,7 @@ from libs.execution.provider_errors import (
     unsupported_l2_error,
 )
 from libs.storage.models import (
+    AnswerEvaluation,
     Audit,
     AuditStatus,
     AuditTarget,
@@ -1003,6 +1009,14 @@ async def create_audit_record(
     seed_query_items = build_seed_query_items(payload)
     add_seed_query_records(session, audit.id, seed_query_items)
     add_audit_target_records(session, audit.id, target_requests)
+    await replace_brand_facts_for_audit(
+        session,
+        audit,
+        brand,
+        brand_name=payload.brand_name,
+        brand_domain=payload.brand_domain,
+        brand_description=payload.brand_description,
+    )
     seed_queries = [item.text for item in seed_query_items]
 
     await session.commit()
@@ -1090,6 +1104,14 @@ async def update_audit_record(
     await session.execute(delete(AuditTarget).where(AuditTarget.audit_id == audit.id))
     add_seed_query_records(session, audit.id, build_seed_query_items(payload))
     add_audit_target_records(session, audit.id, target_requests)
+    await replace_brand_facts_for_audit(
+        session,
+        audit,
+        brand,
+        brand_name=payload.brand_name,
+        brand_domain=payload.brand_domain,
+        brand_description=payload.brand_description,
+    )
 
     await session.commit()
     await session.refresh(audit)
@@ -2013,6 +2035,7 @@ async def build_audit_summary_v2_response(
     audit: Audit,
 ) -> AuditSummaryV2Response:
     results = await build_audit_results_response(session, audit)
+    evaluations = await _answer_evaluations_by_run_id(session, audit.id)
     targets = (
         await session.execute(
             select(AuditTarget)
@@ -2050,15 +2073,28 @@ async def build_audit_summary_v2_response(
         overall=AuditSummaryV2OverallResponse(
             mentionability_l1=_mentionability_for_level(results.rows, "L1"),
             mentionability_l2=_mentionability_for_level(results.rows, "L2"),
-            accuracy_l1=None,
-            accuracy_l2=None,
+            accuracy_l1=_accuracy_for_level(results.rows, evaluations, "L1"),
+            accuracy_l2=_accuracy_for_level(results.rows, evaluations, "L2"),
+            verdict_counts=_verdict_counts_for_rows(results.rows, evaluations),
             tone=_tone_breakdown(results.rows),
         ),
-        model_summaries=_model_summaries_v2(results.rows, audit),
+        model_summaries=_model_summaries_v2(results.rows, audit, evaluations),
         concepts=[],
         competitor_candidates=[],
         provider_diagnostics=results.provider_diagnostics,
     )
+
+
+async def _answer_evaluations_by_run_id(
+    session: AsyncSession,
+    audit_id: int,
+) -> dict[int, AnswerEvaluation]:
+    rows = (
+        await session.execute(
+            select(AnswerEvaluation).where(AnswerEvaluation.audit_id == audit_id)
+        )
+    ).scalars()
+    return {evaluation.run_id: evaluation for evaluation in rows}
 
 
 def _summary_v2_levels(
@@ -2087,6 +2123,60 @@ def _mentionability_for_level(
     total = len(processed)
     percentage = round((found / total) * 100, 2) if total else None
     return MentionabilityMetricResponse(percentage=percentage, found=found, total=total)
+
+
+STRICT_ACCURACY_VERDICTS = frozenset({"correct", "partial", "incorrect"})
+
+
+def _accuracy_for_level(
+    rows: list[AuditResultRowResponse],
+    evaluations: dict[int, AnswerEvaluation],
+    level: str,
+) -> float | None:
+    return _strict_accuracy(
+        [
+            evaluations[row.run_id]
+            for row in rows
+            if row.scdl_level == level and row.run_id in evaluations
+        ]
+    )
+
+
+def _strict_accuracy(evaluations: list[AnswerEvaluation]) -> float | None:
+    # Strict accuracy: correct / (correct + partial + incorrect).
+    evaluated = [
+        evaluation
+        for evaluation in evaluations
+        if _verdict_value(evaluation.verdict) in STRICT_ACCURACY_VERDICTS
+    ]
+    if not evaluated:
+        return None
+    correct = sum(
+        1 for evaluation in evaluated if _verdict_value(evaluation.verdict) == "correct"
+    )
+    return round(correct / len(evaluated), 4)
+
+
+def _verdict_counts_for_rows(
+    rows: list[AuditResultRowResponse],
+    evaluations: dict[int, AnswerEvaluation],
+) -> AnswerEvaluationVerdictCountsResponse:
+    counts: Counter[str] = Counter()
+    for row in rows:
+        evaluation = evaluations.get(row.run_id)
+        if evaluation is not None:
+            counts[_verdict_value(evaluation.verdict)] += 1
+    return AnswerEvaluationVerdictCountsResponse(
+        correct=counts["correct"],
+        partial=counts["partial"],
+        incorrect=counts["incorrect"],
+        unknown=counts["unknown"],
+        not_applicable=counts["not_applicable"],
+    )
+
+
+def _verdict_value(verdict: object) -> str:
+    return verdict.value if hasattr(verdict, "value") else str(verdict)
 
 
 def _tone_breakdown(rows: list[AuditResultRowResponse]) -> ToneBreakdownResponse:
@@ -2133,6 +2223,7 @@ def _dominant_tone(rows: list[AuditResultRowResponse], level: str) -> str | None
 def _model_summaries_v2(
     rows: list[AuditResultRowResponse],
     audit: Audit,
+    evaluations: dict[int, AnswerEvaluation],
 ) -> list[AuditSummaryV2ModelSummaryResponse]:
     grouped: dict[tuple[str, str, str | None, str | None, str], list[AuditResultRowResponse]] = (
         defaultdict(list)
@@ -2159,9 +2250,16 @@ def _model_summaries_v2(
     ):
         mr_l1 = _mentionability_for_level(group_rows, "L1").percentage
         mr_l2 = _mentionability_for_level(group_rows, "L2").percentage
+        accuracy_l1 = _accuracy_for_level(group_rows, evaluations, "L1")
+        accuracy_l2 = _accuracy_for_level(group_rows, evaluations, "L2")
         delta_mr = (
             round(mr_l2 - mr_l1, 2)
             if mr_l1 is not None and mr_l2 is not None
+            else None
+        )
+        delta_accuracy = (
+            round(accuracy_l2 - accuracy_l1, 4)
+            if accuracy_l1 is not None and accuracy_l2 is not None
             else None
         )
         summaries.append(
@@ -2174,9 +2272,10 @@ def _model_summaries_v2(
                 mr_l1=mr_l1,
                 mr_l2=mr_l2,
                 delta_mr=delta_mr,
-                accuracy_l1=None,
-                accuracy_l2=None,
-                delta_accuracy=None,
+                accuracy_l1=accuracy_l1,
+                accuracy_l2=accuracy_l2,
+                delta_accuracy=delta_accuracy,
+                verdict_counts=_verdict_counts_for_rows(group_rows, evaluations),
                 tone_l1=_dominant_tone(group_rows, "L1"),
                 tone_l2=_dominant_tone(group_rows, "L2"),
                 concepts=[],
@@ -2193,6 +2292,7 @@ AnswerMatrixRunTuple = tuple[
     Score | None,
     RawResponse | None,
     AuditTarget | None,
+    AnswerEvaluation | None,
 ]
 
 
@@ -2214,11 +2314,12 @@ async def build_answer_matrix_response(
     ).scalars().all()
     run_rows = (
         await session.execute(
-            select(Run, ParsedResult, Score, RawResponse, AuditTarget)
+            select(Run, ParsedResult, Score, RawResponse, AuditTarget, AnswerEvaluation)
             .outerjoin(ParsedResult, ParsedResult.run_id == Run.id)
             .outerjoin(Score, Score.run_id == Run.id)
             .outerjoin(RawResponse, RawResponse.run_id == Run.id)
             .outerjoin(AuditTarget, AuditTarget.id == Run.audit_target_id)
+            .outerjoin(AnswerEvaluation, AnswerEvaluation.run_id == Run.id)
             .where(Run.audit_id == audit.id)
             .order_by(Run.query_id, Run.audit_target_id, Run.provider, Run.run_number, Run.id)
         )
@@ -2329,7 +2430,7 @@ def _answer_matrix_cell(
     if run_tuple is None:
         return AnswerMatrixCellResponse(target_id=column.target_id, status="not_run")
 
-    run, parsed_result, score, raw_response, target = run_tuple
+    run, parsed_result, score, raw_response, target, evaluation = run_tuple
     provider_error = _provider_diagnostic_response(
         error_object=raw_response.error_object if raw_response is not None else None,
         provider=run.provider,
@@ -2350,11 +2451,25 @@ def _answer_matrix_cell(
             parsed_result.visible_brand if parsed_result is not None else None
         ),
         score=score.final_score if score is not None else None,
-        evaluation=None,
+        evaluation=_answer_evaluation_response(evaluation),
         sources_count=_sources_count(parsed_result, raw_response),
         provider_error=provider_error,
         concepts=[],
         competitor_candidates=[],
+    )
+
+
+def _answer_evaluation_response(
+    evaluation: AnswerEvaluation | None,
+) -> AnswerEvaluationResponse | None:
+    if evaluation is None:
+        return None
+    return AnswerEvaluationResponse(
+        verdict=_verdict_value(evaluation.verdict),
+        rationale=evaluation.rationale,
+        confidence=evaluation.confidence,
+        evaluation_version=evaluation.evaluation_version,
+        evaluated_at=evaluation.evaluated_at,
     )
 
 
@@ -2856,6 +2971,36 @@ async def run_audit_pipeline_owner(
     except SQLAlchemyError as exc:
         await session.rollback()
         raise HTTPException(status_code=500, detail="Failed to run audit pipeline.") from exc
+
+
+@app.post(
+    "/audits/{audit_id}/rerun-evaluation",
+    response_model=AnswerEvaluationRerunResponse,
+)
+async def rerun_audit_answer_evaluation(
+    audit_id: int,
+    request: Request,
+    session: AsyncSession = DB_SESSION_DEPENDENCY,
+) -> AnswerEvaluationRerunResponse:
+    try:
+        current_user = await get_authenticated_user_from_request(session, request)
+        audit, _brand = await load_accessible_audit(session, audit_id, current_user)
+        summary = await rerun_answer_evaluations_for_audit(session, audit)
+        return AnswerEvaluationRerunResponse(
+            audit_id=summary.audit_id,
+            evaluated_runs=summary.evaluated_runs,
+            skipped_runs=summary.skipped_runs,
+            status="completed",
+            warnings=summary.warnings,
+        )
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to rerun answer evaluation.",
+        ) from exc
 
 
 @app.get("/audits/{audit_id}/results", response_model=AuditResultsResponse)

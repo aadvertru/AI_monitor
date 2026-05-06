@@ -31,6 +31,8 @@ def test_alembic_upgrade_head_creates_current_schema() -> None:
         "brands",
         "users",
         "user_preferences",
+        "brand_facts",
+        "answer_evaluations",
         "audits",
         "queries",
         "jobs",
@@ -67,6 +69,15 @@ def test_alembic_upgrade_head_creates_current_schema() -> None:
     }.issubset(_column_names(inspector, "audit_targets"))
     assert {"status", "audit_target_id"}.issubset(_column_names(inspector, "runs"))
     assert "sources" in _column_names(inspector, "parsed_results")
+    assert {
+        "audit_id",
+        "brand_id",
+        "fact_text",
+        "fact_type",
+        "source",
+        "confidence",
+        "created_at",
+    }.issubset(_column_names(inspector, "brand_facts"))
 
     audit_checks = " ".join(
         check["sqltext"] for check in inspector.get_check_constraints("audits")
@@ -77,6 +88,37 @@ def test_alembic_upgrade_head_creates_current_schema() -> None:
     assert "uq_jobs_idempotency_key" in _unique_names(inspector, "jobs")
     assert "uq_runs_execution_identity" in _unique_names(inspector, "runs")
     assert "uq_user_preferences_user_id" in _unique_names(inspector, "user_preferences")
+    fact_checks = " ".join(
+        check["sqltext"] for check in inspector.get_check_constraints("brand_facts")
+    )
+    assert "fact_type" in fact_checks
+    assert "source" in fact_checks
+    assert "confidence" in fact_checks
+    assert {
+        "audit_id",
+        "run_id",
+        "query_id",
+        "target_id",
+        "verdict",
+        "rationale",
+        "confidence",
+        "evaluation_version",
+        "evaluated_at",
+        "evaluator_provider",
+        "evaluator_model",
+        "facts_version",
+        "created_at",
+        "updated_at",
+    }.issubset(_column_names(inspector, "answer_evaluations"))
+    evaluation_checks = " ".join(
+        check["sqltext"]
+        for check in inspector.get_check_constraints("answer_evaluations")
+    )
+    assert "verdict" in evaluation_checks
+    assert "confidence" in evaluation_checks
+    assert "uq_answer_evaluations_run_id" in _unique_names(
+        inspector, "answer_evaluations"
+    )
     preference_checks = " ".join(
         check["sqltext"]
         for check in inspector.get_check_constraints("user_preferences")
@@ -91,7 +133,7 @@ def test_alembic_upgrade_head_creates_current_schema() -> None:
     with sqlite3.connect(db_path) as connection:
         version = connection.execute("SELECT version_num FROM alembic_version").fetchone()
 
-    assert version == ("c6d7e8f9a0b1",)
+    assert version == ("e8f9a0b1c2d3",)
 
 
 def _column_names(inspector, table_name: str) -> set[str]:

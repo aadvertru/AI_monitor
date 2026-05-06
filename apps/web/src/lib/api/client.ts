@@ -29,8 +29,17 @@ import type {
   ModelCatalogResponseWire,
   ProfilePreferences,
   ProfileResponse,
+  RerunEvaluationResponse,
   SourceDomainsResponse,
 } from "./types";
+
+const emptyVerdictCounts = {
+  correct: 0,
+  partial: 0,
+  incorrect: 0,
+  unknown: 0,
+  not_applicable: 0,
+} as const;
 
 export type ApiErrorPayload = {
   detail?: unknown;
@@ -227,7 +236,18 @@ function mapSeedQueryGenerationResponse(
 function mapAuditSummaryV2FromWire(response: AuditSummaryV2Response): AuditSummaryV2Response {
   return {
     ...response,
-    model_summaries: response.model_summaries ?? [],
+    totals: {
+      ...response.totals,
+      partial_runs: response.totals.partial_runs ?? 0,
+    },
+    overall: {
+      ...response.overall,
+      verdict_counts: response.overall.verdict_counts ?? { ...emptyVerdictCounts },
+    },
+    model_summaries: (response.model_summaries ?? []).map((summary) => ({
+      ...summary,
+      verdict_counts: summary.verdict_counts ?? { ...emptyVerdictCounts },
+    })),
     concepts: response.concepts ?? [],
     competitor_candidates: response.competitor_candidates ?? [],
     provider_diagnostics: response.provider_diagnostics ?? [],
@@ -399,6 +419,12 @@ export function runAudit(auditId: number) {
 
 export function runAuditPipeline(auditId: number) {
   return apiFetch<AuditPipelineRunResponse>(`/audits/${auditId}/run-pipeline`, {
+    method: "POST",
+  });
+}
+
+export function rerunAuditEvaluation(auditId: number) {
+  return apiFetch<RerunEvaluationResponse>(`/audits/${auditId}/rerun-evaluation`, {
     method: "POST",
   });
 }

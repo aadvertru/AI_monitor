@@ -93,6 +93,30 @@ class SeedQuerySource(str, Enum):
     PAA = "paa"
 
 
+class BrandFactType(str, Enum):
+    BRAND_NAME = "brand_name"
+    OFFICIAL_DOMAIN = "official_domain"
+    DESCRIPTION_CLAIM = "description_claim"
+    USER_PROVIDED = "user_provided"
+    DOMAIN_ANALYSIS_FUTURE = "domain_analysis_future"
+
+
+class BrandFactSource(str, Enum):
+    BRAND_NAME = "brand_name"
+    BRAND_DOMAIN = "brand_domain"
+    BRAND_DESCRIPTION = "brand_description"
+    USER = "user"
+    SYSTEM = "system"
+
+
+class AnswerEvaluationVerdict(str, Enum):
+    CORRECT = "correct"
+    PARTIAL = "partial"
+    INCORRECT = "incorrect"
+    UNKNOWN = "unknown"
+    NOT_APPLICABLE = "not_applicable"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -219,6 +243,61 @@ class Audit(Base):
     targets: Mapped[list["AuditTarget"]] = relationship(
         back_populates="audit", cascade="all, delete-orphan"
     )
+    brand_facts: Mapped[list["BrandFact"]] = relationship(
+        back_populates="audit", cascade="all, delete-orphan"
+    )
+
+
+class BrandFact(Base):
+    __tablename__ = "brand_facts"
+    __table_args__ = (
+        CheckConstraint(
+            "fact_type IN ('brand_name', 'official_domain', 'description_claim', "
+            "'user_provided', 'domain_analysis_future')",
+            name="ck_brand_facts_fact_type",
+        ),
+        CheckConstraint(
+            "source IN ('brand_name', 'brand_domain', 'brand_description', "
+            "'user', 'system')",
+            name="ck_brand_facts_source",
+        ),
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
+            name="ck_brand_facts_confidence_range",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    audit_id: Mapped[int] = mapped_column(
+        ForeignKey("audits.id", ondelete="CASCADE"), nullable=False
+    )
+    brand_id: Mapped[int | None] = mapped_column(
+        ForeignKey("brands.id", ondelete="SET NULL"), nullable=True
+    )
+    fact_text: Mapped[str] = mapped_column(Text, nullable=False)
+    fact_type: Mapped[BrandFactType] = mapped_column(
+        SQLEnum(
+            BrandFactType,
+            values_callable=lambda enum: [item.value for item in enum],
+            native_enum=False,
+        ),
+        nullable=False,
+    )
+    source: Mapped[BrandFactSource] = mapped_column(
+        SQLEnum(
+            BrandFactSource,
+            values_callable=lambda enum: [item.value for item in enum],
+            native_enum=False,
+        ),
+        nullable=False,
+    )
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False
+    )
+
+    audit: Mapped[Audit] = relationship(back_populates="brand_facts")
+    brand: Mapped[Brand | None] = relationship()
 
 
 class AuditTarget(Base):
@@ -385,6 +464,69 @@ class Run(Base):
         uselist=False,
         cascade="all, delete-orphan",
     )
+    answer_evaluation: Mapped["AnswerEvaluation | None"] = relationship(
+        back_populates="run",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
+
+class AnswerEvaluation(Base):
+    __tablename__ = "answer_evaluations"
+    __table_args__ = (
+        CheckConstraint(
+            "verdict IN ('correct', 'partial', 'incorrect', 'unknown', "
+            "'not_applicable')",
+            name="ck_answer_evaluations_verdict",
+        ),
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
+            name="ck_answer_evaluations_confidence_range",
+        ),
+        UniqueConstraint("run_id", name="uq_answer_evaluations_run_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    audit_id: Mapped[int] = mapped_column(
+        ForeignKey("audits.id", ondelete="CASCADE"), nullable=False
+    )
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("runs.id", ondelete="CASCADE"), nullable=False
+    )
+    query_id: Mapped[int] = mapped_column(
+        ForeignKey("queries.id", ondelete="CASCADE"), nullable=False
+    )
+    target_id: Mapped[int | None] = mapped_column(
+        ForeignKey("audit_targets.id", ondelete="CASCADE"), nullable=True
+    )
+    verdict: Mapped[AnswerEvaluationVerdict] = mapped_column(
+        SQLEnum(
+            AnswerEvaluationVerdict,
+            values_callable=lambda enum: [item.value for item in enum],
+            native_enum=False,
+        ),
+        nullable=False,
+    )
+    rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    evaluation_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    evaluated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False
+    )
+    evaluator_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    evaluator_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    facts_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, onupdate=_utc_now, nullable=False
+    )
+
+    run: Mapped[Run] = relationship(back_populates="answer_evaluation")
+    audit: Mapped[Audit] = relationship()
+    query: Mapped[Query] = relationship()
+    target: Mapped[AuditTarget | None] = relationship()
 
 
 class RawResponse(Base):

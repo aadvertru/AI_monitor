@@ -24,6 +24,30 @@ export type SeedQueryType =
   | "alternative"
   | "problem_solution";
 export type SeedQuerySource = "user" | "ai" | "paa";
+export type EvaluationVerdict =
+  | "correct"
+  | "partial"
+  | "incorrect"
+  | "unknown"
+  | "not_applicable";
+
+export const evaluationVerdictTranslationKeys: Record<EvaluationVerdict, string> = {
+  correct: "audits.evaluation.verdict.correct",
+  partial: "audits.evaluation.verdict.partial",
+  incorrect: "audits.evaluation.verdict.incorrect",
+  unknown: "audits.evaluation.verdict.unknown",
+  not_applicable: "audits.evaluation.verdict.not_applicable",
+};
+
+export type AnswerEvaluation = {
+  verdict: EvaluationVerdict;
+  rationale?: string | null;
+  confidence?: number | null;
+  evaluation_version?: string | null;
+  evaluated_at?: string | null;
+};
+
+export type AnswerEvaluationVerdictCounts = Record<EvaluationVerdict, number>;
 
 export type AuditTarget = {
   id?: string | number;
@@ -381,6 +405,14 @@ export type AuditPipelineRunResponse = {
   provider_diagnostics?: ProviderDiagnostic[];
 };
 
+export type RerunEvaluationResponse = {
+  audit_id: number;
+  evaluated_runs: number;
+  skipped_runs: number;
+  status: "completed" | string;
+  warnings?: string[];
+};
+
 export type ProviderDiagnostic = {
   code: ProviderDiagnosticCode;
   message: string;
@@ -426,6 +458,7 @@ export type AuditSummaryV2Totals = {
   run_count: number;
   completed_runs: number;
   failed_runs: number;
+  partial_runs: number;
   levels: SCDLLevel[];
 };
 
@@ -434,6 +467,7 @@ export type AuditSummaryV2Overall = {
   mentionability_l2: MentionabilityMetric;
   accuracy_l1: number | null;
   accuracy_l2: number | null;
+  verdict_counts: AnswerEvaluationVerdictCounts;
   tone: ToneBreakdown;
 };
 
@@ -449,6 +483,7 @@ export type AuditSummaryV2ModelSummary = {
   accuracy_l1: number | null;
   accuracy_l2: number | null;
   delta_accuracy: number | null;
+  verdict_counts: AnswerEvaluationVerdictCounts;
   tone_l1: "positive" | "neutral" | "negative" | "unknown" | null;
   tone_l2: "positive" | "neutral" | "negative" | "unknown" | null;
   concepts?: Concept[];
@@ -474,8 +509,6 @@ export type AnswerMatrixCellStatus =
   | "processing"
   | "missing";
 
-export type CellEvaluationPlaceholder = null;
-
 export type AnswerMatrixColumn = {
   target_id: string;
   label: string;
@@ -495,7 +528,7 @@ export type AnswerMatrixCell = {
   answer_excerpt: string | null;
   brand_mentioned: boolean | null;
   score: number | null;
-  evaluation: CellEvaluationPlaceholder;
+  evaluation: AnswerEvaluation | null;
   sources_count: number;
   provider_error: ProviderDiagnostic | null;
   concepts: Concept[];
