@@ -8,6 +8,7 @@ import {
   auditEstimateFixture,
   auditPipelineRunFixture,
   auditResultsFixture,
+  auditSummaryV2Fixture,
   auditSummaryFixture,
   currentUserFixture,
   modelCatalogWireFixture,
@@ -65,9 +66,11 @@ describe("authenticated SCDL smoke flow", () => {
       { path: "/audits", method: "POST", body: auditCreateResponseFixture },
       { path: "/audits/42", body: auditDetailFixture },
       { path: "/audits/42/summary", body: auditSummaryFixture },
+      { path: "/audits/42/summary-v2", body: auditSummaryV2Fixture },
       { path: "/audits/42/run-pipeline", method: "POST", body: auditPipelineRunFixture },
       { path: "/audits/42", body: { ...auditDetailFixture, status: "completed" } },
       { path: "/audits/42/summary", body: { ...auditSummaryFixture, status: "completed" } },
+      { path: "/audits/42/summary-v2", body: { ...auditSummaryV2Fixture, status: "completed" } },
       { path: "/audits/42/results", body: auditResultsFixture },
     ]);
     const user = userEvent.setup();

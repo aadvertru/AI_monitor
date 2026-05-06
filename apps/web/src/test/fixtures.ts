@@ -550,6 +550,82 @@ export const auditSummaryV2Fixture: AuditSummaryV2Response = {
   provider_diagnostics: [providerDiagnosticFixture],
 };
 
+export const completedAuditSummaryV2Fixture: AuditSummaryV2Response = {
+  ...auditSummaryV2Fixture,
+  status: "completed",
+  totals: {
+    ...auditSummaryV2Fixture.totals,
+    completed_runs: 4,
+    failed_runs: 0,
+    partial_runs: 0,
+    run_count: 4,
+  },
+  overall: {
+    ...auditSummaryV2Fixture.overall,
+    accuracy_l1: 0.75,
+    accuracy_l2: 0.5,
+    verdict_counts: {
+      correct: 2,
+      partial: 1,
+      incorrect: 1,
+      unknown: 0,
+      not_applicable: 0,
+    },
+  },
+  model_summaries: [
+    {
+      ...auditSummaryV2Fixture.model_summaries[0]!,
+      accuracy_l1: 0.75,
+      accuracy_l2: 0.5,
+      delta_accuracy: -0.25,
+    },
+  ],
+  provider_diagnostics: [],
+};
+
+export const failedAuditSummaryV2Fixture: AuditSummaryV2Response = {
+  ...auditSummaryV2Fixture,
+  status: "failed",
+  totals: {
+    ...auditSummaryV2Fixture.totals,
+    completed_runs: 0,
+    failed_runs: 2,
+    partial_runs: 0,
+    run_count: 2,
+  },
+  overall: {
+    ...auditSummaryV2Fixture.overall,
+    mentionability_l1: { found: 0, total: 0, percentage: null },
+    mentionability_l2: { found: 0, total: 0, percentage: null },
+  },
+  model_summaries: [],
+  provider_diagnostics: [providerDiagnosticFixture],
+};
+
+export const l1OnlyAuditSummaryV2Fixture: AuditSummaryV2Response = {
+  ...completedAuditSummaryV2Fixture,
+  totals: {
+    ...completedAuditSummaryV2Fixture.totals,
+    target_count: 1,
+    levels: ["L1"],
+  },
+  overall: {
+    ...completedAuditSummaryV2Fixture.overall,
+    mentionability_l2: { found: 0, total: 0, percentage: null },
+    accuracy_l2: null,
+  },
+  model_summaries: [
+    {
+      ...completedAuditSummaryV2Fixture.model_summaries[0]!,
+      mr_l2: null,
+      delta_mr: null,
+      accuracy_l2: null,
+      delta_accuracy: null,
+      tone_l2: null,
+    },
+  ],
+};
+
 export const auditAnswerMatrixFixture: AnswerMatrixResponse = {
   audit_id: 42,
   columns: [

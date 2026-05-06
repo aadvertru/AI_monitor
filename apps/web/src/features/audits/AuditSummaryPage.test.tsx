@@ -1,21 +1,46 @@
 import { screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import {
   auditDetailFixture,
+  auditDetailWithModelTargetsFixture,
+  auditSummaryV2Fixture,
   auditSummaryFixture,
   currentUserFixture,
   emptyAuditSummaryFixture,
   partialAuditSummaryFixture,
   providerDiagnosticFixture,
+  rerunEvaluationFixture,
 } from "../../test/fixtures";
 import { mockFetchSequence } from "../../test/mockFetch";
 import { renderRoute } from "../../test/render";
 
-function renderSummary(summary = auditSummaryFixture) {
-  mockFetchSequence([{ body: currentUserFixture }, { body: auditDetailFixture }, { body: summary }]);
+function renderSummary(summary = auditSummaryFixture, detail = auditDetailFixture) {
+  mockFetchSequence([
+    { body: currentUserFixture },
+    { body: detail },
+    { body: summary },
+    { body: auditSummaryV2Fixture },
+  ]);
   renderRoute("/audits/42");
 }
+
+const emptyAuditSummaryV2Fixture = {
+  ...auditSummaryV2Fixture,
+  status: "created",
+  totals: {
+    query_count: 0,
+    target_count: 0,
+    run_count: 0,
+    completed_runs: 0,
+    failed_runs: 0,
+    partial_runs: 0,
+    levels: [],
+  },
+  model_summaries: [],
+  provider_diagnostics: [],
+};
 
 describe("audit summary page", () => {
   it("shows loading state while summary is being fetched", async () => {
@@ -38,6 +63,36 @@ describe("audit summary page", () => {
     renderSummary();
 
     expect(await screen.findByRole("heading", { name: "Acme AI" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Web5 summary" })).toBeInTheDocument();
+    expect(screen.getByText("Data source:")).toBeInTheDocument();
+    expect(screen.getByText("summary-v2")).toBeInTheDocument();
+    expect(screen.getByText("2 queries · 2 model targets · 3 runs")).toBeInTheDocument();
+    expect(screen.getByText("Mentionability L1")).toBeInTheDocument();
+    expect(screen.getByText("Mentionability L2")).toBeInTheDocument();
+    expect(screen.getAllByText("Accuracy L1").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Accuracy L2").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Tone").length).toBeGreaterThan(0);
+    expect(screen.getByText("1/1 found")).toBeInTheDocument();
+    expect(screen.getByText("Positive 1 · Neutral 0 · Negative 1 · Unknown 0")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Some audit runs need attention. Completed metrics are shown from backend data that is already available.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("No answer evaluations are available yet, so accuracy is shown as N/A."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Model summary")).toBeInTheDocument();
+    expect(screen.getByText("GPT-4o mini")).toBeInTheDocument();
+    expect(screen.getByText("openai/gpt-4o-mini")).toBeInTheDocument();
+    expect(screen.getByText("MR L1")).toBeInTheDocument();
+    expect(screen.getByText("MR L2")).toBeInTheDocument();
+    expect(screen.getAllByText("-100%").length).toBeGreaterThan(0);
+    expect(screen.getByText("positive / negative")).toBeInTheDocument();
+    expect(screen.getByText("Actions")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Export DOCX" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Export Excel" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Repeat audit" })).toBeDisabled();
     expect(screen.getByRole("link", { name: "Summary" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "Summary" })).toHaveAttribute("href", "/audits/42");
     expect(screen.getByRole("link", { name: "Results" })).toHaveAttribute("href", "/audits/42/results");
@@ -47,11 +102,124 @@ describe("audit summary page", () => {
     expect(screen.getAllByText("3").length).toBeGreaterThan(0);
     expect(screen.getByText("Runs")).toBeInTheDocument();
     expect(screen.getByText("6")).toBeInTheDocument();
-    expect(screen.getByText("100%")).toBeInTheDocument();
+    expect(screen.getAllByText("100%").length).toBeGreaterThan(0);
     expect(screen.getByText("67%")).toBeInTheDocument();
     expect(screen.getAllByText("0.74").length).toBeGreaterThan(0);
     expect(screen.getByText("Weighted")).toBeInTheDocument();
     expect(screen.getByText("0.76")).toBeInTheDocument();
+  });
+
+  it("calls the summary-v2 endpoint for the Web5 shell", async () => {
+    const fetchMock = mockFetchSequence([
+      { body: currentUserFixture },
+      { body: auditDetailFixture },
+      { body: auditSummaryFixture },
+      { body: auditSummaryV2Fixture },
+    ]);
+
+    renderRoute("/audits/42");
+
+    expect(await screen.findByRole("heading", { name: "Web5 summary" })).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/audits/42/summary-v2",
+      expect.objectContaining({ credentials: "include" }),
+    );
+  });
+
+  it("renders header metadata and a collapsible tested scope", async () => {
+    const user = userEvent.setup();
+    renderSummary(auditSummaryFixture, auditDetailWithModelTargetsFixture);
+
+    expect(await screen.findByRole("heading", { name: "Web5 summary" })).toBeInTheDocument();
+    expect(screen.getByText(/Audit #1 · updated/i)).toBeInTheDocument();
+    expect(screen.getByText(/completed 2 · failed 1 · partial 0/i)).toBeInTheDocument();
+
+    const disclosure = screen.getByText("What was tested").closest("details");
+    expect(disclosure).not.toHaveAttribute("open");
+
+    await user.click(screen.getByText("What was tested"));
+
+    expect(disclosure).toHaveAttribute("open");
+    expect(screen.getByText("Levels")).toBeInTheDocument();
+    expect(screen.getByText("L1 / L2")).toBeInTheDocument();
+    expect(screen.getByText("Model families")).toBeInTheDocument();
+    expect(screen.getByText("chatgpt")).toBeInTheDocument();
+    expect(screen.getAllByText("OpenRouter").length).toBeGreaterThan(0);
+    expect(screen.getByText("L2 experimental")).toBeInTheDocument();
+  });
+
+  it("reruns fact-checking and refreshes the Web5 summary", async () => {
+    const user = userEvent.setup();
+    const fetchMock = mockFetchSequence([
+      { body: currentUserFixture },
+      { body: auditDetailFixture },
+      { body: auditSummaryFixture },
+      { body: auditSummaryV2Fixture },
+      { body: rerunEvaluationFixture },
+      { body: { ...auditSummaryV2Fixture, overall: { ...auditSummaryV2Fixture.overall, accuracy_l1: 1 } } },
+    ]);
+
+    renderRoute("/audits/42");
+
+    await user.click(await screen.findByRole("button", { name: "Rerun fact-checking" }));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/audits/42/rerun-evaluation",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(
+      await screen.findByText("Fact-checking rerun complete: 2 evaluated, 1 skipped."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("No brand facts were available for answer evaluation."),
+    ).toBeInTheDocument();
+  });
+
+  it("shows a Web5 loading state while summary-v2 is being fetched", async () => {
+    const fetchMock = vi.fn();
+    for (const body of [currentUserFixture, auditDetailFixture, auditSummaryFixture]) {
+      fetchMock.mockResolvedValueOnce({
+        json: async () => body,
+        ok: true,
+        status: 200,
+        statusText: "OK",
+      } satisfies Partial<Response>);
+    }
+    fetchMock.mockReturnValueOnce(new Promise(() => undefined));
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRoute("/audits/42");
+
+    expect(await screen.findByText("Loading Web5 summary...")).toBeInTheDocument();
+  });
+
+  it("shows a safe Web5 error state without leaking backend details", async () => {
+    mockFetchSequence([
+      { body: currentUserFixture },
+      { body: auditDetailFixture },
+      { body: auditSummaryFixture },
+      { body: { detail: "raw prompt sk-hidden" }, status: 500 },
+    ]);
+
+    renderRoute("/audits/42");
+
+    expect(await screen.findByText("Web5 summary unavailable")).toBeInTheDocument();
+    expect(screen.getByText("Unable to load the Web5 summary right now.")).toBeInTheDocument();
+    expect(screen.queryByText(/raw prompt|sk-hidden/i)).not.toBeInTheDocument();
+  });
+
+  it("renders an empty Web5 summary state safely", async () => {
+    mockFetchSequence([
+      { body: currentUserFixture },
+      { body: auditDetailFixture },
+      { body: emptyAuditSummaryFixture },
+      { body: emptyAuditSummaryV2Fixture },
+    ]);
+
+    renderRoute("/audits/42");
+
+    expect(await screen.findByText("No Web5 summary data is available yet.")).toBeInTheDocument();
+    expect(screen.getByText("No model summaries are available yet.")).toBeInTheDocument();
   });
 
   it("renders an empty or newly created audit summary safely", async () => {
@@ -230,6 +398,7 @@ describe("audit summary page", () => {
       { body: currentUserFixture },
       { body: auditDetailFixture },
       { body: auditSummaryFixture },
+      { body: auditSummaryV2Fixture },
     ]);
 
     renderRoute("/audits/42");
@@ -242,7 +411,12 @@ describe("audit summary page", () => {
   });
 
   it("redirects the legacy summary URL to the canonical audit page", async () => {
-    mockFetchSequence([{ body: currentUserFixture }, { body: auditDetailFixture }, { body: auditSummaryFixture }]);
+    mockFetchSequence([
+      { body: currentUserFixture },
+      { body: auditDetailFixture },
+      { body: auditSummaryFixture },
+      { body: auditSummaryV2Fixture },
+    ]);
 
     renderRoute("/audits/42/summary");
 

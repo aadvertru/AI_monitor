@@ -37,6 +37,7 @@ import { AuditStatusBadge } from "./AuditStatusBadge";
 import { AuditSummaryContent } from "./AuditSummaryContent";
 import { AuditViewTabs } from "./AuditViewTabs";
 import { ProviderDiagnostics } from "./ProviderDiagnostics";
+import { Web5SummaryShell } from "./Web5SummaryShell";
 import {
   archiveConfirmationMessage,
   deleteConfirmationMessage,
@@ -305,6 +306,7 @@ export function AuditDetailPage() {
         </div>
       ) : null}
       <AuditSetupPanel audit={detail.data} />
+      <Web5SummaryShell auditId={auditId} audit={detail.data} />
       <AuditSummaryContent auditId={auditId} summary={summary.data} />
     </section>
   );

@@ -15,12 +15,15 @@ import {
   auditSummaryV2Fixture,
   auditSummaryFixture,
   auditTargetWireFixture,
+  completedAuditSummaryV2Fixture,
   createAuditModelTargetsPayloadFixture,
   createAuditModelTargetsWireFixture,
   currentUserFixture,
   emptyAuditResultsFixture,
   emptyAuditSummaryFixture,
   failedAuditSummaryFixture,
+  failedAuditSummaryV2Fixture,
+  l1OnlyAuditSummaryV2Fixture,
   legacyAuditDetailWithoutModelTargetsFixture,
   openRouterL2AuditTargetWireFixture,
   partialAuditSummaryFixture,
@@ -149,6 +152,34 @@ describe("frontend-backend contract fixtures", () => {
     expect(dumped).not.toContain("request_snapshot");
     expect(dumped).not.toContain("api_key");
     expect(dumped).not.toContain("authorization");
+  });
+
+  it("covers Web5 summary UI fixture states", () => {
+    const web5Fixtures = [
+      auditSummaryV2Fixture,
+      completedAuditSummaryV2Fixture,
+      failedAuditSummaryV2Fixture,
+      l1OnlyAuditSummaryV2Fixture,
+    ];
+
+    for (const fixture of web5Fixtures) {
+      expect(documentedAuditStatuses.has(fixture.status)).toBe(true);
+      for (const level of fixture.totals.levels) {
+        expect(documentedScdlLevels.has(level)).toBe(true);
+      }
+      for (const diagnostic of fixture.provider_diagnostics ?? []) {
+        expect(documentedProviderDiagnosticCodes.has(diagnostic.code)).toBe(true);
+      }
+    }
+
+    expect(completedAuditSummaryV2Fixture.status).toBe("completed");
+    expect(completedAuditSummaryV2Fixture.overall.accuracy_l1).not.toBeNull();
+    expect(auditSummaryV2Fixture.status).toBe("partial");
+    expect(auditSummaryV2Fixture.overall.accuracy_l1).toBeNull();
+    expect(failedAuditSummaryV2Fixture.status).toBe("failed");
+    expect(failedAuditSummaryV2Fixture.provider_diagnostics).toHaveLength(1);
+    expect(l1OnlyAuditSummaryV2Fixture.totals.levels).toEqual(["L1"]);
+    expect(l1OnlyAuditSummaryV2Fixture.overall.mentionability_l2.percentage).toBeNull();
   });
 
   it("keeps frontend create fixture separate from backend wire payload shape", () => {
