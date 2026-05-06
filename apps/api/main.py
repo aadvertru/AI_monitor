@@ -7,6 +7,7 @@ import re
 from collections import Counter, defaultdict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
@@ -62,6 +63,9 @@ from apps.api.audit_schemas import (
     ToneBreakdownResponse,
 )
 from apps.api.database import get_db_session, init_models, should_auto_create_schema
+from apps.api.export_data import build_export_report_data
+from apps.api.export_docx import generate_docx_export
+from apps.api.export_excel import generate_excel_export
 from apps.api.security import (
     AuthConfig,
     AuthConfigError,
@@ -171,6 +175,12 @@ AUDIT_NOT_RUNNABLE_DETAIL = "Audit has no runnable query/provider combinations."
 RAW_RESPONSE_NOT_FOUND_DETAIL = "Raw response was not found."
 RAW_RESPONSE_FORBIDDEN_DETAIL = "Raw response inspection requires admin access."
 DEV_PIPELINE_FORBIDDEN_DETAIL = "Pipeline execution requires admin access."
+EXCEL_EXPORT_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
+DOCX_EXPORT_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+)
 SENSITIVE_RAW_RESPONSE_KEYS = frozenset(
     {
         "api_key",
@@ -1131,6 +1141,110 @@ async def update_audit_record(
     return await build_audit_detail_response(session, audit, brand)
 
 
+async def duplicate_audit_record(
+    session: AsyncSession,
+    audit: Audit,
+    brand: Brand,
+    *,
+    user_id: int,
+) -> AuditCreateResponse:
+    queries = (
+        await session.execute(select(Query).where(Query.audit_id == audit.id).order_by(Query.id))
+    ).scalars().all()
+    targets = (
+        await session.execute(
+            select(AuditTarget).where(AuditTarget.audit_id == audit.id).order_by(AuditTarget.id)
+        )
+    ).scalars().all()
+
+    duplicated = Audit(
+        brand_id=audit.brand_id,
+        user_id=user_id,
+        status=AuditStatus.CREATED,
+        providers=list(audit.providers),
+        runs_per_query=audit.runs_per_query,
+        language=audit.language,
+        country=audit.country,
+        locale=audit.locale,
+        max_queries=audit.max_queries,
+        enable_query_expansion=audit.enable_query_expansion,
+        enable_source_intelligence=audit.enable_source_intelligence,
+        follow_up_depth=audit.follow_up_depth,
+        scdl_level=audit.scdl_level,
+    )
+    session.add(duplicated)
+    await session.flush()
+
+    for query in queries:
+        session.add(
+            Query(
+                audit_id=duplicated.id,
+                text=query.text,
+                query_type=query.query_type,
+                source=query.source,
+            )
+        )
+
+    for target in targets:
+        session.add(
+            AuditTarget(
+                audit_id=duplicated.id,
+                ai_family=target.ai_family,
+                execution_provider=target.execution_provider,
+                model_provider=target.model_provider,
+                model_id=target.model_id,
+                display_name=target.display_name,
+                level=target.level,
+                gateway=target.gateway,
+                gateway_l2_experimental=target.gateway_l2_experimental,
+                provider_config_snapshot=deepcopy(target.provider_config_snapshot),
+                model_display_order=target.model_display_order,
+                capability_metadata=deepcopy(target.capability_metadata),
+            )
+        )
+
+    await replace_brand_facts_for_audit(
+        session,
+        duplicated,
+        brand,
+        brand_name=brand.name,
+        brand_domain=brand.domain,
+        brand_description=brand.description,
+    )
+
+    await session.commit()
+    await session.refresh(duplicated)
+    audit_number = await get_relative_audit_number(session, duplicated)
+
+    duplicated_queries = (
+        await session.execute(
+            select(Query).where(Query.audit_id == duplicated.id).order_by(Query.id)
+        )
+    ).scalars().all()
+    duplicated_targets = (
+        await session.execute(
+            select(AuditTarget)
+            .where(AuditTarget.audit_id == duplicated.id)
+            .order_by(AuditTarget.id)
+        )
+    ).scalars().all()
+
+    return AuditCreateResponse(
+        audit_id=duplicated.id,
+        audit_number=audit_number,
+        brand_id=duplicated.brand_id,
+        status=duplicated.status.value,
+        providers=duplicated.providers,
+        runs_per_query=duplicated.runs_per_query,
+        scdl_level=duplicated.scdl_level.value,
+        seed_queries=[query.text for query in duplicated_queries],
+        seed_query_items=[
+            build_seed_query_item_response(query) for query in duplicated_queries
+        ],
+        model_targets=[build_audit_target_response(target) for target in duplicated_targets],
+    )
+
+
 async def register_user_record(
     session: AsyncSession,
     payload: RegisterRequest,
@@ -1317,6 +1431,23 @@ def relative_audit_numbers(audits: list[Audit]) -> dict[int, int]:
         for index, audit in enumerate(sorted(owner_audits, key=lambda item: item.id), start=1):
             numbers[audit.id] = index
     return numbers
+
+
+def _export_timestamp(value: datetime) -> str:
+    return value.astimezone(timezone.utc).strftime("%Y%m%d-%H%M%S")
+
+
+def _export_filename(audit_id: int, kind: Literal["summary", "report"], extension: str) -> str:
+    timestamp = _export_timestamp(datetime.now(tz=timezone.utc))
+    return f"audit-{audit_id}-{kind}-{timestamp}.{extension}"
+
+
+def _file_response(content: bytes, *, filename: str, media_type: str) -> Response:
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 async def load_accessible_audit(
@@ -3197,6 +3328,23 @@ async def update_audit(
         raise HTTPException(status_code=500, detail="Failed to update audit.") from exc
 
 
+@app.post("/audits/{audit_id}/duplicate", response_model=AuditCreateResponse)
+async def duplicate_audit(
+    audit_id: int,
+    request: Request,
+    session: AsyncSession = DB_SESSION_DEPENDENCY,
+) -> AuditCreateResponse:
+    try:
+        current_user = await get_authenticated_user_from_request(session, request)
+        audit, brand = await load_accessible_audit(session, audit_id, current_user)
+        return await duplicate_audit_record(session, audit, brand, user_id=current_user.id)
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail="Failed to duplicate audit.") from exc
+
+
 @app.post("/audits/{audit_id}/archive", response_model=AuditActionResponse)
 async def archive_audit(
     audit_id: int,
@@ -3443,6 +3591,50 @@ async def get_audit_source_domains(
         raise
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=500, detail="Failed to load source domains.") from exc
+
+
+@app.get("/audits/{audit_id}/exports/excel")
+async def download_audit_excel_export(
+    audit_id: int,
+    request: Request,
+    session: AsyncSession = DB_SESSION_DEPENDENCY,
+) -> Response:
+    try:
+        current_user = await get_authenticated_user_from_request(session, request)
+        audit, _brand = await load_accessible_audit(session, audit_id, current_user)
+        report_data = await build_export_report_data(session, audit)
+        content = generate_excel_export(report_data)
+        return _file_response(
+            content,
+            filename=_export_filename(audit.id, "summary", "xlsx"),
+            media_type=EXCEL_EXPORT_CONTENT_TYPE,
+        )
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=500, detail="Failed to build Excel export.") from exc
+
+
+@app.get("/audits/{audit_id}/exports/docx")
+async def download_audit_docx_export(
+    audit_id: int,
+    request: Request,
+    session: AsyncSession = DB_SESSION_DEPENDENCY,
+) -> Response:
+    try:
+        current_user = await get_authenticated_user_from_request(session, request)
+        audit, _brand = await load_accessible_audit(session, audit_id, current_user)
+        report_data = await build_export_report_data(session, audit)
+        content = generate_docx_export(report_data)
+        return _file_response(
+            content,
+            filename=_export_filename(audit.id, "report", "docx"),
+            media_type=DOCX_EXPORT_CONTENT_TYPE,
+        )
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=500, detail="Failed to build DOCX export.") from exc
 
 
 @app.get(

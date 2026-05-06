@@ -119,6 +119,35 @@ export async function apiFetch<T>(
   return (await response.json()) as T;
 }
 
+export type AuditExportKind = "excel" | "docx";
+
+function filenameFromContentDisposition(value: string | null, fallback: string) {
+  if (!value) {
+    return fallback;
+  }
+  const match = /filename="?([^";]+)"?/i.exec(value);
+  return match?.[1] ?? fallback;
+}
+
+export async function downloadAuditExport(auditId: number, kind: AuditExportKind) {
+  const response = await fetch(`${API_BASE_URL}/audits/${auditId}/exports/${kind}`, {
+    credentials: "include",
+  });
+
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+
+  const extension = kind === "excel" ? "xlsx" : "docx";
+  return {
+    blob: await response.blob(),
+    filename: filenameFromContentDisposition(
+      response.headers.get("Content-Disposition"),
+      `audit-${auditId}-${kind}.${extension}`,
+    ),
+  };
+}
+
 function jsonBody(value: unknown) {
   return JSON.stringify(value);
 }
@@ -370,6 +399,12 @@ export async function createAudit(payload: AuditCreateRequest) {
     body: jsonBody(mapAuditPayloadToWire(payload)),
   });
   return mapAuditCreateResponseFromWire(response);
+}
+
+export function duplicateAudit(auditId: number) {
+  return apiFetch<AuditCreateResponse>(`/audits/${auditId}/duplicate`, {
+    method: "POST",
+  }).then(mapAuditCreateResponseFromWire);
 }
 
 export function estimateAudit(payload: AuditEstimateRequest) {

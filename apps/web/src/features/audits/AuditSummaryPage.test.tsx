@@ -1,11 +1,12 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   auditDetailFixture,
   auditDetailWithModelTargetsFixture,
   auditAnswerMatrixFixture,
+  auditCreateResponseFixture,
   auditSummaryV2Fixture,
   auditSummaryFixture,
   currentUserFixture,
@@ -17,6 +18,9 @@ import {
 import { mockFetchSequence } from "../../test/mockFetch";
 import { renderRoute } from "../../test/render";
 
+const originalCreateObjectURL = URL.createObjectURL;
+const originalRevokeObjectURL = URL.revokeObjectURL;
+
 function renderSummary(summary = auditSummaryFixture, detail = auditDetailFixture) {
   mockFetchSequence([
     { body: currentUserFixture },
@@ -26,6 +30,50 @@ function renderSummary(summary = auditSummaryFixture, detail = auditDetailFixtur
     { body: auditAnswerMatrixFixture },
   ]);
   renderRoute("/audits/42");
+}
+
+function jsonResponse(body: unknown, status = 200): Partial<Response> {
+  return {
+    json: async () => body,
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: status >= 200 && status < 300 ? "OK" : "Error",
+  };
+}
+
+function exportBlobResponse(filename: string): Partial<Response> {
+  return {
+    blob: async () => new Blob(["safe export"]),
+    headers: new Headers({ "Content-Disposition": `attachment; filename="${filename}"` }),
+    ok: true,
+    status: 200,
+    statusText: "OK",
+  };
+}
+
+function mockSummaryExportResponse(exportResponse: Partial<Response>) {
+  const fetchMock = vi.fn();
+  for (const body of [
+    currentUserFixture,
+    auditDetailFixture,
+    auditSummaryFixture,
+    auditSummaryV2Fixture,
+    auditAnswerMatrixFixture,
+  ]) {
+    fetchMock.mockResolvedValueOnce(jsonResponse(body));
+  }
+  fetchMock.mockResolvedValueOnce(exportResponse);
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+function installDownloadMocks() {
+  const createObjectURL = vi.fn(() => "blob:audit-export");
+  const revokeObjectURL = vi.fn();
+  Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectURL });
+  Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectURL });
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+  return { click, createObjectURL, revokeObjectURL };
 }
 
 const emptyAuditSummaryV2Fixture = {
@@ -45,6 +93,29 @@ const emptyAuditSummaryV2Fixture = {
 };
 
 describe("audit summary page", () => {
+  afterEach(() => {
+    if (originalCreateObjectURL) {
+      Object.defineProperty(URL, "createObjectURL", {
+        configurable: true,
+        value: originalCreateObjectURL,
+      });
+    } else {
+      Reflect.deleteProperty(URL, "createObjectURL");
+    }
+
+    if (originalRevokeObjectURL) {
+      Object.defineProperty(URL, "revokeObjectURL", {
+        configurable: true,
+        value: originalRevokeObjectURL,
+      });
+    } else {
+      Reflect.deleteProperty(URL, "revokeObjectURL");
+    }
+
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
   it("shows loading state while summary is being fetched", async () => {
     const fetchMock = vi.fn();
     fetchMock.mockResolvedValueOnce({
@@ -92,9 +163,9 @@ describe("audit summary page", () => {
     expect(screen.getAllByText("-100%").length).toBeGreaterThan(0);
     expect(screen.getByText("positive / negative")).toBeInTheDocument();
     expect(screen.getByText("Actions")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Export DOCX" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Export Excel" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Repeat audit" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Export DOCX" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Export Excel" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Repeat audit" })).toBeEnabled();
     expect(screen.getByRole("link", { name: "Summary" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "Summary" })).toHaveAttribute("href", "/audits/42");
     expect(screen.getByRole("link", { name: "Results" })).toHaveAttribute("href", "/audits/42/results");
@@ -109,6 +180,119 @@ describe("audit summary page", () => {
     expect(screen.getAllByText("0.74").length).toBeGreaterThan(0);
     expect(screen.getByText("Weighted")).toBeInTheDocument();
     expect(screen.getByText("0.76")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["Export Excel", "excel", "audit-42-summary-20260506T120000Z.xlsx"],
+    ["Export DOCX", "docx", "audit-42-report-20260506T120000Z.docx"],
+  ])("downloads the %s report through the export endpoint", async (buttonName, kind, filename) => {
+    const user = userEvent.setup();
+    const fetchMock = mockSummaryExportResponse(exportBlobResponse(filename));
+    const download = installDownloadMocks();
+
+    renderRoute("/audits/42");
+
+    await user.click(await screen.findByRole("button", { name: buttonName }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        `http://localhost:8000/audits/42/exports/${kind}`,
+        expect.objectContaining({ credentials: "include" }),
+      );
+    });
+    expect(download.createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
+    expect(download.click).toHaveBeenCalledTimes(1);
+    expect(download.revokeObjectURL).toHaveBeenCalledWith("blob:audit-export");
+  });
+
+  it("shows a safe export error without leaking backend details", async () => {
+    const user = userEvent.setup();
+    mockSummaryExportResponse(jsonResponse({ detail: "raw_prompt sk-hidden" }, 500));
+
+    renderRoute("/audits/42");
+
+    await user.click(await screen.findByRole("button", { name: "Export DOCX" }));
+
+    expect(await screen.findByText("Unable to export this audit right now.")).toBeInTheDocument();
+    expect(screen.queryByText(/raw_prompt|sk-hidden/i)).not.toBeInTheDocument();
+  });
+
+  it("duplicates an audit and navigates to the new audit without starting it", async () => {
+    const user = userEvent.setup();
+    const repeatedDetail = {
+      ...auditDetailFixture,
+      audit_id: 99,
+      audit_number: 2,
+      brand_name: "Repeated Acme",
+    };
+    const fetchMock = vi.fn();
+    for (const body of [
+      currentUserFixture,
+      auditDetailFixture,
+      auditSummaryFixture,
+      auditSummaryV2Fixture,
+      auditAnswerMatrixFixture,
+      { ...auditCreateResponseFixture, audit_id: 99, audit_number: 2 },
+      repeatedDetail,
+      { ...auditSummaryFixture, audit_id: 99, audit_number: 2 },
+      { ...auditSummaryV2Fixture, audit_id: 99 },
+      { ...auditAnswerMatrixFixture, audit_id: 99 },
+    ]) {
+      fetchMock.mockResolvedValueOnce(jsonResponse(body));
+    }
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRoute("/audits/42");
+
+    await user.click(await screen.findByRole("button", { name: "Repeat audit" }));
+
+    expect(await screen.findByRole("heading", { name: "Repeated Acme" })).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/audits/42/duplicate",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/audits/99",
+      expect.objectContaining({ credentials: "include" }),
+    );
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "http://localhost:8000/audits/99/run-pipeline",
+      expect.anything(),
+    );
+  });
+
+  it("disables the repeat action while the duplicate request is pending", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn();
+    for (const body of [
+      currentUserFixture,
+      auditDetailFixture,
+      auditSummaryFixture,
+      auditSummaryV2Fixture,
+      auditAnswerMatrixFixture,
+    ]) {
+      fetchMock.mockResolvedValueOnce(jsonResponse(body));
+    }
+    fetchMock.mockReturnValueOnce(new Promise(() => undefined));
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderRoute("/audits/42");
+
+    await user.click(await screen.findByRole("button", { name: "Repeat audit" }));
+
+    expect(await screen.findByRole("button", { name: "Repeating..." })).toBeDisabled();
+  });
+
+  it("shows a safe repeat error without leaking backend details", async () => {
+    const user = userEvent.setup();
+    mockSummaryExportResponse(jsonResponse({ detail: "raw_prompt sk-hidden" }, 500));
+
+    renderRoute("/audits/42");
+
+    await user.click(await screen.findByRole("button", { name: "Repeat audit" }));
+
+    expect(await screen.findByText("Unable to repeat this audit right now.")).toBeInTheDocument();
+    expect(screen.queryByText(/raw_prompt|sk-hidden/i)).not.toBeInTheDocument();
   });
 
   it("calls the summary-v2 endpoint for the Web5 shell", async () => {

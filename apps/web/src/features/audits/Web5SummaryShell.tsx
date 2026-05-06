@@ -1,9 +1,11 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, FileSpreadsheet, FileText, Repeat2, RotateCcw } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
 
 import { Button } from "../../components/ui/Button";
-import { rerunAuditEvaluation } from "../../lib/api/client";
+import { downloadAuditExport, duplicateAudit, rerunAuditEvaluation } from "../../lib/api/client";
+import type { AuditExportKind } from "../../lib/api/client";
 import type {
   AuditDetail,
   AuditTarget,
@@ -78,6 +80,17 @@ function formatTonePair(model: AuditSummaryV2ModelSummary) {
   return `${l1} / ${l2}`;
 }
 
+function triggerBrowserDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 export function Web5SummaryShell({
   auditId,
   audit,
@@ -87,6 +100,7 @@ export function Web5SummaryShell({
 }) {
   const { t } = useTranslation("results");
   const formatters = useLocaleFormatters();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const summary = useAuditSummaryV2(auditId);
   const rerunEvaluation = useMutation({
@@ -105,6 +119,20 @@ export function Web5SummaryShell({
         queryKey: ["audit", auditId, "detail"],
         refetchType: "none",
       });
+    },
+  });
+  const exportDownload = useMutation({
+    mutationFn: async (kind: AuditExportKind) => {
+      const result = await downloadAuditExport(auditId, kind);
+      triggerBrowserDownload(result.blob, result.filename);
+      return result;
+    },
+  });
+  const repeatAudit = useMutation({
+    mutationFn: () => duplicateAudit(auditId),
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({ queryKey: ["audits"] });
+      navigate(`/audits/${result.audit_id}`);
     },
   });
 
@@ -313,29 +341,33 @@ export function Web5SummaryShell({
           <Button
             type="button"
             variant="secondary"
-            disabled
-            title={t("web5.exportDocxUnavailable")}
+            disabled={exportDownload.isPending}
+            onClick={() => exportDownload.mutate("docx")}
           >
             <FileText className="size-4" aria-hidden="true" />
-            {t("web5.exportDocx")}
+            {exportDownload.isPending && exportDownload.variables === "docx"
+              ? t("web5.exportPending")
+              : t("web5.exportDocx")}
           </Button>
           <Button
             type="button"
             variant="secondary"
-            disabled
-            title={t("web5.exportExcelUnavailable")}
+            disabled={exportDownload.isPending}
+            onClick={() => exportDownload.mutate("excel")}
           >
             <FileSpreadsheet className="size-4" aria-hidden="true" />
-            {t("web5.exportExcel")}
+            {exportDownload.isPending && exportDownload.variables === "excel"
+              ? t("web5.exportPending")
+              : t("web5.exportExcel")}
           </Button>
           <Button
             type="button"
             variant="secondary"
-            disabled
-            title={t("web5.repeatUnavailable")}
+            disabled={repeatAudit.isPending}
+            onClick={() => repeatAudit.mutate()}
           >
             <Repeat2 className="size-4" aria-hidden="true" />
-            {t("web5.repeatAudit")}
+            {repeatAudit.isPending ? t("web5.repeatPending") : t("web5.repeatAudit")}
           </Button>
         </div>
         {rerunEvaluation.data ? (
@@ -357,6 +389,12 @@ export function Web5SummaryShell({
         ) : null}
         {rerunEvaluation.error ? (
           <p className="mt-3 text-sm text-red-700">{t("web5.rerunError")}</p>
+        ) : null}
+        {exportDownload.error ? (
+          <p className="mt-3 text-sm text-red-700">{t("web5.exportError")}</p>
+        ) : null}
+        {repeatAudit.error ? (
+          <p className="mt-3 text-sm text-red-700">{t("web5.repeatError")}</p>
         ) : null}
       </div>
 
