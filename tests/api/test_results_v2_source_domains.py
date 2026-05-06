@@ -12,6 +12,7 @@ from apps.api.security import create_access_token, load_auth_config
 from libs.storage.models import (
     Audit,
     AuditStatus,
+    AuditTarget,
     Base,
     Brand,
     ParsedResult,
@@ -54,6 +55,9 @@ class ResultsV2SourceDomainsAPITests(unittest.IsolatedAsyncioTestCase):
         user: User,
         *,
         level: SCDLLevel = SCDLLevel.L1,
+        include_sources: bool = True,
+        with_target: bool = False,
+        invalid_source: bool = False,
     ) -> Audit:
         async with self.session_factory() as session:
             brand = Brand(name=f"Sources {user.id}", domain=f"sources-{user.id}.example")
@@ -69,19 +73,57 @@ class ResultsV2SourceDomainsAPITests(unittest.IsolatedAsyncioTestCase):
             )
             session.add(audit)
             await session.flush()
+            target = None
+            if with_target:
+                target = AuditTarget(
+                    audit_id=audit.id,
+                    ai_family="chatgpt",
+                    execution_provider="openrouter",
+                    model_provider="openai",
+                    model_id="openai/gpt-4o-mini",
+                    display_name="GPT-4o mini",
+                    level=level,
+                    gateway=True,
+                    gateway_l2_experimental=level == SCDLLevel.L2,
+                )
+                session.add(target)
+                await session.flush()
             query = Query(audit_id=audit.id, text="source heavy query")
             session.add(query)
             await session.flush()
             run = Run(
                 audit_id=audit.id,
                 query_id=query.id,
-                audit_target_id=None,
-                provider="mock",
+                audit_target_id=target.id if target is not None else None,
+                provider=target.execution_provider if target is not None else "mock",
                 run_number=1,
                 status=RunStatus.SUCCESS,
             )
             session.add(run)
             await session.flush()
+            parsed_sources: list[dict[str, object]] = []
+            citations: list[dict[str, object]] = []
+            if include_sources:
+                parsed_sources = [
+                    {
+                        "url": "https://docs.example.com/path?utm_source=x",
+                        "title": "Docs",
+                        "snippet": "Documentation snippet.",
+                        "raw_source_payload": "must stay hidden",
+                    },
+                    {"url": "https://blog.example.com/article", "title": "Blog"},
+                ]
+                citations = [
+                    {"url": "https://docs.example.com/path", "title": "Docs"}
+                ]
+                if invalid_source:
+                    parsed_sources.append(
+                        {
+                            "url": "javascript:alert(1)",
+                            "title": "Unsafe",
+                            "headers": {"authorization": "secret"},
+                        }
+                    )
             session.add_all(
                 [
                     ParsedResult(
@@ -93,20 +135,17 @@ class ResultsV2SourceDomainsAPITests(unittest.IsolatedAsyncioTestCase):
                         recommendation_score=0.5,
                         source_quality_score=0.0,
                         competitors=[],
-                        sources=[
-                            {"url": "https://docs.example/path", "title": "Docs"},
-                            {"url": "https://blog.example/article", "title": "Blog"},
-                        ],
+                        sources=parsed_sources,
                         parsed_payload={"raw_source_payload": "must stay hidden"},
                     ),
                     RawResponse(
                         run_id=run.id,
                         request_snapshot={"query": "safe"},
                         raw_answer="answer with source mentions",
-                        citations=[
-                            {"url": "https://docs.example/path", "title": "Docs"}
-                        ],
-                        provider_metadata={"model": "mock"},
+                        citations=citations,
+                        provider_metadata={
+                            "model": target.model_id if target is not None else "mock"
+                        },
                         provider_status="success",
                     ),
                 ]
@@ -150,7 +189,7 @@ class ResultsV2SourceDomainsAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(unauth_context.exception.status_code, 401)
         self.assertEqual(other_context.exception.status_code, 404)
 
-    async def test_source_domains_returns_strict_empty_placeholder_for_l1(self) -> None:
+    async def test_source_domains_groups_sources_and_excludes_raw_fields(self) -> None:
         owner = await self._create_user()
         audit = await self._create_audit(owner, level=SCDLLevel.L1)
 
@@ -162,15 +201,26 @@ class ResultsV2SourceDomainsAPITests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(result.audit_id, audit.id)
-        self.assertEqual(result.domains, [])
+        self.assertEqual(len(result.domains), 1)
+        domain = result.domains[0]
+        self.assertEqual(domain.domain, "example.com")
+        self.assertEqual(domain.source_count, 3)
+        self.assertEqual(domain.unique_url_count, 2)
+        self.assertEqual(domain.query_count, 1)
+        self.assertEqual(domain.levels, ["L1"])
+        self.assertEqual(domain.providers, ["mock"])
+        self.assertIn(
+            "https://docs.example.com/path",
+            {url.normalized_url for url in domain.urls},
+        )
         self.assertEqual(result.warnings, [])
         serialized = str(result.model_dump())
-        self.assertNotIn("docs.example", serialized)
         self.assertNotIn("raw_source_payload", serialized)
+        self.assertNotIn("headers", serialized)
 
-    async def test_source_domains_returns_strict_empty_placeholder_for_l2(self) -> None:
+    async def test_source_domains_returns_empty_state_when_no_sources_exist(self) -> None:
         owner = await self._create_user()
-        audit = await self._create_audit(owner, level=SCDLLevel.L2)
+        audit = await self._create_audit(owner, level=SCDLLevel.L2, include_sources=False)
 
         async with self.session_factory() as session:
             result = await get_audit_source_domains(
@@ -182,6 +232,36 @@ class ResultsV2SourceDomainsAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.audit_id, audit.id)
         self.assertEqual(result.domains, [])
         self.assertEqual(result.warnings, [])
+
+    async def test_source_domains_includes_gateway_metadata_and_skips_invalid_urls(
+        self,
+    ) -> None:
+        owner = await self._create_user()
+        audit = await self._create_audit(
+            owner,
+            level=SCDLLevel.L2,
+            with_target=True,
+            invalid_source=True,
+        )
+
+        async with self.session_factory() as session:
+            result = await get_audit_source_domains(
+                audit_id=audit.id,
+                request=self._request(owner),
+                session=session,
+            )
+
+        self.assertEqual(len(result.domains), 1)
+        domain = result.domains[0]
+        self.assertEqual(domain.models, ["openai/gpt-4o-mini"])
+        self.assertEqual(domain.providers, ["openrouter"])
+        self.assertEqual(domain.levels, ["L2"])
+        self.assertTrue(domain.urls[0].gateway)
+        self.assertTrue(domain.urls[0].gateway_l2_experimental)
+        self.assertEqual(result.warnings, ["Skipped 1 invalid source URL(s)."])
+        serialized = str(result.model_dump())
+        self.assertNotIn("javascript", serialized)
+        self.assertNotIn("authorization", serialized)
 
 
 if __name__ == "__main__":

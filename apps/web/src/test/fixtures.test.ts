@@ -130,8 +130,9 @@ describe("frontend-backend contract fixtures", () => {
     expect(auditAnswerMatrixFixture.rows[0]?.cells[0]?.evaluation?.verdict).toBe("partial");
     expect(auditAnswerMatrixFixture.rows[0]?.cells[1]?.provider_error?.code).toBe("TIMEOUT");
 
-    expect(sourceDomainsFixture.domains).toEqual([]);
-    expect(sourceDomainsFixture.warnings).toEqual([]);
+    expect(sourceDomainsFixture.domains[0]?.domain).toBe("example.com");
+    expect(sourceDomainsFixture.domains[0]?.urls[0]?.gateway_l2_experimental).toBe(true);
+    expect(sourceDomainsFixture.warnings).toContain("Skipped 1 invalid source URL(s).");
 
     const dumped = JSON.stringify({
       auditSummaryV2Fixture,

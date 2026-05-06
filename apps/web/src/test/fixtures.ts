@@ -622,8 +622,53 @@ export const auditAnswerMatrixFixture: AnswerMatrixResponse = {
 
 export const sourceDomainsFixture: SourceDomainsResponse = {
   audit_id: 42,
-  domains: [],
-  warnings: [],
+  domains: [
+    {
+      domain: "example.com",
+      source_count: 3,
+      unique_url_count: 2,
+      query_count: 2,
+      target_count: 1,
+      levels: ["L2"],
+      models: ["openai/gpt-4o-mini"],
+      providers: ["openrouter"],
+      urls: [
+        {
+          url: "https://docs.example.com/path?utm_source=test",
+          normalized_url: "https://docs.example.com/path",
+          title: "Example docs",
+          snippet: "Evidence snippet for the cited source.",
+          query_id: "101",
+          query_text: "best ai visibility tools",
+          target_id: "11",
+          model_id: "openai/gpt-4o-mini",
+          model_provider: "openai",
+          execution_provider: "openrouter",
+          level: "L2",
+          source_type: "web",
+          gateway: true,
+          gateway_l2_experimental: true,
+        },
+        {
+          url: "https://blog.example.com/article",
+          normalized_url: "https://blog.example.com/article",
+          title: "Example blog",
+          snippet: null,
+          query_id: "102",
+          query_text: "brand monitoring platforms",
+          target_id: "11",
+          model_id: "openai/gpt-4o-mini",
+          model_provider: "openai",
+          execution_provider: "openrouter",
+          level: "L2",
+          source_type: "web",
+          gateway: true,
+          gateway_l2_experimental: true,
+        },
+      ],
+    },
+  ],
+  warnings: ["Skipped 1 invalid source URL(s)."],
 };
 
 export const emptyAuditSummaryFixture: AuditSummaryResponse = {

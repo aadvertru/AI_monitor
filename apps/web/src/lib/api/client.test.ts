@@ -411,7 +411,7 @@ describe("api client", () => {
     expect(Object.keys(evaluationVerdictTranslationKeys)).toContain("not_applicable");
   });
 
-  it("loads source domains strict placeholder responses", async () => {
+  it("loads source domains with grouped URL evidence and warnings", async () => {
     const fetchMock = mockFetchSequence([{ body: sourceDomainsFixture }]);
 
     await expect(getAuditSourceDomains(42)).resolves.toEqual(sourceDomainsFixture);
@@ -419,6 +419,52 @@ describe("api client", () => {
       "http://localhost:8000/audits/42/source-domains",
       expect.objectContaining({ credentials: "include" }),
     );
+    expect(sourceDomainsFixture.domains[0]?.domain).toBe("example.com");
+    expect(sourceDomainsFixture.domains[0]?.urls[0]?.normalized_url).toBe(
+      "https://docs.example.com/path",
+    );
+    expect(sourceDomainsFixture.warnings).toContain("Skipped 1 invalid source URL(s).");
+  });
+
+  it("normalizes source domain optional fields and strips unsafe extras", async () => {
+    mockFetchSequence([
+      {
+        body: {
+          audit_id: 42,
+          domains: [
+            {
+              domain: "example.com",
+              source_count: 1,
+              unique_url_count: 1,
+              query_count: 1,
+              target_count: 0,
+              levels: ["L2"],
+              models: ["openai/gpt-4o-mini"],
+              providers: ["openrouter"],
+              raw_response: "hidden",
+              urls: [
+                {
+                  url: "https://example.com/path",
+                  normalized_url: "https://example.com/path",
+                  raw_prompt: "hidden",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ]);
+
+    const result = await getAuditSourceDomains(42);
+    expect(result.warnings).toEqual([]);
+    expect(result.domains[0]?.urls[0]).toMatchObject({
+      title: null,
+      snippet: null,
+      gateway: false,
+      gateway_l2_experimental: false,
+    });
+    expect(JSON.stringify(result)).not.toContain("raw_response");
+    expect(JSON.stringify(result)).not.toContain("raw_prompt");
   });
 
   it("normalizes partial results v2 payloads to safe arrays", async () => {

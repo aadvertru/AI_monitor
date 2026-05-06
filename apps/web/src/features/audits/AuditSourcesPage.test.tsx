@@ -3,21 +3,25 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  auditSummaryFixture,
+  auditDetailFixture,
   currentUserFixture,
-  emptyAuditSummaryFixture,
+  sourceDomainsFixture,
 } from "../../test/fixtures";
 import { mockFetchSequence } from "../../test/mockFetch";
 import { renderRoute } from "../../test/render";
 
-function renderSources(summary = auditSummaryFixture) {
-  const fetchMock = mockFetchSequence([{ body: currentUserFixture }, { body: summary }]);
+function renderSources(domains = sourceDomainsFixture) {
+  const fetchMock = mockFetchSequence([
+    { body: currentUserFixture },
+    { body: auditDetailFixture },
+    { body: domains },
+  ]);
   renderRoute("/audits/42/sources");
   return fetchMock;
 }
 
 describe("audit sources page", () => {
-  it("shows loading state while sources are being fetched", async () => {
+  it("shows loading state while source domains are being fetched", async () => {
     const fetchMock = vi.fn();
     fetchMock.mockResolvedValueOnce({
       json: async () => currentUserFixture,
@@ -33,7 +37,7 @@ describe("audit sources page", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("Loading sources...");
   });
 
-  it("renders source summary data with citation counts", async () => {
+  it("renders source domain rows with counts", async () => {
     renderSources();
 
     expect(await screen.findByRole("heading", { name: "Source intelligence" })).toBeInTheDocument();
@@ -46,16 +50,37 @@ describe("audit sources page", () => {
       "href",
       "/audits/42/results",
     );
-    expect(screen.getByText("AI visibility benchmarks")).toBeInTheDocument();
-    expect(screen.getByText("example.com")).toBeInTheDocument();
-    expect(screen.getByText("openai")).toBeInTheDocument();
-    expect(screen.getByText("article")).toBeInTheDocument();
-    expect(screen.getAllByText("3").length).toBeGreaterThan(0);
-    expect(screen.getByText("0.70")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "example.com" })).toBeInTheDocument();
+    expect(screen.getByText("3 citations · 2 URLs · 2 queries")).toBeInTheDocument();
+    expect(screen.getByText(/openrouter · L2 · openai\/gpt-4o-mini/)).toBeInTheDocument();
+    expect(screen.getByText("Skipped 1 invalid source URL(s).")).toBeInTheDocument();
+  });
+
+  it("expands and collapses URL evidence", async () => {
+    const user = userEvent.setup();
+    renderSources();
+
+    await screen.findByRole("heading", { name: "example.com" });
+    expect(screen.queryByText("Example docs")).not.toBeInTheDocument();
+
+    const button = screen.getByRole("button", { name: "Details" });
+    await user.click(button);
+
+    expect(button).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Example docs")).toBeInTheDocument();
+    expect(screen.getByText("Evidence snippet for the cited source.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /https:\/\/docs.example.com\/path/ })).toHaveAttribute(
+      "rel",
+      "noopener noreferrer",
+    );
+
+    await user.click(button);
+    expect(button).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Example docs")).not.toBeInTheDocument();
   });
 
   it("renders an empty sources state", async () => {
-    renderSources(emptyAuditSummaryFixture);
+    renderSources({ audit_id: 42, domains: [], warnings: [] });
 
     expect(await screen.findByText("No sources yet")).toBeInTheDocument();
     expect(
@@ -63,61 +88,41 @@ describe("audit sources page", () => {
     ).toBeInTheDocument();
   });
 
-  it("safely renders malformed or partially missing source fields", async () => {
+  it("safely renders partially missing URL evidence fields", async () => {
     renderSources({
-      ...auditSummaryFixture,
-      sources: [
+      audit_id: 42,
+      domains: [
         {
-          title: null,
-          url: null,
-          domain: null,
-          provider: null,
-          source_type: null,
-          citation_count: null,
-          related_query_count: null,
-          source_quality_score: null,
+          domain: "example.com",
+          source_count: 1,
+          unique_url_count: 1,
+          query_count: 0,
+          target_count: 0,
+          levels: [],
+          models: [],
+          providers: [],
+          urls: [
+            {
+              url: "https://example.com/path",
+              normalized_url: "https://example.com/path",
+            },
+          ],
         },
       ],
+      warnings: [],
     });
 
-    expect(await screen.findByText("Untitled source")).toBeInTheDocument();
-    expect(screen.getByText("No URL")).toBeInTheDocument();
-    expect(screen.getAllByText("N/A").length).toBeGreaterThan(1);
-  });
-
-  it("sorts sources by provider when selected", async () => {
-    const user = userEvent.setup();
-    renderSources({
-      ...auditSummaryFixture,
-      sources: [
-        auditSummaryFixture.sources[0],
-        {
-          title: "Anthropic source",
-          url: "https://anthropic.example/source",
-          domain: "anthropic.example",
-          provider: "anthropic",
-          source_type: "docs",
-          citation_count: 1,
-          related_query_count: 1,
-          source_quality_score: 0.6,
-        },
-      ],
-    });
-
-    await screen.findByText("AI visibility benchmarks");
-    await user.selectOptions(screen.getByLabelText("Sort sources"), "provider");
-
-    const anthropic = screen.getByText("Anthropic source");
-    const openai = screen.getByText("AI visibility benchmarks");
-    expect(
-      anthropic.compareDocumentPosition(openai) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    await screen.findByRole("heading", { name: "example.com" });
+    await userEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(screen.getAllByText("https://example.com/path").length).toBeGreaterThan(0);
+    expect(screen.getByText(/N\/A · N\/A · N\/A/)).toBeInTheDocument();
   });
 
   it("shows an API error state", async () => {
     mockFetchSequence([
       { body: currentUserFixture },
-      { body: { detail: "Failed to load audit summary." }, status: 500 },
+      { body: auditDetailFixture },
+      { body: { detail: "Failed to load source domains." }, status: 500 },
     ]);
 
     renderRoute("/audits/42/sources");
@@ -125,11 +130,30 @@ describe("audit sources page", () => {
     expect(await screen.findByText("Unable to load sources.")).toBeInTheDocument();
   });
 
-  it("does not crawl source URLs or calculate quality client-side", async () => {
-    const fetchMock = renderSources();
+  it("does not crawl source URLs or render unsafe raw fields", async () => {
+    const fetchMock = renderSources({
+      ...sourceDomainsFixture,
+      domains: [
+        {
+          ...sourceDomainsFixture.domains[0]!,
+          urls: [
+            {
+              ...sourceDomainsFixture.domains[0]!.urls[0]!,
+              // @ts-expect-error - fixture intentionally simulates unsafe server drift.
+              raw_response: "hidden",
+            },
+          ],
+        },
+      ],
+    });
 
-    await screen.findByText("AI visibility benchmarks");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock).not.toHaveBeenCalledWith("https://example.com/benchmarks", expect.anything());
+    await screen.findByRole("heading", { name: "example.com" });
+    await userEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "https://docs.example.com/path",
+      expect.anything(),
+    );
+    expect(screen.queryByText("hidden")).not.toBeInTheDocument();
   });
 });

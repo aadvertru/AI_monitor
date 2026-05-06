@@ -169,8 +169,67 @@ def answer_matrix_cell_fixture(
     }
 
 
-def source_domains_fixture() -> dict[str, Any]:
-    return {"audit_id": 42, "domains": [], "warnings": []}
+def source_domain_url_fixture(
+    *,
+    url: str = "https://docs.example.com/path?utm_source=test",
+    normalized_url: str = "https://docs.example.com/path",
+    title: str | None = "Example docs",
+    query_id: str | None = "101",
+    target_id: str | None = "11",
+    model_id: str | None = "openai/gpt-4o-mini",
+    execution_provider: str | None = "openrouter",
+    level: str | None = "L2",
+) -> dict[str, Any]:
+    return {
+        "url": url,
+        "normalized_url": normalized_url,
+        "title": title,
+        "snippet": "Safe evidence snippet.",
+        "query_id": query_id,
+        "query_text": "best ai visibility tools",
+        "target_id": target_id,
+        "model_id": model_id,
+        "model_provider": "openai" if model_id else None,
+        "execution_provider": execution_provider,
+        "level": level,
+        "source_type": "web",
+        "gateway": execution_provider == "openrouter",
+        "gateway_l2_experimental": execution_provider == "openrouter" and level == "L2",
+    }
+
+
+def source_domain_group_fixture(
+    *,
+    domain: str = "example.com",
+    urls: list[dict[str, Any]] | None = None,
+    source_count: int | None = None,
+    levels: list[str] | None = None,
+    providers: list[str] | None = None,
+) -> dict[str, Any]:
+    urls = urls if urls is not None else [source_domain_url_fixture()]
+    query_ids = {url.get("query_id") for url in urls if url.get("query_id")}
+    target_ids = {url.get("target_id") for url in urls if url.get("target_id")}
+    return {
+        "domain": domain,
+        "source_count": source_count if source_count is not None else len(urls),
+        "unique_url_count": len({url["normalized_url"] for url in urls}),
+        "query_count": len(query_ids),
+        "target_count": len(target_ids),
+        "levels": levels if levels is not None else sorted({url["level"] for url in urls}),
+        "models": sorted({url["model_id"] for url in urls if url.get("model_id")}),
+        "providers": providers
+        if providers is not None
+        else sorted({url["execution_provider"] for url in urls if url.get("execution_provider")}),
+        "urls": urls,
+    }
+
+
+def source_domains_fixture(
+    *,
+    domains: list[dict[str, Any]] | None = None,
+    warnings: list[str] | None = None,
+) -> dict[str, Any]:
+    return {"audit_id": 42, "domains": domains or [], "warnings": warnings or []}
 
 
 EMPTY_AUDIT_RESULTS_V2 = {
@@ -318,4 +377,94 @@ RESULTS_V2_FIXTURES = {
     "openrouter_gateway_l1_l2": OPENROUTER_GATEWAY_L1_L2_RESULTS_V2,
     "legacy_without_targets": LEGACY_WITHOUT_TARGETS_RESULTS_V2,
     "evaluation_null": EVALUATION_NULL_RESULTS_V2,
+}
+
+SOURCE_INTELLIGENCE_V2_FIXTURES = {
+    "no_sources": source_domains_fixture(),
+    "single_domain_one_url": source_domains_fixture(
+        domains=[source_domain_group_fixture()]
+    ),
+    "single_domain_multiple_urls": source_domains_fixture(
+        domains=[
+            source_domain_group_fixture(
+                urls=[
+                    source_domain_url_fixture(),
+                    source_domain_url_fixture(
+                        url="https://blog.example.com/article",
+                        normalized_url="https://blog.example.com/article",
+                        title="Example blog",
+                    ),
+                ],
+                source_count=2,
+            )
+        ]
+    ),
+    "same_registrable_domain_across_subdomains": source_domains_fixture(
+        domains=[
+            source_domain_group_fixture(
+                domain="bbc.co.uk",
+                urls=[
+                    source_domain_url_fixture(
+                        url="https://news.bbc.co.uk/story",
+                        normalized_url="https://news.bbc.co.uk/story",
+                    ),
+                    source_domain_url_fixture(
+                        url="https://www.bbc.co.uk/other",
+                        normalized_url="https://www.bbc.co.uk/other",
+                    ),
+                ],
+            )
+        ]
+    ),
+    "multiple_domains": source_domains_fixture(
+        domains=[
+            source_domain_group_fixture(domain="example.com"),
+            source_domain_group_fixture(
+                domain="wikipedia.org",
+                urls=[
+                    source_domain_url_fixture(
+                        url="https://wikipedia.org/wiki/X",
+                        normalized_url="https://wikipedia.org/wiki/X",
+                    )
+                ],
+                providers=["openrouter"],
+            ),
+        ]
+    ),
+    "duplicate_urls": source_domains_fixture(
+        domains=[
+            source_domain_group_fixture(
+                urls=[source_domain_url_fixture()],
+                source_count=2,
+            )
+        ]
+    ),
+    "invalid_url_skipped": source_domains_fixture(
+        domains=[source_domain_group_fixture()],
+        warnings=["Skipped 1 invalid source URL(s)."],
+    ),
+    "openrouter_l2_with_citations": source_domains_fixture(
+        domains=[source_domain_group_fixture()]
+    ),
+    "openrouter_l2_without_citations": source_domains_fixture(),
+    "legacy_source_records": source_domains_fixture(
+        domains=[
+            source_domain_group_fixture(
+                urls=[
+                    source_domain_url_fixture(
+                        model_id="mock",
+                        execution_provider="mock",
+                        level="L1",
+                        target_id=None,
+                    )
+                ],
+                levels=["L1"],
+                providers=["mock"],
+            )
+        ]
+    ),
+    "partial_audit_some_sources": source_domains_fixture(
+        domains=[source_domain_group_fixture()],
+        warnings=["Some runs did not return citations."],
+    ),
 }

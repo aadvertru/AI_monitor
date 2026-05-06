@@ -485,9 +485,38 @@ class AnswerMatrixResponse(FrontendAuditSchema):
     provider_diagnostics: list[ProviderDiagnosticResponse] = Field(default_factory=list)
 
 
+class SourceDomainUrlResponse(FrontendAuditSchema):
+    url: str
+    normalized_url: str
+    title: str | None = None
+    snippet: str | None = None
+    query_id: str | None = None
+    query_text: str | None = None
+    target_id: str | None = None
+    model_id: str | None = None
+    model_provider: str | None = None
+    execution_provider: str | None = None
+    level: SCDLLevelValue | None = None
+    source_type: str | None = None
+    gateway: bool = False
+    gateway_l2_experimental: bool = False
+
+
+class SourceDomainGroupResponse(FrontendAuditSchema):
+    domain: str
+    source_count: int = 0
+    unique_url_count: int = 0
+    query_count: int = 0
+    target_count: int = 0
+    levels: list[SCDLLevelValue] = Field(default_factory=list)
+    models: list[str] = Field(default_factory=list)
+    providers: list[str] = Field(default_factory=list)
+    urls: list[SourceDomainUrlResponse] = Field(default_factory=list)
+
+
 class SourceDomainsResponse(FrontendAuditSchema):
     audit_id: int
-    domains: list[dict[str, object]] = Field(default_factory=list)
+    domains: list[SourceDomainGroupResponse] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
 

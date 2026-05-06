@@ -30,6 +30,8 @@ import type {
   ProfilePreferences,
   ProfileResponse,
   RerunEvaluationResponse,
+  SourceDomainGroup,
+  SourceDomainUrl,
   SourceDomainsResponse,
 } from "./types";
 
@@ -275,8 +277,41 @@ function mapAnswerMatrixFromWire(response: AnswerMatrixResponse): AnswerMatrixRe
 function mapSourceDomainsFromWire(response: SourceDomainsResponse): SourceDomainsResponse {
   return {
     ...response,
-    domains: response.domains ?? [],
+    domains: (response.domains ?? []).map(mapSourceDomainGroupFromWire),
     warnings: response.warnings ?? [],
+  };
+}
+
+function mapSourceDomainGroupFromWire(group: SourceDomainGroup): SourceDomainGroup {
+  return {
+    domain: group.domain,
+    source_count: group.source_count ?? 0,
+    unique_url_count: group.unique_url_count ?? 0,
+    query_count: group.query_count ?? 0,
+    target_count: group.target_count ?? 0,
+    levels: group.levels ?? [],
+    models: group.models ?? [],
+    providers: group.providers ?? [],
+    urls: (group.urls ?? []).map(mapSourceDomainUrlFromWire),
+  };
+}
+
+function mapSourceDomainUrlFromWire(url: SourceDomainUrl): SourceDomainUrl {
+  return {
+    url: url.url,
+    normalized_url: url.normalized_url,
+    title: url.title ?? null,
+    snippet: url.snippet ?? null,
+    query_id: url.query_id ?? null,
+    query_text: url.query_text ?? null,
+    target_id: url.target_id ?? null,
+    model_id: url.model_id ?? null,
+    model_provider: url.model_provider ?? null,
+    execution_provider: url.execution_provider ?? null,
+    level: url.level ?? null,
+    source_type: url.source_type ?? null,
+    gateway: url.gateway ?? false,
+    gateway_l2_experimental: url.gateway_l2_experimental ?? false,
   };
 }
 

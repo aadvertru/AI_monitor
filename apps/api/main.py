@@ -53,7 +53,9 @@ from apps.api.audit_schemas import (
     QueryTypeCoverageItemResponse,
     RawResponseInspectionResponse,
     SeedQueryItemResponse,
+    SourceDomainGroupResponse,
     SourceDomainsResponse,
+    SourceDomainUrlResponse,
     SourceSummaryItemResponse,
     ToneBreakdownResponse,
 )
@@ -80,6 +82,13 @@ from libs.analysis.aggregation import (
     build_audit_summary,
     compute_query_type_coverage,
     find_critical_queries,
+)
+from libs.analysis.source_intelligence import (
+    SourceDomainAggregationResult,
+    SourceDomainGroup,
+    SourceDomainUrlEvidence,
+    SourceEvidence,
+    aggregate_source_domains,
 )
 from libs.control.job_scheduler import schedule_jobs_for_audit
 from libs.control.query_deduplication import deduplicate_queries
@@ -2512,8 +2521,178 @@ def _sources_count(
     return 0
 
 
-def build_source_domains_response(audit: Audit) -> SourceDomainsResponse:
-    return SourceDomainsResponse(audit_id=audit.id, domains=[], warnings=[])
+async def build_source_domains_response(
+    session: AsyncSession,
+    audit: Audit,
+) -> SourceDomainsResponse:
+    stmt = (
+        select(Run, Query, ParsedResult, RawResponse, AuditTarget)
+        .join(Query, Run.query_id == Query.id)
+        .outerjoin(ParsedResult, ParsedResult.run_id == Run.id)
+        .outerjoin(RawResponse, RawResponse.run_id == Run.id)
+        .outerjoin(AuditTarget, AuditTarget.id == Run.audit_target_id)
+        .where(Run.audit_id == audit.id)
+        .order_by(Query.id, AuditTarget.id, Run.provider, Run.run_number, Run.id)
+    )
+    evidence: list[SourceEvidence] = []
+    for run, query, parsed_result, raw_response, target in (await session.execute(stmt)).all():
+        evidence.extend(
+            _source_evidence_for_run(
+                audit=audit,
+                run=run,
+                query=query,
+                parsed_result=parsed_result,
+                raw_response=raw_response,
+                target=target,
+            )
+        )
+
+    aggregation = aggregate_source_domains(evidence)
+    return _source_domains_response_from_aggregation(audit.id, aggregation)
+
+
+def _source_evidence_for_run(
+    *,
+    audit: Audit,
+    run: Run,
+    query: Query,
+    parsed_result: ParsedResult | None,
+    raw_response: RawResponse | None,
+    target: AuditTarget | None,
+) -> list[SourceEvidence]:
+    values: list[object] = []
+    if raw_response is not None and isinstance(raw_response.citations, list):
+        values.extend(raw_response.citations)
+    if parsed_result is not None and isinstance(parsed_result.sources, list):
+        values.extend(parsed_result.sources)
+
+    model_id = (
+        target.model_id
+        if target is not None
+        else _provider_model_from_metadata(
+            raw_response.provider_metadata if raw_response is not None else None
+        )
+    )
+    model_provider = target.model_provider if target is not None else None
+    execution_provider = target.execution_provider if target is not None else run.provider
+    target_id = str(target.id) if target is not None else None
+    level = _target_level(target, audit)
+    gateway = bool(target.gateway) if target is not None else False
+    gateway_l2_experimental = (
+        bool(target.gateway_l2_experimental) if target is not None else False
+    )
+
+    evidence: list[SourceEvidence] = []
+    for value in values:
+        source = _source_evidence_from_value(
+            value,
+            query=query,
+            target_id=target_id,
+            model_id=model_id,
+            model_provider=model_provider,
+            execution_provider=execution_provider,
+            level=level,
+            gateway=gateway,
+            gateway_l2_experimental=gateway_l2_experimental,
+        )
+        if source is not None:
+            evidence.append(source)
+    return evidence
+
+
+def _source_evidence_from_value(
+    value: object,
+    *,
+    query: Query,
+    target_id: str | None,
+    model_id: str | None,
+    model_provider: str | None,
+    execution_provider: str,
+    level: str,
+    gateway: bool,
+    gateway_l2_experimental: bool,
+) -> SourceEvidence | None:
+    if not isinstance(value, dict):
+        return None
+
+    url = value.get("url")
+    if not isinstance(url, str):
+        return None
+
+    title = _optional_string(value.get("title"))
+    snippet = (
+        _optional_string(value.get("snippet"))
+        or _optional_string(value.get("cited_text"))
+        or _optional_string(value.get("text"))
+    )
+    source_type = _optional_string(value.get("source_type")) or "web"
+    return SourceEvidence(
+        url=url,
+        title=title,
+        snippet=snippet,
+        source_type=source_type,
+        query_id=str(query.id),
+        query_text=query.text,
+        target_id=target_id,
+        model_id=model_id,
+        model_provider=model_provider,
+        execution_provider=execution_provider,
+        level=level,
+        gateway=gateway,
+        gateway_l2_experimental=gateway_l2_experimental,
+    )
+
+
+def _optional_string(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _source_domains_response_from_aggregation(
+    audit_id: int,
+    aggregation: SourceDomainAggregationResult,
+) -> SourceDomainsResponse:
+    return SourceDomainsResponse(
+        audit_id=audit_id,
+        domains=[
+            _source_domain_group_response(group) for group in aggregation.domains
+        ],
+        warnings=aggregation.warnings,
+    )
+
+
+def _source_domain_group_response(
+    group: SourceDomainGroup,
+) -> SourceDomainGroupResponse:
+    return SourceDomainGroupResponse(
+        domain=group.domain,
+        source_count=group.source_count,
+        unique_url_count=group.unique_url_count,
+        query_count=group.query_count,
+        target_count=group.target_count,
+        levels=cast(list[Any], group.levels),
+        models=group.models,
+        providers=group.providers,
+        urls=[_source_domain_url_response(url) for url in group.urls],
+    )
+
+
+def _source_domain_url_response(url: SourceDomainUrlEvidence) -> SourceDomainUrlResponse:
+    return SourceDomainUrlResponse(
+        url=url.url,
+        normalized_url=url.normalized_url,
+        title=url.title,
+        snippet=url.snippet,
+        query_id=url.query_id,
+        query_text=url.query_text,
+        target_id=url.target_id,
+        model_id=url.model_id,
+        model_provider=url.model_provider,
+        execution_provider=url.execution_provider,
+        level=cast(Any, url.level),
+        source_type=url.source_type,
+        gateway=url.gateway,
+        gateway_l2_experimental=url.gateway_l2_experimental,
+    )
 
 
 async def build_raw_response_inspection_response(
@@ -3076,7 +3255,7 @@ async def get_audit_source_domains(
     try:
         current_user = await get_authenticated_user_from_request(session, request)
         audit, _brand = await load_accessible_audit(session, audit_id, current_user)
-        return build_source_domains_response(audit)
+        return await build_source_domains_response(session, audit)
     except HTTPException:
         raise
     except SQLAlchemyError as exc:

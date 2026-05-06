@@ -7,7 +7,10 @@ from apps.api.audit_schemas import (
     AuditSummaryV2Response,
     SourceDomainsResponse,
 )
-from tests.results_v2_fixtures import RESULTS_V2_FIXTURES
+from tests.results_v2_fixtures import (
+    RESULTS_V2_FIXTURES,
+    SOURCE_INTELLIGENCE_V2_FIXTURES,
+)
 
 
 class ResultsV2ContractFixtureTests(unittest.TestCase):
@@ -87,6 +90,54 @@ class ResultsV2ContractFixtureTests(unittest.TestCase):
             "raw_answer",
             "request_snapshot",
             "raw_prompt",
+            "headers",
+            "authorization",
+            "api_key",
+            "sk-",
+            "traceback",
+        ]:
+            self.assertNotIn(forbidden, serialized)
+
+    def test_source_intelligence_v2_fixture_cases_exist(self) -> None:
+        self.assertEqual(
+            set(SOURCE_INTELLIGENCE_V2_FIXTURES),
+            {
+                "no_sources",
+                "single_domain_one_url",
+                "single_domain_multiple_urls",
+                "same_registrable_domain_across_subdomains",
+                "multiple_domains",
+                "duplicate_urls",
+                "invalid_url_skipped",
+                "openrouter_l2_with_citations",
+                "openrouter_l2_without_citations",
+                "legacy_source_records",
+                "partial_audit_some_sources",
+            },
+        )
+
+    def test_source_intelligence_v2_fixtures_validate_and_preserve_evidence(
+        self,
+    ) -> None:
+        for name, fixture in SOURCE_INTELLIGENCE_V2_FIXTURES.items():
+            with self.subTest(name=name):
+                response = SourceDomainsResponse.model_validate(fixture)
+                for domain in response.domains:
+                    self.assertGreaterEqual(domain.source_count, domain.unique_url_count)
+                    self.assertGreaterEqual(domain.unique_url_count, len(domain.urls))
+                    for url in domain.urls:
+                        self.assertTrue(url.normalized_url.startswith(("http://", "https://")))
+                        self.assertIsNotNone(url.url)
+
+    def test_source_intelligence_v2_fixtures_do_not_expose_raw_payloads(self) -> None:
+        serialized = str(SOURCE_INTELLIGENCE_V2_FIXTURES)
+
+        for forbidden in [
+            "raw_answer",
+            "request_snapshot",
+            "raw_prompt",
+            "raw_response",
+            "raw_annotations",
             "headers",
             "authorization",
             "api_key",

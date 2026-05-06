@@ -549,7 +549,34 @@ export type AnswerMatrixResponse = {
   provider_diagnostics?: ProviderDiagnostic[];
 };
 
-export type SourceDomainGroup = Record<string, unknown>;
+export type SourceDomainUrl = {
+  url: string;
+  normalized_url: string;
+  title?: string | null;
+  snippet?: string | null;
+  query_id?: string | null;
+  query_text?: string | null;
+  target_id?: string | null;
+  model_id?: string | null;
+  model_provider?: string | null;
+  execution_provider?: string | null;
+  level?: SCDLLevel | null;
+  source_type?: string | null;
+  gateway?: boolean;
+  gateway_l2_experimental?: boolean;
+};
+
+export type SourceDomainGroup = {
+  domain: string;
+  source_count: number;
+  unique_url_count: number;
+  query_count: number;
+  target_count: number;
+  levels: SCDLLevel[];
+  models: string[];
+  providers: string[];
+  urls: SourceDomainUrl[];
+};
 
 export type SourceDomainsResponse = {
   audit_id: number;
