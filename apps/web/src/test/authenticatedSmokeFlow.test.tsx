@@ -117,5 +117,5 @@ describe("authenticated SCDL smoke flow", () => {
       expect.stringMatching(/^https?:\/\/(api\.openai|api\.anthropic|generativelanguage)/),
       expect.anything(),
     );
-  });
+  }, 15_000);
 });

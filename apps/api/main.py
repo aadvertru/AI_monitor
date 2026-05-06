@@ -8,7 +8,7 @@ from collections import Counter, defaultdict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from pydantic import (
@@ -104,6 +104,7 @@ from libs.storage.models import (
     SeedQuerySource,
     SeedQueryType,
     User,
+    UserPreference,
     UserRole,
 )
 
@@ -118,6 +119,10 @@ DEFAULT_MAX_MODELS_PER_AUDIT = 5
 DEFAULT_MAX_QUERIES_PER_AUDIT = 20
 DEFAULT_MAX_TOTAL_RUNS_PER_AUDIT = 100
 MAX_EMAIL_LENGTH = 255
+SUPPORTED_PROFILE_LOCALES = frozenset({"en", "ru"})
+DEMO_PROFILE_PLAN_NAME = "Starter"
+DEMO_PROFILE_TOKEN_TOTAL = 10000
+ProfileLocaleValue = Literal["en", "ru"]
 BRAND_DOMAIN_PATTERN = re.compile(
     r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$"
 )
@@ -554,6 +559,58 @@ class UserResponse(BaseModel):
     role: str
 
 
+class ProfileUserResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: int
+    email: str
+    display_name: str | None = None
+
+
+class ProfilePlanResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    status: Literal["demo"]
+    is_demo: bool = True
+
+
+class ProfileUsageResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tokens_remaining: int
+    tokens_total: int
+    reset_at: datetime | None = None
+    is_demo: bool = True
+
+
+class ProfilePreferencesResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    locale: ProfileLocaleValue
+    email_notifications: bool
+    audit_completed_notifications: bool
+    provider_error_notifications: bool
+
+
+class ProfileResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user: ProfileUserResponse
+    plan: ProfilePlanResponse
+    usage: ProfileUsageResponse
+    preferences: ProfilePreferencesResponse
+
+
+class ProfilePreferencesUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    locale: ProfileLocaleValue
+    email_notifications: bool
+    audit_completed_notifications: bool
+    provider_error_notifications: bool
+
+
 class LoginRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -583,6 +640,92 @@ def build_user_response(user: User) -> UserResponse:
         email=user.email,
         role=user.role.value,
     )
+
+
+def build_profile_preferences_response(
+    preferences: UserPreference,
+) -> ProfilePreferencesResponse:
+    locale = preferences.locale if preferences.locale in SUPPORTED_PROFILE_LOCALES else "en"
+    return ProfilePreferencesResponse(
+        locale=cast(ProfileLocaleValue, locale),
+        email_notifications=preferences.email_notifications,
+        audit_completed_notifications=preferences.audit_completed_notifications,
+        provider_error_notifications=preferences.provider_error_notifications,
+    )
+
+
+async def get_or_create_user_preferences(
+    session: AsyncSession,
+    user_id: int,
+) -> UserPreference:
+    preferences = (
+        await session.execute(
+            select(UserPreference).where(UserPreference.user_id == user_id)
+        )
+    ).scalars().first()
+    if preferences is not None:
+        return preferences
+
+    preferences = UserPreference(
+        user_id=user_id,
+        locale="en",
+        email_notifications=True,
+        audit_completed_notifications=True,
+        provider_error_notifications=False,
+    )
+    session.add(preferences)
+    await session.flush()
+    return preferences
+
+
+async def build_profile_response(
+    session: AsyncSession,
+    current_user: UserResponse,
+) -> ProfileResponse:
+    user = await session.get(User, current_user.id)
+    if user is None:
+        raise HTTPException(status_code=401, detail=UNAUTHORIZED_DETAIL)
+
+    preferences = await get_or_create_user_preferences(session, user.id)
+    await session.commit()
+    await session.refresh(preferences)
+    return ProfileResponse(
+        user=ProfileUserResponse(
+            id=user.id,
+            email=user.email,
+            display_name=None,
+        ),
+        plan=ProfilePlanResponse(
+            name=DEMO_PROFILE_PLAN_NAME,
+            status="demo",
+            is_demo=True,
+        ),
+        usage=ProfileUsageResponse(
+            tokens_remaining=DEMO_PROFILE_TOKEN_TOTAL,
+            tokens_total=DEMO_PROFILE_TOKEN_TOTAL,
+            reset_at=None,
+            is_demo=True,
+        ),
+        preferences=build_profile_preferences_response(preferences),
+    )
+
+
+async def update_profile_preferences_record(
+    session: AsyncSession,
+    current_user: UserResponse,
+    payload: ProfilePreferencesUpdateRequest,
+) -> ProfileResponse:
+    user = await session.get(User, current_user.id)
+    if user is None:
+        raise HTTPException(status_code=401, detail=UNAUTHORIZED_DETAIL)
+
+    preferences = await get_or_create_user_preferences(session, user.id)
+    preferences.locale = payload.locale
+    preferences.email_notifications = payload.email_notifications
+    preferences.audit_completed_notifications = payload.audit_completed_notifications
+    preferences.provider_error_notifications = payload.provider_error_notifications
+    await session.commit()
+    return await build_profile_response(session, current_user)
 
 
 def build_seed_query_items(
@@ -1922,6 +2065,40 @@ async def get_current_user(
         raise
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=500, detail="Failed to load current user.") from exc
+
+
+@app.get("/profile", response_model=ProfileResponse)
+async def get_profile(
+    request: Request,
+    session: AsyncSession = DB_SESSION_DEPENDENCY,
+) -> ProfileResponse:
+    try:
+        current_user = await get_authenticated_user_from_request(session, request)
+        return await build_profile_response(session, current_user)
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail="Failed to load profile.") from exc
+
+
+@app.put("/profile/preferences", response_model=ProfileResponse)
+async def update_profile_preferences(
+    payload: ProfilePreferencesUpdateRequest,
+    request: Request,
+    session: AsyncSession = DB_SESSION_DEPENDENCY,
+) -> ProfileResponse:
+    try:
+        current_user = await get_authenticated_user_from_request(session, request)
+        return await update_profile_preferences_record(session, current_user, payload)
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to update profile preferences.",
+        ) from exc
 
 
 @app.post(

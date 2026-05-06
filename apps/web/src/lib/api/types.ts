@@ -118,6 +118,33 @@ export type LogoutResponse = {
   status: string;
 };
 
+export type ProfilePreferences = {
+  locale: "en" | "ru";
+  email_notifications: boolean;
+  audit_completed_notifications: boolean;
+  provider_error_notifications: boolean;
+};
+
+export type ProfileResponse = {
+  user: {
+    id: number;
+    email: string;
+    display_name: string | null;
+  };
+  plan: {
+    name: string;
+    status: "demo";
+    is_demo: boolean;
+  };
+  usage: {
+    tokens_remaining: number;
+    tokens_total: number;
+    reset_at: string | null;
+    is_demo: boolean;
+  };
+  preferences: ProfilePreferences;
+};
+
 export type AuditListItem = {
   audit_id: number;
   audit_number: number;

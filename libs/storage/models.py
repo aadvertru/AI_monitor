@@ -109,6 +109,37 @@ class User(Base):
     )
 
     audits: Mapped[list["Audit"]] = relationship(back_populates="user")
+    preferences: Mapped["UserPreference | None"] = relationship(
+        back_populates="user", cascade="all, delete-orphan", uselist=False
+    )
+
+
+class UserPreference(Base):
+    __tablename__ = "user_preferences"
+    __table_args__ = (
+        CheckConstraint("locale IN ('en', 'ru')", name="ck_user_preferences_locale"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    locale: Mapped[str] = mapped_column(String(16), nullable=False, default="en")
+    email_notifications: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    audit_completed_notifications: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True
+    )
+    provider_error_notifications: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, onupdate=_utc_now, nullable=False
+    )
+
+    user: Mapped[User] = relationship(back_populates="preferences")
 
 
 class Brand(Base):

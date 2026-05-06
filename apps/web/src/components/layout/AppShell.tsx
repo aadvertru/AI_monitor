@@ -1,4 +1,4 @@
-import { BarChart3, LogOut, ShieldCheck } from "lucide-react";
+import { BarChart3, LogOut, ShieldCheck, UserCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { NavLink, Outlet } from "react-router-dom";
 
@@ -56,6 +56,20 @@ export function AppShell() {
             >
               <BarChart3 className="size-4" aria-hidden="true" />
               {t("navigation:audits")}
+            </NavLink>
+            <NavLink
+              to="/profile"
+              className={({ isActive }) =>
+                [
+                  "mt-1 flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium",
+                  isActive
+                    ? "bg-brand-50 text-brand-700"
+                    : "text-subtle hover:bg-muted hover:text-ink",
+                ].join(" ")
+              }
+            >
+              <UserCircle className="size-4" aria-hidden="true" />
+              {t("navigation:profile")}
             </NavLink>
           </nav>
         </aside>

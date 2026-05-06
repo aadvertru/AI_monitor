@@ -11,6 +11,7 @@ import { EditAuditPage } from "../features/audits/EditAuditPage";
 import { GuestRoute, ProtectedRoute } from "../features/auth/routeGuards";
 import { LoginPage } from "../features/auth/LoginPage";
 import { RegisterPage } from "../features/auth/RegisterPage";
+import { ProfilePage } from "../features/profile/ProfilePage";
 
 export function routes() {
   return [
@@ -41,6 +42,7 @@ export function routes() {
               path: "/audits/:auditId",
               element: <AuditDetailPage />,
             },
+            { path: "/profile", element: <ProfilePage /> },
           ],
         },
       ],

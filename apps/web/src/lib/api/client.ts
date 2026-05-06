@@ -24,6 +24,8 @@ import type {
   ModelCatalogModelWire,
   ModelCatalogResponse,
   ModelCatalogResponseWire,
+  ProfilePreferences,
+  ProfileResponse,
 } from "./types";
 
 export type ApiErrorPayload = {
@@ -242,6 +244,17 @@ export function logoutUser() {
 
 export function getModelCatalog() {
   return apiFetch<ModelCatalogResponseWire>("/model-catalog").then(mapModelCatalogFromWire);
+}
+
+export function getProfile() {
+  return apiFetch<ProfileResponse>("/profile");
+}
+
+export function updateProfilePreferences(payload: ProfilePreferences) {
+  return apiFetch<ProfileResponse>("/profile/preferences", {
+    method: "PUT",
+    body: jsonBody(payload),
+  });
 }
 
 export function listAudits({ archived = false }: { archived?: boolean } = {}) {

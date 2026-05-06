@@ -30,6 +30,7 @@ def test_alembic_upgrade_head_creates_current_schema() -> None:
         "alembic_version",
         "brands",
         "users",
+        "user_preferences",
         "audits",
         "queries",
         "jobs",
@@ -41,6 +42,13 @@ def test_alembic_upgrade_head_creates_current_schema() -> None:
     }.issubset(table_names)
 
     assert "role" in _column_names(inspector, "users")
+    assert {
+        "user_id",
+        "locale",
+        "email_notifications",
+        "audit_completed_notifications",
+        "provider_error_notifications",
+    }.issubset(_column_names(inspector, "user_preferences"))
     assert {"user_id", "scdl_level", "archived_at"}.issubset(
         _column_names(inspector, "audits")
     )
@@ -68,6 +76,12 @@ def test_alembic_upgrade_head_creates_current_schema() -> None:
 
     assert "uq_jobs_idempotency_key" in _unique_names(inspector, "jobs")
     assert "uq_runs_execution_identity" in _unique_names(inspector, "runs")
+    assert "uq_user_preferences_user_id" in _unique_names(inspector, "user_preferences")
+    preference_checks = " ".join(
+        check["sqltext"]
+        for check in inspector.get_check_constraints("user_preferences")
+    )
+    assert "locale" in preference_checks
     target_checks = " ".join(
         check["sqltext"] for check in inspector.get_check_constraints("audit_targets")
     )
@@ -77,7 +91,7 @@ def test_alembic_upgrade_head_creates_current_schema() -> None:
     with sqlite3.connect(db_path) as connection:
         version = connection.execute("SELECT version_num FROM alembic_version").fetchone()
 
-    assert version == ("b5e3d2c1f0a9",)
+    assert version == ("c6d7e8f9a0b1",)
 
 
 def _column_names(inspector, table_name: str) -> set[str]:

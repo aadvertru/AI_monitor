@@ -1,4 +1,45 @@
 {
-  "account": "Account",
-  "profile": "Profile"
+  "account": {
+    "displayName": "Display name",
+    "editing": "Editing",
+    "email": "Email",
+    "noDisplayName": "Not set",
+    "readOnly": "Read-only in this version",
+    "title": "Account"
+  },
+  "demoMarker": "Demo usage data",
+  "disabled": "Disabled",
+  "enabled": "Enabled",
+  "error": "Unable to load profile.",
+  "loading": "Loading profile...",
+  "notifications": {
+    "auditCompleted": "Audit completed notifications",
+    "email": "Email notifications",
+    "providerError": "Provider error notifications",
+    "title": "Notifications"
+  },
+  "plan": {
+    "demoStatus": "Demo",
+    "name": "Current plan",
+    "status": "Status",
+    "title": "Plan"
+  },
+  "preferences": {
+    "cancel": "Cancel",
+    "locale": "Language preference",
+    "save": "Save preferences",
+    "saveError": "Unable to save preferences.",
+    "saved": "Preferences saved.",
+    "saving": "Saving..."
+  },
+  "subtitle": "Account details, demo plan, usage, and notification preferences.",
+  "title": "Profile",
+  "usage": {
+    "demo": "Token usage is demo data until real accounting is implemented.",
+    "noReset": "No reset scheduled",
+    "remaining": "Tokens remaining",
+    "resetAt": "Reset date",
+    "title": "Usage",
+    "total": "Token quota"
+  }
 }

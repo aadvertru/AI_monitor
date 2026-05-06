@@ -15,6 +15,7 @@ import type {
   AuditCreateRequest,
   ModelCatalogResponseWire,
   AuditEstimateResponse,
+  ProfileResponse,
 } from "../lib/api/types";
 import type { ApiErrorPayload } from "../lib/api/client";
 
@@ -30,6 +31,31 @@ export const unauthenticatedAuthErrorFixture: ApiErrorPayload = {
 
 export const logoutResponseFixture: LogoutResponse = {
   status: "logged_out",
+};
+
+export const profileFixture: ProfileResponse = {
+  user: {
+    id: 1,
+    email: "user@example.com",
+    display_name: null,
+  },
+  plan: {
+    name: "Starter",
+    status: "demo",
+    is_demo: true,
+  },
+  usage: {
+    tokens_remaining: 7500,
+    tokens_total: 10000,
+    reset_at: null,
+    is_demo: true,
+  },
+  preferences: {
+    locale: "en",
+    email_notifications: true,
+    audit_completed_notifications: true,
+    provider_error_notifications: false,
+  },
 };
 
 export const auditListFixture: AuditListItem[] = [
