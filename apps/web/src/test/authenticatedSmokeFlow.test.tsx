@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  auditAnswerMatrixFixture,
   auditCreateResponseFixture,
   auditDetailFixture,
   auditEstimateFixture,
@@ -67,10 +68,12 @@ describe("authenticated SCDL smoke flow", () => {
       { path: "/audits/42", body: auditDetailFixture },
       { path: "/audits/42/summary", body: auditSummaryFixture },
       { path: "/audits/42/summary-v2", body: auditSummaryV2Fixture },
+      { path: "/audits/42/answer-matrix", body: auditAnswerMatrixFixture },
       { path: "/audits/42/run-pipeline", method: "POST", body: auditPipelineRunFixture },
       { path: "/audits/42", body: { ...auditDetailFixture, status: "completed" } },
       { path: "/audits/42/summary", body: { ...auditSummaryFixture, status: "completed" } },
       { path: "/audits/42/summary-v2", body: { ...auditSummaryV2Fixture, status: "completed" } },
+      { path: "/audits/42/answer-matrix", body: auditAnswerMatrixFixture },
       { path: "/audits/42/results", body: auditResultsFixture },
     ]);
     const user = userEvent.setup();

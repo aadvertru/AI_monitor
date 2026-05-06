@@ -157,10 +157,89 @@
     "provider": "Provider",
     "sourceType": "Source type"
   },
+  "matrix": {
+    "eyebrow": "Web6 / Web7",
+    "title": "Answer matrix",
+    "subtitle": "{{rows}} questions x {{columns}} model targets",
+    "endpointLabel": "Data source",
+    "loading": "Loading answer matrix...",
+    "errorTitle": "Answer matrix unavailable",
+    "errorBody": "Unable to load the answer matrix right now.",
+    "question": "Question",
+    "unknown": "Unknown",
+    "diagnosticsPlaceholder": "No provider diagnostics for the matrix.",
+    "openRouterExperimental": "L2 experimental",
+    "openRouterExperimentalNotice": "Some OpenRouter L2 targets use experimental web-search behavior.",
+    "states": {
+      "running": "The audit is still running. Matrix cells may update as runs finish.",
+      "partial": "This audit is partial. Completed cells are shown where backend data is available.",
+      "failed": "This audit failed. Diagnostics are shown where backend data is available."
+    },
+    "empty": {
+      "noData": "No answer matrix data is available yet.",
+      "filtered": "No matrix cells match the current filters."
+    },
+    "filters": {
+      "level": "Level",
+      "allLevels": "All levels",
+      "aiFamily": "AI family",
+      "allFamilies": "All families",
+      "model": "Model",
+      "allModels": "All models",
+      "verdict": "Verdict",
+      "allVerdicts": "All verdicts",
+      "queryType": "Query type",
+      "allQueryTypes": "All query types",
+      "status": "Status",
+      "allStatuses": "All statuses",
+      "clear": "Clear filters"
+    },
+    "status": {
+      "completed": "Completed",
+      "failed": "Failed",
+      "partial": "Partial",
+      "not_run": "Not run",
+      "processing": "Processing",
+      "missing": "Missing"
+    },
+    "verdict": {
+      "correct": "Correct",
+      "partial": "Partial",
+      "incorrect": "Incorrect",
+      "unknown": "Unknown",
+      "not_applicable": "Not applicable"
+    },
+    "cell": {
+      "missing": "No cell data.",
+      "noExcerpt": "No safe answer excerpt.",
+      "sources": "{{count}} source",
+      "sources_plural": "{{count}} sources",
+      "details": "Details"
+    },
+    "details": {
+      "title": "Cell details",
+      "placeholder": "Select a matrix cell to inspect safe normalized details.",
+      "open": "Open details for {{query}} on {{target}}",
+      "close": "Close cell details",
+      "target": "Target",
+      "level": "Level",
+      "status": "Status",
+      "safeAnswer": "Safe answer",
+      "excerptOnly": "Only the safe excerpt is available for this cell.",
+      "evaluation": "Evaluation",
+      "confidence": "Confidence: {{value}}",
+      "diagnostic": "Provider diagnostic",
+      "sources": "Sources",
+      "concepts": "Concepts",
+      "competitors": "Competitors",
+      "none": "None"
+    }
+  },
   "verdict": {
     "correct": "Correct",
     "partial": "Partial",
     "incorrect": "Error",
-    "unknown": "Unknown"
+    "unknown": "Unknown",
+    "not_applicable": "Not applicable"
   }
 }

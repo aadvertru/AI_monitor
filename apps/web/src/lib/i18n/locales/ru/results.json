@@ -157,10 +157,89 @@
     "provider": "Провайдер",
     "sourceType": "Тип источника"
   },
+  "matrix": {
+    "eyebrow": "Web6 / Web7",
+    "title": "Матрица ответов",
+    "subtitle": "{{rows}} вопросов x {{columns}} моделей",
+    "endpointLabel": "Источник данных",
+    "loading": "Загрузка матрицы ответов...",
+    "errorTitle": "Матрица ответов недоступна",
+    "errorBody": "Не удалось загрузить матрицу ответов.",
+    "question": "Вопрос",
+    "unknown": "Неизвестно",
+    "diagnosticsPlaceholder": "Нет диагностик провайдера для матрицы.",
+    "openRouterExperimental": "L2 experimental",
+    "openRouterExperimentalNotice": "Некоторые OpenRouter L2 цели используют экспериментальное web-search поведение.",
+    "states": {
+      "running": "Аудит ещё выполняется. Ячейки матрицы могут обновляться по мере завершения запусков.",
+      "partial": "Аудит частичный. Завершённые ячейки показаны там, где backend уже вернул данные.",
+      "failed": "Аудит завершился ошибкой. Диагностика показана там, где backend вернул данные."
+    },
+    "empty": {
+      "noData": "Данных матрицы ответов пока нет.",
+      "filtered": "Под текущие фильтры нет ячеек матрицы."
+    },
+    "filters": {
+      "level": "Уровень",
+      "allLevels": "Все уровни",
+      "aiFamily": "Семейство AI",
+      "allFamilies": "Все семейства",
+      "model": "Модель",
+      "allModels": "Все модели",
+      "verdict": "Вердикт",
+      "allVerdicts": "Все вердикты",
+      "queryType": "Тип запроса",
+      "allQueryTypes": "Все типы запросов",
+      "status": "Статус",
+      "allStatuses": "Все статусы",
+      "clear": "Сбросить фильтры"
+    },
+    "status": {
+      "completed": "Завершено",
+      "failed": "Ошибка",
+      "partial": "Частично",
+      "not_run": "Не запускалось",
+      "processing": "В процессе",
+      "missing": "Нет данных"
+    },
+    "verdict": {
+      "correct": "Верно",
+      "partial": "Частично",
+      "incorrect": "Неверно",
+      "unknown": "Неизвестно",
+      "not_applicable": "Неприменимо"
+    },
+    "cell": {
+      "missing": "Нет данных ячейки.",
+      "noExcerpt": "Нет безопасного фрагмента ответа.",
+      "sources": "{{count}} источник",
+      "sources_plural": "{{count}} источников",
+      "details": "Детали"
+    },
+    "details": {
+      "title": "Детали ячейки",
+      "placeholder": "Выберите ячейку матрицы, чтобы посмотреть безопасные нормализованные детали.",
+      "open": "Открыть детали для {{query}} в {{target}}",
+      "close": "Закрыть детали ячейки",
+      "target": "Цель",
+      "level": "Уровень",
+      "status": "Статус",
+      "safeAnswer": "Безопасный ответ",
+      "excerptOnly": "Для этой ячейки доступен только безопасный фрагмент.",
+      "evaluation": "Оценка",
+      "confidence": "Уверенность: {{value}}",
+      "diagnostic": "Диагностика провайдера",
+      "sources": "Источники",
+      "concepts": "Концепты",
+      "competitors": "Конкуренты",
+      "none": "Нет"
+    }
+  },
   "verdict": {
     "correct": "Верно",
     "partial": "Частично",
     "incorrect": "Ошибка",
-    "unknown": "Неизвестно"
+    "unknown": "Неизвестно",
+    "not_applicable": "Неприменимо"
   }
 }

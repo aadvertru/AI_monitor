@@ -32,6 +32,7 @@ import type {
 } from "../../lib/api/types";
 import { AuditArchiveBadge } from "./AuditArchiveBadge";
 import { AuditBreadcrumbs } from "./AuditBreadcrumbs";
+import { AnswerMatrixShell } from "./AnswerMatrixShell";
 import { AuditSetupPanel } from "./AuditSetupPanel";
 import { AuditStatusBadge } from "./AuditStatusBadge";
 import { AuditSummaryContent } from "./AuditSummaryContent";
@@ -302,11 +303,12 @@ export function AuditDetailPage() {
       {hasActionDiagnostics ? (
         <div className="space-y-3 border-b border-border px-5 py-3">
           <ProviderDiagnostics diagnostics={pipelineDiagnostics} compact />
-          <ProviderDiagnostics diagnostics={statusDiagnostics} compact />
+      <ProviderDiagnostics diagnostics={statusDiagnostics} compact />
         </div>
       ) : null}
       <AuditSetupPanel audit={detail.data} />
       <Web5SummaryShell auditId={auditId} audit={detail.data} />
+      <AnswerMatrixShell auditId={auditId} auditStatus={currentStatus} />
       <AuditSummaryContent auditId={auditId} summary={summary.data} />
     </section>
   );

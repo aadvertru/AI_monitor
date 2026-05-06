@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   auditDetailFixture,
   auditDetailWithModelTargetsFixture,
+  auditAnswerMatrixFixture,
   auditSummaryV2Fixture,
   auditSummaryFixture,
   currentUserFixture,
@@ -22,6 +23,7 @@ function renderSummary(summary = auditSummaryFixture, detail = auditDetailFixtur
     { body: detail },
     { body: summary },
     { body: auditSummaryV2Fixture },
+    { body: auditAnswerMatrixFixture },
   ]);
   renderRoute("/audits/42");
 }
@@ -64,7 +66,7 @@ describe("audit summary page", () => {
 
     expect(await screen.findByRole("heading", { name: "Acme AI" })).toBeInTheDocument();
     expect(await screen.findByRole("heading", { name: "Web5 summary" })).toBeInTheDocument();
-    expect(screen.getByText("Data source:")).toBeInTheDocument();
+    expect(screen.getAllByText("Data source:").length).toBeGreaterThan(0);
     expect(screen.getByText("summary-v2")).toBeInTheDocument();
     expect(screen.getByText("2 queries · 2 model targets · 3 runs")).toBeInTheDocument();
     expect(screen.getByText("Mentionability L1")).toBeInTheDocument();
@@ -84,7 +86,7 @@ describe("audit summary page", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Model summary")).toBeInTheDocument();
     expect(screen.getByText("GPT-4o mini")).toBeInTheDocument();
-    expect(screen.getByText("openai/gpt-4o-mini")).toBeInTheDocument();
+    expect(screen.getAllByText("openai/gpt-4o-mini").length).toBeGreaterThan(0);
     expect(screen.getByText("MR L1")).toBeInTheDocument();
     expect(screen.getByText("MR L2")).toBeInTheDocument();
     expect(screen.getAllByText("-100%").length).toBeGreaterThan(0);
@@ -97,7 +99,7 @@ describe("audit summary page", () => {
     expect(screen.getByRole("link", { name: "Summary" })).toHaveAttribute("href", "/audits/42");
     expect(screen.getByRole("link", { name: "Results" })).toHaveAttribute("href", "/audits/42/results");
     expect(screen.getByRole("link", { name: "Sources" })).toHaveAttribute("href", "/audits/42/sources");
-    expect(screen.getByText("Completed")).toBeInTheDocument();
+    expect(screen.getAllByText("Completed").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Queries").length).toBeGreaterThan(0);
     expect(screen.getAllByText("3").length).toBeGreaterThan(0);
     expect(screen.getByText("Runs")).toBeInTheDocument();
@@ -115,6 +117,7 @@ describe("audit summary page", () => {
       { body: auditDetailFixture },
       { body: auditSummaryFixture },
       { body: auditSummaryV2Fixture },
+      { body: auditAnswerMatrixFixture },
     ]);
 
     renderRoute("/audits/42");
@@ -143,9 +146,9 @@ describe("audit summary page", () => {
     expect(screen.getByText("Levels")).toBeInTheDocument();
     expect(screen.getByText("L1 / L2")).toBeInTheDocument();
     expect(screen.getByText("Model families")).toBeInTheDocument();
-    expect(screen.getByText("chatgpt")).toBeInTheDocument();
+    expect(screen.getAllByText("chatgpt").length).toBeGreaterThan(0);
     expect(screen.getAllByText("OpenRouter").length).toBeGreaterThan(0);
-    expect(screen.getByText("L2 experimental")).toBeInTheDocument();
+    expect(screen.getAllByText("L2 experimental").length).toBeGreaterThan(0);
   });
 
   it("reruns fact-checking and refreshes the Web5 summary", async () => {
@@ -155,6 +158,7 @@ describe("audit summary page", () => {
       { body: auditDetailFixture },
       { body: auditSummaryFixture },
       { body: auditSummaryV2Fixture },
+      { body: auditAnswerMatrixFixture },
       { body: rerunEvaluationFixture },
       { body: { ...auditSummaryV2Fixture, overall: { ...auditSummaryV2Fixture.overall, accuracy_l1: 1 } } },
     ]);
@@ -214,6 +218,7 @@ describe("audit summary page", () => {
       { body: auditDetailFixture },
       { body: emptyAuditSummaryFixture },
       { body: emptyAuditSummaryV2Fixture },
+      { body: auditAnswerMatrixFixture },
     ]);
 
     renderRoute("/audits/42");
@@ -399,6 +404,7 @@ describe("audit summary page", () => {
       { body: auditDetailFixture },
       { body: auditSummaryFixture },
       { body: auditSummaryV2Fixture },
+      { body: auditAnswerMatrixFixture },
     ]);
 
     renderRoute("/audits/42");
@@ -416,6 +422,7 @@ describe("audit summary page", () => {
       { body: auditDetailFixture },
       { body: auditSummaryFixture },
       { body: auditSummaryV2Fixture },
+      { body: auditAnswerMatrixFixture },
     ]);
 
     renderRoute("/audits/42/summary");

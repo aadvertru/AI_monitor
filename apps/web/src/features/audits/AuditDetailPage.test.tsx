@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   auditDetailFixture,
+  auditAnswerMatrixFixture,
   auditPipelineRunFixture,
   auditStatusFixture,
   auditSummaryV2Fixture,
@@ -23,6 +24,7 @@ function renderDetail(status: AuditStatus = "created") {
     { body: { ...auditSummaryFixture, status } },
     ...(status === "running" ? [{ body: { ...auditStatusFixture, status } }] : []),
     { body: { ...auditSummaryV2Fixture, status } },
+    { body: auditAnswerMatrixFixture },
   ]);
   renderRoute("/audits/42");
 }
@@ -80,6 +82,7 @@ describe("audit detail page", () => {
       { body: { ...auditDetailFixture, archived_at: "2026-05-02T10:00:00Z" } },
       { body: auditSummaryFixture },
       { body: auditSummaryV2Fixture },
+      { body: auditAnswerMatrixFixture },
     ]);
 
     renderRoute("/audits/42");
@@ -114,6 +117,7 @@ describe("audit detail page", () => {
       { body: auditDetailFixture },
       { body: auditSummaryFixture },
       { body: auditSummaryV2Fixture },
+      { body: auditAnswerMatrixFixture },
       { body: { audit_id: 42, status: "created", archived_at: "2026-05-02T10:00:00Z" } },
       { body: [] },
     ]);
@@ -171,6 +175,7 @@ describe("audit detail page", () => {
       { body: auditDetailFixture },
       { body: auditSummaryFixture },
       { body: auditSummaryV2Fixture },
+      { body: auditAnswerMatrixFixture },
       { body: { ...auditDetailFixture, brand_name: "Acme Refreshed" } },
       { body: { ...auditSummaryFixture, status: "completed", completion_ratio: 1 } },
     ]);
@@ -182,8 +187,8 @@ describe("audit detail page", () => {
     await user.click(screen.getByRole("button", { name: "Refresh" }));
 
     expect(await screen.findByRole("heading", { name: "Acme Refreshed" })).toBeInTheDocument();
-    expect(screen.getByText("Completed")).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledTimes(6);
+    expect(screen.getAllByText("Completed").length).toBeGreaterThan(0);
+    expect(fetchMock).toHaveBeenCalledTimes(7);
   });
 
   it("starts an audit through the owner pipeline endpoint", async () => {
@@ -192,10 +197,12 @@ describe("audit detail page", () => {
       { body: auditDetailFixture },
       { body: auditSummaryFixture },
       { body: auditSummaryV2Fixture },
+      { body: auditAnswerMatrixFixture },
       { body: auditPipelineRunFixture },
       { body: { ...auditDetailFixture, status: "completed" } },
       { body: { ...auditSummaryFixture, status: "completed", total_runs: 4 } },
       { body: { ...auditSummaryV2Fixture, status: "completed" } },
+      { body: auditAnswerMatrixFixture },
     ]);
     const user = userEvent.setup();
 
@@ -222,6 +229,7 @@ describe("audit detail page", () => {
       { body: auditDetailFixture },
       { body: auditSummaryFixture },
       { body: auditSummaryV2Fixture },
+      { body: auditAnswerMatrixFixture },
       {
         body: {
           ...auditPipelineRunFixture,
@@ -237,6 +245,7 @@ describe("audit detail page", () => {
       { body: { ...auditDetailFixture, status: "failed" } },
       { body: { ...auditSummaryFixture, status: "failed" } },
       { body: { ...auditSummaryV2Fixture, status: "failed" } },
+      { body: auditAnswerMatrixFixture },
     ]);
     const user = userEvent.setup();
 
@@ -262,12 +271,13 @@ describe("audit detail page", () => {
         },
       },
       { body: { ...auditSummaryV2Fixture, status: "running" } },
+      { body: auditAnswerMatrixFixture },
     ]);
 
     renderRoute("/audits/42");
 
-    expect(await screen.findByText("Provider issue")).toBeInTheDocument();
-    expect(screen.getByText("OpenAI request timed out.")).toBeInTheDocument();
+    expect((await screen.findAllByText("Provider issue")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("OpenAI request timed out.").length).toBeGreaterThan(0);
   });
 
   it("translates audit detail labels while preserving raw seed query and provider messages", async () => {
@@ -283,19 +293,20 @@ describe("audit detail page", () => {
         },
       },
       { body: { ...auditSummaryV2Fixture, status: "running" } },
+      { body: auditAnswerMatrixFixture },
     ]);
     const user = userEvent.setup();
 
     renderRoute("/audits/42");
 
-    await screen.findByText("Provider issue");
+    await screen.findAllByText("Provider issue");
     await user.selectOptions(screen.getByLabelText("Interface language"), "ru");
 
-    expect(await screen.findByText("Проблема провайдера")).toBeInTheDocument();
+    expect((await screen.findAllByText("Проблема провайдера")).length).toBeGreaterThan(0);
     expect(screen.getByRole("link", { name: "Сводка" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByText("Настройки аудита")).toBeInTheDocument();
     expect(screen.getAllByText("best ai visibility tools")).not.toHaveLength(0);
-    expect(screen.getByText("OpenAI request timed out.")).toBeInTheDocument();
+    expect(screen.getAllByText("OpenAI request timed out.").length).toBeGreaterThan(0);
   });
 
   it("disables the start button while pipeline start is pending", async () => {
@@ -321,6 +332,12 @@ describe("audit detail page", () => {
       } satisfies Partial<Response>)
       .mockResolvedValueOnce({
         json: async () => auditSummaryV2Fixture,
+        ok: true,
+        status: 200,
+        statusText: "OK",
+      } satisfies Partial<Response>)
+      .mockResolvedValueOnce({
+        json: async () => auditAnswerMatrixFixture,
         ok: true,
         status: 200,
         statusText: "OK",
@@ -351,6 +368,7 @@ describe("audit detail page", () => {
       { body: auditDetailFixture },
       { body: auditSummaryFixture },
       { body: auditSummaryV2Fixture },
+      { body: auditAnswerMatrixFixture },
       { body: { detail }, status },
     ]);
     const user = userEvent.setup();
@@ -368,10 +386,12 @@ describe("audit detail page", () => {
       { body: auditDetailFixture },
       { body: auditSummaryFixture },
       { body: auditSummaryV2Fixture },
+      { body: auditAnswerMatrixFixture },
       { body: auditPipelineRunFixture },
       { body: { ...auditDetailFixture, status: "completed" } },
       { body: { ...auditSummaryFixture, status: "completed" } },
       { body: { ...auditSummaryV2Fixture, status: "completed" } },
+      { body: auditAnswerMatrixFixture },
     ]);
     const user = userEvent.setup();
 
@@ -445,10 +465,12 @@ describe("audit detail page", () => {
       { body: { ...auditSummaryFixture, status: "running" } },
       { body: { ...auditStatusFixture, status: "running" } },
       { body: { ...auditSummaryV2Fixture, status: "running" } },
+      { body: auditAnswerMatrixFixture },
       { body: { ...auditStatusFixture, status: terminalStatus, completion_ratio: 1 } },
       { body: { ...auditDetailFixture, status: terminalStatus } },
       { body: { ...auditSummaryFixture, status: terminalStatus, completion_ratio: 1 } },
       { body: { ...auditSummaryV2Fixture, status: terminalStatus } },
+      { body: auditAnswerMatrixFixture },
     ]);
 
     renderRoute("/audits/42");
