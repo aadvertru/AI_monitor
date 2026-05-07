@@ -13,7 +13,13 @@ import { AnswerMatrixShell } from "./AnswerMatrixShell";
 
 function renderMatrix(
   matrix: AnswerMatrixResponse = auditAnswerMatrixFixture,
-  auditStatus: "created" | "running" | "partial" | "completed" | "failed" = "partial",
+  auditStatus:
+    | "created"
+    | "running"
+    | "partial"
+    | "completed"
+    | "failed"
+    | "cancelled" = "partial",
 ) {
   const fetchMock = mockFetchSequence([{ body: matrix }]);
   renderWithClient(<AnswerMatrixShell auditId={42} auditStatus={auditStatus} />);
@@ -306,7 +312,7 @@ describe("AnswerMatrixShell", () => {
     expect(screen.queryByText(/raw_prompt|raw_response|sk-hidden/i)).not.toBeInTheDocument();
   });
 
-  it("renders partial and failed audit warnings", async () => {
+  it("renders partial, failed, and cancelled audit warnings", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -322,9 +328,35 @@ describe("AnswerMatrixShell", () => {
     ).toBeInTheDocument();
     unmount();
 
-    renderMatrix(matrixWithStates, "failed");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        json: async () => matrixWithStates,
+        ok: true,
+        status: 200,
+        statusText: "OK",
+      } satisfies Partial<Response>),
+    );
+    const failedRender = renderWithClient(<AnswerMatrixShell auditId={42} auditStatus="failed" />);
     expect(
       await screen.findByText("This audit failed. Diagnostics are shown where backend data is available."),
+    ).toBeInTheDocument();
+    failedRender.unmount();
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        json: async () => matrixWithStates,
+        ok: true,
+        status: 200,
+        statusText: "OK",
+      } satisfies Partial<Response>),
+    );
+    renderWithClient(<AnswerMatrixShell auditId={42} auditStatus="cancelled" />);
+    expect(
+      await screen.findByText(
+        "This audit was cancelled. Completed cells are preserved where backend data is available.",
+      ),
     ).toBeInTheDocument();
   });
 });

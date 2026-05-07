@@ -6,10 +6,13 @@ import type {
   AuditActionResponse,
   AuditDetail,
   AuditListItem,
-  AuditPipelineRunResponse,
+  AuditCancelResponse,
+  AuditPipelineEnqueueResponse,
+  AuditProgressResponse,
   AnswerMatrixResponse,
   AuditResultsResponse,
   AuditRunTriggerResponse,
+  AuditRetryFailedResponse,
   AuditStatusResponse,
   AuditSummaryResponse,
   AuditSummaryV2Response,
@@ -488,7 +491,23 @@ export function runAudit(auditId: number) {
 }
 
 export function runAuditPipeline(auditId: number) {
-  return apiFetch<AuditPipelineRunResponse>(`/audits/${auditId}/run-pipeline`, {
+  return apiFetch<AuditPipelineEnqueueResponse>(`/audits/${auditId}/run-pipeline`, {
+    method: "POST",
+  });
+}
+
+export function getAuditProgress(auditId: number) {
+  return apiFetch<AuditProgressResponse>(`/audits/${auditId}/progress`);
+}
+
+export function cancelAuditRun(auditId: number) {
+  return apiFetch<AuditCancelResponse>(`/audits/${auditId}/cancel`, {
+    method: "POST",
+  });
+}
+
+export function retryFailedAuditRuns(auditId: number) {
+  return apiFetch<AuditRetryFailedResponse>(`/audits/${auditId}/retry-failed`, {
     method: "POST",
   });
 }

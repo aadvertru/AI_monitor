@@ -35,6 +35,7 @@ def test_alembic_upgrade_head_creates_current_schema() -> None:
         "answer_evaluations",
         "concepts",
         "competitor_candidates",
+        "background_jobs",
         "audits",
         "queries",
         "jobs",
@@ -156,6 +157,24 @@ def test_alembic_upgrade_head_creates_current_schema() -> None:
     )
     assert "confidence" in candidate_checks
     assert "evidence_count" in candidate_checks
+    assert {
+        "job_type",
+        "audit_id",
+        "user_id",
+        "status",
+        "created_at",
+        "started_at",
+        "finished_at",
+        "error_code",
+        "error_message_safe",
+        "progress_metadata",
+        "cancel_requested_at",
+    }.issubset(_column_names(inspector, "background_jobs"))
+    background_job_checks = " ".join(
+        check["sqltext"] for check in inspector.get_check_constraints("background_jobs")
+    )
+    assert "cancel_requested" in background_job_checks
+    assert "cancelled" in background_job_checks
     preference_checks = " ".join(
         check["sqltext"]
         for check in inspector.get_check_constraints("user_preferences")
@@ -170,7 +189,7 @@ def test_alembic_upgrade_head_creates_current_schema() -> None:
     with sqlite3.connect(db_path) as connection:
         version = connection.execute("SELECT version_num FROM alembic_version").fetchone()
 
-    assert version == ("f9a0b1c2d3e4",)
+    assert version == ("1a2b3c4d5e6f",)
 
 
 def _column_names(inspector, table_name: str) -> set[str]:

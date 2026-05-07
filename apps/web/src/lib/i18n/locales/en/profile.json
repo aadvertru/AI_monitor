@@ -35,11 +35,17 @@
   "subtitle": "Account details, demo plan, usage, and notification preferences.",
   "title": "Profile",
   "usage": {
+    "actualAudits": "Audits with usage",
+    "actualDescription": "Actual provider usage is tracked separately from the demo quota.",
+    "actualRuns": "Runs with usage",
+    "actualTitle": "Actual provider usage",
+    "actualTokens": "Tokens used",
     "demo": "Token usage is demo data until real accounting is implemented.",
     "noReset": "No reset scheduled",
     "remaining": "Tokens remaining",
     "resetAt": "Reset date",
     "title": "Usage",
-    "total": "Token quota"
+    "total": "Token quota",
+    "webSearchRequests": "Web search requests"
   }
 }

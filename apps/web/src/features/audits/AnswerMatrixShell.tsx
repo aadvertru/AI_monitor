@@ -657,6 +657,7 @@ export function AnswerMatrixShell({
   const hasData = matrixHasData(data);
   const showPartialWarning = auditStatus === "partial";
   const showFailedWarning = auditStatus === "failed";
+  const showCancelledWarning = auditStatus === "cancelled";
   const showRunningState = auditStatus === "running";
   const showExperimentalNotice = hasOpenRouterExperimentalL2(data.columns);
 
@@ -694,6 +695,11 @@ export function AnswerMatrixShell({
       {showFailedWarning ? (
         <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
           {t("matrix.states.failed")}
+        </div>
+      ) : null}
+      {showCancelledWarning ? (
+        <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900">
+          {t("matrix.states.cancelled")}
         </div>
       ) : null}
       {showExperimentalNotice ? (

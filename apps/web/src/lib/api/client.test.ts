@@ -9,6 +9,7 @@ import {
   generateSeedQuerySuggestions,
   getAuditAnswerMatrix,
   getAuditDetail,
+  getAuditProgress,
   getAuditResults,
   getAuditSourceDomains,
   getAuditSummary,
@@ -19,8 +20,10 @@ import {
   listAudits,
   resolveApiBaseUrl,
   restoreAudit,
+  cancelAuditRun,
   rerunAuditEvaluation,
   runAuditPipeline,
+  retryFailedAuditRuns,
   updateAudit,
 } from "./client";
 import {
@@ -29,7 +32,9 @@ import {
   auditEstimateFixture,
   auditAnswerMatrixFixture,
   auditListFixture,
+  auditPipelineEnqueueFixture,
   auditPipelineRunFixture,
+  auditProgressFixture,
   auditResultsFixture,
   auditSummaryV2Fixture,
   auditSummaryFixture,
@@ -529,9 +534,9 @@ describe("api client", () => {
   });
 
   it("starts the owner audit pipeline with a credentialed request", async () => {
-    const fetchMock = mockFetchSequence([{ body: auditPipelineRunFixture }]);
+    const fetchMock = mockFetchSequence([{ body: auditPipelineEnqueueFixture }]);
 
-    await expect(runAuditPipeline(42)).resolves.toEqual(auditPipelineRunFixture);
+    await expect(runAuditPipeline(42)).resolves.toEqual(auditPipelineEnqueueFixture);
     expect(fetchMock).toHaveBeenCalledWith(
       "http://localhost:8000/audits/42/run-pipeline",
       expect.objectContaining({
@@ -542,6 +547,46 @@ describe("api client", () => {
     expect(fetchMock).not.toHaveBeenCalledWith(
       expect.stringContaining("/dev/"),
       expect.anything(),
+    );
+  });
+
+  it("loads audit progress with a credentialed request", async () => {
+    const fetchMock = mockFetchSequence([{ body: auditProgressFixture }]);
+
+    await expect(getAuditProgress(42)).resolves.toEqual(auditProgressFixture);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/audits/42/progress",
+      expect.objectContaining({ credentials: "include" }),
+    );
+  });
+
+  it("cancels and retries audit runs with credentialed requests", async () => {
+    const cancelResponse = {
+      audit_id: 42,
+      status: "cancel_requested",
+      audit_status: "partial",
+      cancelled_jobs: 2,
+      completed_runs_preserved: 1,
+      background_job_id: 1001,
+    };
+    const retryResponse = {
+      audit_id: 42,
+      retry_run_count: 2,
+      job_id: 1002,
+      status: "running",
+      background_job_status: "queued",
+    };
+    const fetchMock = mockFetchSequence([{ body: cancelResponse }, { body: retryResponse }]);
+
+    await expect(cancelAuditRun(42)).resolves.toEqual(cancelResponse);
+    await expect(retryFailedAuditRuns(42)).resolves.toEqual(retryResponse);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/audits/42/cancel",
+      expect.objectContaining({ credentials: "include", method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/audits/42/retry-failed",
+      expect.objectContaining({ credentials: "include", method: "POST" }),
     );
   });
 
@@ -631,10 +676,10 @@ describe("api client", () => {
 
   it("does not use browser token storage during credentialed API calls", async () => {
     const storageSpy = vi.spyOn(Storage.prototype, "setItem");
-    mockFetchSequence([{ body: currentUserFixture }, { body: auditPipelineRunFixture }]);
+    mockFetchSequence([{ body: currentUserFixture }, { body: auditPipelineEnqueueFixture }]);
 
     await expect(getCurrentUser()).resolves.toEqual(currentUserFixture);
-    await expect(runAuditPipeline(42)).resolves.toEqual(auditPipelineRunFixture);
+    await expect(runAuditPipeline(42)).resolves.toEqual(auditPipelineEnqueueFixture);
 
     expect(storageSpy).not.toHaveBeenCalled();
 

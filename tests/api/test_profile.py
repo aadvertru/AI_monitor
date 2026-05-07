@@ -14,7 +14,19 @@ from apps.api.main import (
     update_profile_preferences,
 )
 from apps.api.security import create_access_token, load_auth_config
-from libs.storage.models import Base, User, UserPreference, UserRole
+from libs.storage.models import (
+    Audit,
+    AuditStatus,
+    Base,
+    Brand,
+    Query,
+    RawResponse,
+    Run,
+    RunStatus,
+    User,
+    UserPreference,
+    UserRole,
+)
 
 AUTH_ENV = {"JWT_SECRET": "test-secret-value"}
 
@@ -83,6 +95,8 @@ class ProfileAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.usage.tokens_remaining, 10000)
         self.assertEqual(response.usage.tokens_total, 10000)
         self.assertTrue(response.usage.is_demo)
+        self.assertEqual(response.usage.actual_usage.total_tokens_used, 0)
+        self.assertEqual(response.usage.actual_usage.audit_count, 0)
         self.assertEqual(response.preferences.locale, "en")
         self.assertTrue(response.preferences.email_notifications)
         self.assertTrue(response.preferences.audit_completed_notifications)
@@ -100,6 +114,77 @@ class ProfileAPITests(unittest.IsolatedAsyncioTestCase):
             "openrouter_api_key",
         ):
             self.assertNotIn(unsafe_key, serialized_keys)
+
+    async def test_get_profile_includes_safe_actual_usage_without_changing_demo_tokens(
+        self,
+    ) -> None:
+        user = await self._create_user("owner@example.com")
+        async with self.session_factory() as session:
+            db_user = await session.get(User, user.id)
+            assert db_user is not None
+            brand = Brand(name="Acme", domain="acme.example")
+            audit = Audit(
+                brand=brand,
+                user=db_user,
+                providers=["openrouter"],
+                runs_per_query=1,
+                status=AuditStatus.COMPLETED,
+            )
+            query = Query(audit=audit, text="best acme tools")
+            session.add_all([brand, audit, query])
+            await session.flush()
+            run = Run(
+                audit_id=audit.id,
+                query_id=query.id,
+                provider="openrouter",
+                run_number=1,
+                status=RunStatus.SUCCESS,
+            )
+            session.add(run)
+            await session.flush()
+            session.add(
+                RawResponse(
+                    run_id=run.id,
+                    request_snapshot={"raw_prompt": "must not leak"},
+                    raw_answer="raw answer must not leak",
+                    citations=[],
+                    provider_metadata={
+                        "usage": {
+                            "input_tokens": 7,
+                            "output_tokens": 11,
+                            "total_tokens": 18,
+                            "web_search_requests": 2,
+                        },
+                        "headers": {"authorization": "Bearer sk-hidden"},
+                    },
+                    provider_status=RunStatus.SUCCESS.value,
+                    response_time=0.25,
+                    error_object={"api_key": "sk-hidden"},
+                )
+            )
+            await session.commit()
+
+        async with self.session_factory() as session:
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                response = await get_profile(
+                    request=self._authenticated_request(user),
+                    session=session,
+                )
+
+        self.assertEqual(response.usage.tokens_remaining, 10000)
+        self.assertEqual(response.usage.tokens_total, 10000)
+        self.assertTrue(response.usage.is_demo)
+        self.assertEqual(response.usage.actual_usage.total_tokens_used, 18)
+        self.assertEqual(response.usage.actual_usage.input_tokens, 7)
+        self.assertEqual(response.usage.actual_usage.output_tokens, 11)
+        self.assertEqual(response.usage.actual_usage.web_search_requests, 2)
+        self.assertEqual(response.usage.actual_usage.run_count, 1)
+        self.assertEqual(response.usage.actual_usage.audit_count, 1)
+        serialized = str(response.model_dump(mode="json")).lower()
+        self.assertNotIn("raw answer", serialized)
+        self.assertNotIn("raw_prompt", serialized)
+        self.assertNotIn("authorization", serialized)
+        self.assertNotIn("sk-hidden", serialized)
 
     async def test_put_profile_preferences_requires_authentication(self) -> None:
         payload = ProfilePreferencesUpdateRequest.model_validate(

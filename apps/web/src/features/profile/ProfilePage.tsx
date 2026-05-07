@@ -95,6 +95,7 @@ export function ProfilePage() {
   const preferences = draftPreferences ?? data.preferences;
   const displayName = data.user.display_name || t("account.noDisplayName");
   const resetDate = data.usage.reset_at ? formatters.dateTime(data.usage.reset_at) : t("usage.noReset");
+  const actualUsage = data.usage.actual_usage;
 
   return (
     <section className="space-y-4">
@@ -166,6 +167,36 @@ export function ProfilePage() {
               {t("usage.demo")}
             </p>
           ) : null}
+          <div className="mt-4 border-t border-border pt-4">
+            <h3 className="text-sm font-semibold text-ink">{t("usage.actualTitle")}</h3>
+            <p className="mt-1 text-xs text-subtle">{t("usage.actualDescription")}</p>
+            <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
+              <div>
+                <dt className="text-subtle">{t("usage.actualTokens")}</dt>
+                <dd className="font-medium text-ink">
+                  {formatters.number(actualUsage.total_tokens_used)}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-subtle">{t("usage.actualAudits")}</dt>
+                <dd className="font-medium text-ink">
+                  {formatters.number(actualUsage.audit_count)}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-subtle">{t("usage.actualRuns")}</dt>
+                <dd className="font-medium text-ink">
+                  {formatters.number(actualUsage.run_count)}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-subtle">{t("usage.webSearchRequests")}</dt>
+                <dd className="font-medium text-ink">
+                  {formatters.number(actualUsage.web_search_requests)}
+                </dd>
+              </div>
+            </dl>
+          </div>
         </section>
 
         <section className="rounded-md border border-border bg-surface p-5 shadow-panel">

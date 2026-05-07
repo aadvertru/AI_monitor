@@ -17,17 +17,19 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { Button } from "../../components/ui/Button";
 import {
   getAuditDetail,
+  getAuditProgress,
   getAuditStatus,
   getAuditSummary,
   archiveAudit,
+  cancelAuditRun,
   deleteArchivedAudit,
+  retryFailedAuditRuns,
   restoreAudit,
   runAuditPipeline,
 } from "../../lib/api/client";
 import type {
   AuditDetail,
   AuditStatus,
-  AuditPipelineRunResponse,
   AuditSummaryResponse,
 } from "../../lib/api/types";
 import { AuditArchiveBadge } from "./AuditArchiveBadge";
@@ -57,12 +59,13 @@ function statusQueryKey(auditId: number) {
   return ["audit", auditId, "status"] as const;
 }
 
-const auditTerminalStatuses = new Set<AuditStatus>(["completed", "partial", "failed"]);
+const auditTerminalStatuses = new Set<AuditStatus>([
+  "completed",
+  "partial",
+  "failed",
+  "cancelled",
+]);
 const auditStatusPollingIntervalMs = 2000;
-
-function pipelineStatus(response: AuditPipelineRunResponse) {
-  return response.final_audit_status ?? response.post_processing?.audit_status ?? null;
-}
 
 export function AuditDetailPage() {
   const { t } = useTranslation("audits");
@@ -86,6 +89,19 @@ export function AuditDetailPage() {
   });
   const baseStatus = summary.data?.status ?? detail.data?.status;
   const shouldPollStatus = isValidAuditId && baseStatus === "running";
+  const progress = useQuery({
+    queryKey: ["audit", auditId, "progress"],
+    queryFn: () => getAuditProgress(auditId),
+    enabled:
+      isValidAuditId &&
+      (baseStatus === "running" ||
+        baseStatus === "partial" ||
+        baseStatus === "failed" ||
+        baseStatus === "cancelled"),
+    retry: false,
+    refetchInterval: (query) =>
+      query.state.data?.status === "running" ? auditStatusPollingIntervalMs : false,
+  });
   const status = useQuery({
     queryKey: statusQueryKey(auditId),
     queryFn: () => getAuditStatus(auditId),
@@ -97,7 +113,7 @@ export function AuditDetailPage() {
   const runAuditMutation = useMutation({
     mutationFn: () => runAuditPipeline(auditId),
     onSuccess: (response) => {
-      const status = pipelineStatus(response);
+      const status = response.status;
       if (status) {
         queryClient.setQueryData<AuditDetail | undefined>(detailQueryKey(auditId), (current) =>
           current ? { ...current, status } : current,
@@ -110,11 +126,36 @@ export function AuditDetailPage() {
             ? {
                 ...current,
                 status: status ?? current.status,
-                total_runs: Math.max(current.total_runs, response.scheduling.total_jobs),
-                provider_diagnostics:
-                  response.provider_diagnostics ?? current.provider_diagnostics,
               }
             : current,
+      );
+      void queryClient.invalidateQueries({ queryKey: ["audit", auditId] });
+      void queryClient.invalidateQueries({ queryKey: ["audits"] });
+    },
+  });
+  const cancelAuditMutation = useMutation({
+    mutationFn: () => cancelAuditRun(auditId),
+    onSuccess: (response) => {
+      queryClient.setQueryData<AuditDetail | undefined>(detailQueryKey(auditId), (current) =>
+        current ? { ...current, status: response.audit_status } : current,
+      );
+      queryClient.setQueryData<AuditSummaryResponse | undefined>(
+        summaryQueryKey(auditId),
+        (current) => (current ? { ...current, status: response.audit_status } : current),
+      );
+      void queryClient.invalidateQueries({ queryKey: ["audit", auditId] });
+      void queryClient.invalidateQueries({ queryKey: ["audits"] });
+    },
+  });
+  const retryFailedMutation = useMutation({
+    mutationFn: () => retryFailedAuditRuns(auditId),
+    onSuccess: (response) => {
+      queryClient.setQueryData<AuditDetail | undefined>(detailQueryKey(auditId), (current) =>
+        current ? { ...current, status: response.status } : current,
+      );
+      queryClient.setQueryData<AuditSummaryResponse | undefined>(
+        summaryQueryKey(auditId),
+        (current) => (current ? { ...current, status: response.status } : current),
       );
       void queryClient.invalidateQueries({ queryKey: ["audit", auditId] });
       void queryClient.invalidateQueries({ queryKey: ["audits"] });
@@ -162,12 +203,13 @@ export function AuditDetailPage() {
   const hasError = detail.isError || summary.isError || !isValidAuditId;
   const currentStatus = status.data?.status ?? baseStatus;
   const isRunning = currentStatus === "running";
+  const progressData = progress.data;
+  const hasFailedRuns = Boolean(progressData && (progressData.failed_runs > 0 || progressData.skipped_runs > 0));
   const canEdit = currentStatus === "created";
   const isArchived = Boolean(detail.data?.archived_at);
   const statusDiagnostics = status.data?.provider_diagnostics ?? [];
-  const pipelineDiagnostics = runAuditMutation.data?.provider_diagnostics ?? [];
-  const hasActionDiagnostics =
-    statusDiagnostics.length > 0 || pipelineDiagnostics.length > 0;
+  const progressDiagnostics = progress.data?.provider_diagnostics ?? [];
+  const hasActionDiagnostics = statusDiagnostics.length > 0 || progressDiagnostics.length > 0;
 
   const refresh = () => {
     void detail.refetch();
@@ -290,6 +332,33 @@ export function AuditDetailPage() {
                 ? t("running")
                 : t("startAudit")}
           </Button>
+          {isRunning ? (
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={cancelAuditMutation.isPending}
+              onClick={() => {
+                if (window.confirm(t("progress.cancelConfirm"))) {
+                  cancelAuditMutation.mutate();
+                }
+              }}
+            >
+              {cancelAuditMutation.isPending ? t("progress.cancelling") : t("progress.cancel")}
+            </Button>
+          ) : null}
+          {(currentStatus === "partial" ||
+            currentStatus === "failed" ||
+            currentStatus === "cancelled") &&
+          hasFailedRuns ? (
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={retryFailedMutation.isPending}
+              onClick={() => retryFailedMutation.mutate()}
+            >
+              {retryFailedMutation.isPending ? t("progress.retrying") : t("progress.retryFailed")}
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -300,9 +369,48 @@ export function AuditDetailPage() {
           {errorMessage(runAuditMutation.error)}
         </p>
       ) : null}
+      {cancelAuditMutation.error || retryFailedMutation.error ? (
+        <p className="border-b border-border px-5 py-3 text-sm text-red-700">
+          {errorMessage(cancelAuditMutation.error ?? retryFailedMutation.error)}
+        </p>
+      ) : null}
+      {progressData ? (
+        <div className="border-b border-border px-5 py-4">
+          <div className="grid gap-3 text-sm sm:grid-cols-3 lg:grid-cols-6">
+            <div>
+              <p className="text-xs font-semibold uppercase text-subtle">{t("progress.total")}</p>
+              <p className="text-lg font-semibold text-ink">{progressData.total_runs}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase text-subtle">{t("progress.completed")}</p>
+              <p className="text-lg font-semibold text-ink">{progressData.completed_runs}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase text-subtle">{t("progress.failed")}</p>
+              <p className="text-lg font-semibold text-ink">{progressData.failed_runs}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase text-subtle">{t("progress.queued")}</p>
+              <p className="text-lg font-semibold text-ink">{progressData.queued_runs}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase text-subtle">{t("progress.running")}</p>
+              <p className="text-lg font-semibold text-ink">{progressData.running_runs}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase text-subtle">{t("progress.percent")}</p>
+              <p className="text-lg font-semibold text-ink">{progressData.percent_complete}%</p>
+            </div>
+          </div>
+        </div>
+      ) : progress.isError ? (
+        <p className="border-b border-border px-5 py-3 text-sm text-red-700">
+          {t("progress.error")}
+        </p>
+      ) : null}
       {hasActionDiagnostics ? (
         <div className="space-y-3 border-b border-border px-5 py-3">
-          <ProviderDiagnostics diagnostics={pipelineDiagnostics} compact />
+          <ProviderDiagnostics diagnostics={progressDiagnostics} compact />
       <ProviderDiagnostics diagnostics={statusDiagnostics} compact />
         </div>
       ) : null}

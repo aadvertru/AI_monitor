@@ -35,11 +35,17 @@
   "subtitle": "Данные аккаунта, демо-план, использование и настройки уведомлений.",
   "title": "Профиль",
   "usage": {
+    "actualAudits": "Audits with usage",
+    "actualDescription": "Actual provider usage is tracked separately from the demo quota.",
+    "actualRuns": "Runs with usage",
+    "actualTitle": "Actual provider usage",
+    "actualTokens": "Tokens used",
     "demo": "Использование токенов является демо-данными до внедрения реального учета.",
     "noReset": "Сброс не запланирован",
     "remaining": "Осталось токенов",
     "resetAt": "Дата сброса",
     "title": "Использование",
-    "total": "Лимит токенов"
+    "total": "Лимит токенов",
+    "webSearchRequests": "Web search requests"
   }
 }

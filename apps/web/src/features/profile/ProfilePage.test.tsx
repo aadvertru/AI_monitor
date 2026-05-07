@@ -31,6 +31,10 @@ describe("ProfilePage", () => {
     expect(screen.getByText("Demo usage data")).toBeInTheDocument();
     expect(screen.getByText("7,500")).toBeInTheDocument();
     expect(screen.getByText("10,000")).toBeInTheDocument();
+    expect(screen.getByText("Actual provider usage")).toBeInTheDocument();
+    expect(screen.getByText("1,234")).toBeInTheDocument();
+    expect(screen.getByText("Audits with usage")).toBeInTheDocument();
+    expect(screen.getByText("Runs with usage")).toBeInTheDocument();
     expect(screen.getByText("Email notifications")).toBeInTheDocument();
     expect(screen.getByText("Audit completed notifications")).toBeInTheDocument();
     expect(screen.getByText("Provider error notifications")).toBeInTheDocument();
@@ -96,6 +100,15 @@ describe("ProfilePage", () => {
           api_key: "unsafe-key",
           OPENAI_API_KEY: "unsafe-openai-key",
           OPENROUTER_API_KEY: "unsafe-openrouter-key",
+          usage: {
+            ...profileFixture.usage,
+            actual_usage: {
+              ...profileFixture.usage.actual_usage,
+              raw_prompt: "unsafe-prompt",
+              authorization: "unsafe-auth",
+              api_key: "unsafe-api-key",
+            },
+          },
         },
       },
     ]);
@@ -111,6 +124,9 @@ describe("ProfilePage", () => {
       "unsafe-key",
       "unsafe-openai-key",
       "unsafe-openrouter-key",
+      "unsafe-prompt",
+      "unsafe-auth",
+      "unsafe-api-key",
     ]) {
       expect(screen.queryByText(unsafeValue)).not.toBeInTheDocument();
     }

@@ -11,7 +11,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -31,11 +31,15 @@ from apps.api.audit_schemas import (
     AnswerMatrixColumnResponse,
     AnswerMatrixResponse,
     AnswerMatrixRowResponse,
+    AuditCancelResponse,
     AuditDetailResponse,
     AuditListItemResponse,
+    AuditPipelineEnqueueResponse,
     AuditPipelineRunResponse,
+    AuditProgressResponse,
     AuditResultRowResponse,
     AuditResultsResponse,
+    AuditRetryFailedResponse,
     AuditRunTriggerResponse,
     AuditStatusResponse,
     AuditSummaryResponse,
@@ -62,7 +66,12 @@ from apps.api.audit_schemas import (
     SourceSummaryItemResponse,
     ToneBreakdownResponse,
 )
-from apps.api.database import get_db_session, init_models, should_auto_create_schema
+from apps.api.database import (
+    get_db_session,
+    get_session_factory,
+    init_models,
+    should_auto_create_schema,
+)
 from apps.api.export_data import build_export_report_data
 from apps.api.export_docx import generate_docx_export
 from apps.api.export_excel import generate_excel_export
@@ -96,6 +105,14 @@ from libs.analysis.source_intelligence import (
     SourceEvidence,
     aggregate_source_domains,
 )
+from libs.control.audit_pipeline_background import (
+    AUDIT_PIPELINE_JOB_TYPE,
+    execute_audit_pipeline_background_job,
+)
+from libs.control.background_jobs import (
+    enqueue_background_job,
+    find_active_background_job,
+)
 from libs.control.job_scheduler import schedule_jobs_for_audit
 from libs.control.query_deduplication import deduplicate_queries
 from libs.evaluation.brand_facts import replace_brand_facts_for_audit
@@ -123,15 +140,19 @@ from libs.execution.provider_errors import (
     unknown_provider_error,
     unsupported_l2_error,
 )
+from libs.execution.usage_aggregation import aggregate_user_usage
 from libs.storage.models import (
     AnswerEvaluation,
     Audit,
     AuditStatus,
     AuditTarget,
+    BackgroundJob,
+    BackgroundJobStatus,
     Brand,
     CompetitorCandidate,
     Concept,
     Job,
+    JobStatus,
     ParsedResult,
     Query,
     RawResponse,
@@ -144,6 +165,7 @@ from libs.storage.models import (
     User,
     UserPreference,
     UserRole,
+    build_job_idempotency_key,
 )
 
 SUPPORTED_PROVIDERS = frozenset({"mock", "openai", "anthropic", "gemini"})
@@ -172,6 +194,7 @@ AUDIT_NOT_TRIGGERABLE_DETAIL = "Audit can only be triggered from the created sta
 AUDIT_NOT_EDITABLE_DETAIL = "Audit can only be edited before it starts running."
 AUDIT_DELETE_ACTIVE_DETAIL = "Only archived audits can be deleted permanently."
 AUDIT_NOT_RUNNABLE_DETAIL = "Audit has no runnable query/provider combinations."
+AUDIT_PIPELINE_ACTIVE_JOB_DETAIL = "Audit pipeline job is already queued or running."
 RAW_RESPONSE_NOT_FOUND_DETAIL = "Raw response was not found."
 RAW_RESPONSE_FORBIDDEN_DETAIL = "Raw response inspection requires admin access."
 DEV_PIPELINE_FORBIDDEN_DETAIL = "Pipeline execution requires admin access."
@@ -520,10 +543,6 @@ class AuditEstimateRequest(BaseModel):
     def validate_estimate_fields(self) -> AuditEstimateRequest:
         if "seed_queries" in self.model_fields_set and "seed_query_items" in self.model_fields_set:
             raise ValueError("Provide either seed_queries or seed_query_items, not both.")
-        has_queries = bool(self.seed_queries) or bool(self.seed_query_items)
-        if not has_queries:
-            raise ValueError("At least one seed query is required.")
-
         has_targets = self.model_targets is not None
         has_legacy_providers = "providers" in self.model_fields_set
         has_legacy_level = "scdl_level" in self.model_fields_set
@@ -531,8 +550,6 @@ class AuditEstimateRequest(BaseModel):
             raise ValueError(
                 "Provide either model_targets or legacy providers/scdl_level, not both."
             )
-        if not has_targets and not self.providers:
-            raise ValueError("providers must contain at least one supported provider.")
         return self
 
 
@@ -623,6 +640,20 @@ class ProfilePlanResponse(BaseModel):
     is_demo: bool = True
 
 
+class ProfileActualUsageResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    total_tokens_used: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cached_tokens: int = 0
+    reasoning_tokens: int = 0
+    web_search_requests: int = 0
+    duration_ms: int = 0
+    run_count: int = 0
+    audit_count: int = 0
+
+
 class ProfileUsageResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -630,6 +661,7 @@ class ProfileUsageResponse(BaseModel):
     tokens_total: int
     reset_at: datetime | None = None
     is_demo: bool = True
+    actual_usage: ProfileActualUsageResponse
 
 
 class ProfilePreferencesResponse(BaseModel):
@@ -762,6 +794,18 @@ async def build_profile_response(
         raise HTTPException(status_code=401, detail=UNAUTHORIZED_DETAIL)
 
     preferences = await get_or_create_user_preferences(session, user.id)
+    usage_summary = await aggregate_user_usage(session, user.id)
+    actual_usage = ProfileActualUsageResponse(
+        total_tokens_used=usage_summary.totals.total_tokens,
+        input_tokens=usage_summary.totals.input_tokens,
+        output_tokens=usage_summary.totals.output_tokens,
+        cached_tokens=usage_summary.totals.cached_tokens,
+        reasoning_tokens=usage_summary.totals.reasoning_tokens,
+        web_search_requests=usage_summary.totals.web_search_requests,
+        duration_ms=usage_summary.totals.duration_ms,
+        run_count=usage_summary.run_count,
+        audit_count=len({run.audit_id for run in usage_summary.runs}),
+    )
     await session.commit()
     await session.refresh(preferences)
     return ProfileResponse(
@@ -780,6 +824,7 @@ async def build_profile_response(
             tokens_total=DEMO_PROFILE_TOKEN_TOTAL,
             reset_at=None,
             is_demo=True,
+            actual_usage=actual_usage,
         ),
         preferences=build_profile_preferences_response(preferences),
     )
@@ -1706,6 +1751,318 @@ def build_pipeline_run_response(
     safe_summary = _redact_pipeline_summary_value(summary.safe_log_dict())
     safe_summary["provider_diagnostics"] = provider_diagnostics or []
     return AuditPipelineRunResponse.model_validate(safe_summary)
+
+
+async def enqueue_audit_pipeline_run(
+    session: AsyncSession,
+    audit: Audit,
+) -> AuditPipelineEnqueueResponse:
+    audit_number = await get_relative_audit_number(session, audit)
+    await validate_audit_pipeline_triggerable(session, audit)
+    active_job = await find_active_background_job(
+        session,
+        audit_id=audit.id,
+        job_type=AUDIT_PIPELINE_JOB_TYPE,
+    )
+    if active_job is not None:
+        raise HTTPException(status_code=409, detail=AUDIT_PIPELINE_ACTIVE_JOB_DETAIL)
+
+    audit.status = AuditStatus.RUNNING
+    job = await enqueue_background_job(
+        session,
+        job_type=AUDIT_PIPELINE_JOB_TYPE,
+        audit_id=audit.id,
+        user_id=audit.user_id,
+        progress_metadata={"stage": "queued"},
+    )
+    await session.refresh(audit)
+    return AuditPipelineEnqueueResponse(
+        audit_id=audit.id,
+        audit_number=audit_number,
+        job_id=job.id,
+        status=audit.status.value,
+        background_job_status=job.status.value,
+    )
+
+
+async def run_enqueued_audit_pipeline_job(background_job_id: int) -> None:
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        await execute_audit_pipeline_background_job(session, background_job_id)
+
+
+async def build_audit_progress_response(
+    session: AsyncSession,
+    audit: Audit,
+) -> AuditProgressResponse:
+    expected_runs = await estimate_expected_runs_for_audit(session, audit)
+    queued_runs = await _job_status_count(session, audit.id, JobStatus.PENDING)
+    running_runs = await _job_status_count(session, audit.id, JobStatus.RUNNING)
+    completed_runs = await _run_status_count(session, audit.id, {RunStatus.SUCCESS})
+    failed_runs = await _run_status_count(
+        session,
+        audit.id,
+        {RunStatus.ERROR, RunStatus.TIMEOUT, RunStatus.RATE_LIMITED},
+    )
+    skipped_runs = await _job_status_count(session, audit.id, JobStatus.CANCELLED)
+    total_runs = max(
+        expected_runs,
+        queued_runs + running_runs + completed_runs + failed_runs + skipped_runs,
+    )
+    terminal_runs = completed_runs + failed_runs + skipped_runs
+    percent_complete = (
+        round((terminal_runs / total_runs) * 100, 1) if total_runs > 0 else 0.0
+    )
+    active_job = await _active_audit_background_job(session, audit.id)
+    return AuditProgressResponse(
+        audit_id=audit.id,
+        status=audit.status.value,
+        total_runs=total_runs,
+        queued_runs=queued_runs,
+        running_runs=running_runs,
+        completed_runs=completed_runs,
+        failed_runs=failed_runs,
+        skipped_runs=skipped_runs,
+        percent_complete=percent_complete,
+        current_job_id=active_job.id if active_job is not None else None,
+        provider_diagnostics=await _provider_diagnostics_for_audit(session, audit),
+    )
+
+
+async def estimate_expected_runs_for_audit(session: AsyncSession, audit: Audit) -> int:
+    query_count = (
+        await session.execute(
+            select(func.count()).select_from(Query).where(Query.audit_id == audit.id)
+        )
+    ).scalar_one()
+    if audit.max_queries is not None:
+        query_count = min(query_count, audit.max_queries)
+    target_count = (
+        await session.execute(
+            select(func.count())
+            .select_from(AuditTarget)
+            .where(AuditTarget.audit_id == audit.id)
+        )
+    ).scalar_one()
+    if target_count == 0:
+        target_count = len(audit.providers or [])
+    return query_count * target_count * audit.runs_per_query
+
+
+async def _job_status_count(
+    session: AsyncSession,
+    audit_id: int,
+    status: JobStatus,
+) -> int:
+    return (
+        await session.execute(
+            select(func.count()).select_from(Job).where(
+                Job.audit_id == audit_id,
+                Job.status == status,
+            )
+        )
+    ).scalar_one()
+
+
+async def _run_status_count(
+    session: AsyncSession,
+    audit_id: int,
+    statuses: set[RunStatus],
+) -> int:
+    return (
+        await session.execute(
+            select(func.count()).select_from(Run).where(
+                Run.audit_id == audit_id,
+                Run.status.in_(statuses),
+            )
+        )
+    ).scalar_one()
+
+
+async def _active_audit_background_job(
+    session: AsyncSession,
+    audit_id: int,
+) -> BackgroundJob | None:
+    return (
+        await session.execute(
+            select(BackgroundJob)
+            .where(
+                BackgroundJob.audit_id == audit_id,
+                BackgroundJob.job_type == AUDIT_PIPELINE_JOB_TYPE,
+                BackgroundJob.status.in_(
+                    {
+                        BackgroundJobStatus.QUEUED,
+                        BackgroundJobStatus.RUNNING,
+                        BackgroundJobStatus.CANCEL_REQUESTED,
+                    }
+                ),
+            )
+            .order_by(BackgroundJob.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def cancel_audit_run_record(
+    session: AsyncSession,
+    audit: Audit,
+) -> AuditCancelResponse:
+    active_job = await _active_audit_background_job(session, audit.id)
+    if audit.status != AuditStatus.RUNNING and active_job is None:
+        raise HTTPException(status_code=409, detail="Only active audits can be cancelled.")
+
+    if active_job is not None:
+        active_job.status = BackgroundJobStatus.CANCEL_REQUESTED
+        active_job.cancel_requested_at = datetime.now(tz=timezone.utc)
+        active_job.progress_metadata = {
+            **(active_job.progress_metadata or {}),
+            "stage": "cancel_requested",
+        }
+
+    pending_jobs = (
+        await session.execute(
+            select(Job).where(
+                Job.audit_id == audit.id,
+                Job.status == JobStatus.PENDING,
+            )
+        )
+    ).scalars().all()
+    for job in pending_jobs:
+        job.status = JobStatus.CANCELLED
+
+    completed_runs = await _run_status_count(session, audit.id, {RunStatus.SUCCESS})
+    audit.status = AuditStatus.CANCELLED
+    await session.commit()
+    await session.refresh(audit)
+    if active_job is not None:
+        await session.refresh(active_job)
+
+    return AuditCancelResponse(
+        audit_id=audit.id,
+        status="cancel_requested",
+        audit_status=audit.status.value,
+        cancelled_jobs=len(pending_jobs),
+        completed_runs_preserved=completed_runs,
+        background_job_id=active_job.id if active_job is not None else None,
+    )
+
+
+async def retry_failed_audit_runs_record(
+    session: AsyncSession,
+    audit: Audit,
+) -> AuditRetryFailedResponse:
+    active_job = await _active_audit_background_job(session, audit.id)
+    if active_job is not None or audit.status == AuditStatus.RUNNING:
+        raise HTTPException(status_code=409, detail=AUDIT_PIPELINE_ACTIVE_JOB_DETAIL)
+
+    retry_sources = await _retry_source_identities(session, audit.id)
+    if not retry_sources:
+        raise HTTPException(status_code=409, detail="Audit has no failed runs to retry.")
+
+    created_jobs = 0
+    for query_id, target_id, provider in retry_sources:
+        run_number = await _next_retry_run_number(
+            session,
+            audit_id=audit.id,
+            query_id=query_id,
+            target_id=target_id,
+            provider=provider,
+        )
+        session.add(
+            Job(
+                audit_id=audit.id,
+                query_id=query_id,
+                audit_target_id=target_id,
+                provider=provider,
+                run_number=run_number,
+                status=JobStatus.PENDING,
+                idempotency_key=build_job_idempotency_key(
+                    audit.id,
+                    query_id,
+                    provider,
+                    run_number,
+                    target_id,
+                ),
+            )
+        )
+        created_jobs += 1
+
+    audit.status = AuditStatus.RUNNING
+    job = await enqueue_background_job(
+        session,
+        job_type=AUDIT_PIPELINE_JOB_TYPE,
+        audit_id=audit.id,
+        user_id=audit.user_id,
+        progress_metadata={"stage": "retry_queued", "retry_run_count": created_jobs},
+    )
+    await session.refresh(audit)
+    return AuditRetryFailedResponse(
+        audit_id=audit.id,
+        retry_run_count=created_jobs,
+        job_id=job.id,
+        status=audit.status.value,
+        background_job_status=job.status.value,
+    )
+
+
+async def _retry_source_identities(
+    session: AsyncSession,
+    audit_id: int,
+) -> list[tuple[int, int | None, str]]:
+    identities: dict[tuple[int, int | None, str], None] = {}
+    failed_runs = (
+        await session.execute(
+            select(Run).where(
+                Run.audit_id == audit_id,
+                Run.status.in_({RunStatus.ERROR, RunStatus.TIMEOUT, RunStatus.RATE_LIMITED}),
+            )
+        )
+    ).scalars().all()
+    for run in failed_runs:
+        identities[(run.query_id, run.audit_target_id, run.provider)] = None
+
+    cancelled_jobs = (
+        await session.execute(
+            select(Job).where(
+                Job.audit_id == audit_id,
+                Job.status == JobStatus.CANCELLED,
+            )
+        )
+    ).scalars().all()
+    for job in cancelled_jobs:
+        identities[(job.query_id, job.audit_target_id, job.provider)] = None
+
+    return list(identities.keys())
+
+
+async def _next_retry_run_number(
+    session: AsyncSession,
+    *,
+    audit_id: int,
+    query_id: int,
+    target_id: int | None,
+    provider: str,
+) -> int:
+    run_stmt = select(func.max(Run.run_number)).where(
+        Run.audit_id == audit_id,
+        Run.query_id == query_id,
+        Run.provider == provider,
+    )
+    job_stmt = select(func.max(Job.run_number)).where(
+        Job.audit_id == audit_id,
+        Job.query_id == query_id,
+        Job.provider == provider,
+    )
+    if target_id is None:
+        run_stmt = run_stmt.where(Run.audit_target_id.is_(None))
+        job_stmt = job_stmt.where(Job.audit_target_id.is_(None))
+    else:
+        run_stmt = run_stmt.where(Run.audit_target_id == target_id)
+        job_stmt = job_stmt.where(Job.audit_target_id == target_id)
+
+    max_run_number = (await session.execute(run_stmt)).scalar_one() or 0
+    max_job_number = (await session.execute(job_stmt)).scalar_one() or 0
+    return max(max_run_number, max_job_number) + 1
 
 
 def _source_item_from_value(
@@ -3413,6 +3770,59 @@ async def get_audit_status(
         raise HTTPException(status_code=500, detail="Failed to load audit status.") from exc
 
 
+@app.get("/audits/{audit_id}/progress", response_model=AuditProgressResponse)
+async def get_audit_progress(
+    audit_id: int,
+    request: Request,
+    session: AsyncSession = DB_SESSION_DEPENDENCY,
+) -> AuditProgressResponse:
+    try:
+        current_user = await get_authenticated_user_from_request(session, request)
+        audit, _brand = await load_accessible_audit(session, audit_id, current_user)
+        return await build_audit_progress_response(session, audit)
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=500, detail="Failed to load audit progress.") from exc
+
+
+@app.post("/audits/{audit_id}/cancel", response_model=AuditCancelResponse)
+async def cancel_audit_run(
+    audit_id: int,
+    request: Request,
+    session: AsyncSession = DB_SESSION_DEPENDENCY,
+) -> AuditCancelResponse:
+    try:
+        current_user = await get_authenticated_user_from_request(session, request)
+        audit, _brand = await load_accessible_audit(session, audit_id, current_user)
+        return await cancel_audit_run_record(session, audit)
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail="Failed to cancel audit run.") from exc
+
+
+@app.post("/audits/{audit_id}/retry-failed", response_model=AuditRetryFailedResponse)
+async def retry_failed_audit_runs(
+    audit_id: int,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    session: AsyncSession = DB_SESSION_DEPENDENCY,
+) -> AuditRetryFailedResponse:
+    try:
+        current_user = await get_authenticated_user_from_request(session, request)
+        audit, _brand = await load_accessible_audit(session, audit_id, current_user)
+        response = await retry_failed_audit_runs_record(session, audit)
+        background_tasks.add_task(run_enqueued_audit_pipeline_job, response.job_id)
+        return response
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail="Failed to retry failed runs.") from exc
+
+
 @app.post("/audits/{audit_id}/run", response_model=AuditRunTriggerResponse)
 async def run_audit(
     audit_id: int,
@@ -3457,25 +3867,19 @@ async def run_audit_pipeline_dev(
         raise HTTPException(status_code=500, detail="Failed to run audit pipeline.") from exc
 
 
-@app.post("/audits/{audit_id}/run-pipeline", response_model=AuditPipelineRunResponse)
+@app.post("/audits/{audit_id}/run-pipeline", response_model=AuditPipelineEnqueueResponse)
 async def run_audit_pipeline_owner(
     audit_id: int,
     request: Request,
+    background_tasks: BackgroundTasks,
     session: AsyncSession = DB_SESSION_DEPENDENCY,
-) -> AuditPipelineRunResponse:
+) -> AuditPipelineEnqueueResponse:
     try:
         current_user = await get_authenticated_user_from_request(session, request)
         audit, _brand = await load_accessible_audit(session, audit_id, current_user)
-        await validate_audit_pipeline_triggerable(session, audit)
-        summary = await run_audit_pipeline(session, audit.id)
-        return build_pipeline_run_response(
-            summary,
-            provider_diagnostics=await _pipeline_provider_diagnostics(
-                session,
-                audit,
-                summary,
-            ),
-        )
+        response = await enqueue_audit_pipeline_run(session, audit)
+        background_tasks.add_task(run_enqueued_audit_pipeline_job, response.job_id)
+        return response
     except HTTPException:
         raise
     except SQLAlchemyError as exc:

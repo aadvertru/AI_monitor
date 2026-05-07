@@ -104,6 +104,20 @@
     "runs": "{{count}} запусков",
     "inline": "Проблема провайдера: {{message}}"
   },
+  "progress": {
+    "total": "Всего запусков",
+    "completed": "Завершено",
+    "failed": "Ошибки",
+    "queued": "В очереди",
+    "running": "В работе",
+    "percent": "Готово",
+    "cancel": "Отменить запуск",
+    "cancelling": "Отмена...",
+    "cancelConfirm": "Отменить этот запуск аудита?",
+    "retryFailed": "Повторить ошибки",
+    "retrying": "Повтор...",
+    "error": "Не удалось загрузить прогресс аудита."
+  },
   "queryTypes": {
     "none": "Без типа",
     "brand_direct": "Прямой брендовый",
@@ -201,7 +215,8 @@
     "running": "Выполняется",
     "partial": "Частично",
     "completed": "Завершён",
-    "failed": "Ошибка"
+    "failed": "Ошибка",
+    "cancelled": "Отменён"
   },
   "runStatus": {
     "pending": "Ожидает",

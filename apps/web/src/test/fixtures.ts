@@ -2,7 +2,9 @@ import type {
   AuditCreateResponse,
   AuditDetail,
   AuditListItem,
+  AuditPipelineEnqueueResponse,
   AuditPipelineRunResponse,
+  AuditProgressResponse,
   AuditResultsResponse,
   AuditRunTriggerResponse,
   AuditSummaryResponse,
@@ -52,6 +54,17 @@ export const profileFixture: ProfileResponse = {
     tokens_total: 10000,
     reset_at: null,
     is_demo: true,
+    actual_usage: {
+      total_tokens_used: 1234,
+      input_tokens: 500,
+      output_tokens: 734,
+      cached_tokens: 100,
+      reasoning_tokens: 25,
+      web_search_requests: 2,
+      duration_ms: 1500,
+      run_count: 4,
+      audit_count: 2,
+    },
   },
   preferences: {
     locale: "en",
@@ -394,6 +407,28 @@ export const auditPipelineRunFixture: AuditPipelineRunResponse = {
   },
   final_audit_status: "completed",
   fatal_error: null,
+  provider_diagnostics: [],
+};
+
+export const auditPipelineEnqueueFixture: AuditPipelineEnqueueResponse = {
+  audit_id: 42,
+  audit_number: 1,
+  job_id: 1001,
+  status: "running",
+  background_job_status: "queued",
+};
+
+export const auditProgressFixture: AuditProgressResponse = {
+  audit_id: 42,
+  status: "running",
+  total_runs: 4,
+  queued_runs: 1,
+  running_runs: 1,
+  completed_runs: 2,
+  failed_runs: 0,
+  skipped_runs: 0,
+  percent_complete: 50,
+  current_job_id: 1001,
   provider_diagnostics: [],
 };
 

@@ -50,6 +50,7 @@ class AuditStatus(str, Enum):
     PARTIAL = "partial"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class RunStatus(str, Enum):
@@ -65,6 +66,16 @@ class JobStatus(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class BackgroundJobStatus(str, Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCEL_REQUESTED = "cancel_requested"
+    CANCELLED = "cancelled"
 
 
 class UserRole(str, Enum):
@@ -417,6 +428,53 @@ class Job(Base):
     audit: Mapped[Audit] = relationship(back_populates="jobs")
     query: Mapped[Query] = relationship(back_populates="jobs")
     audit_target: Mapped[AuditTarget | None] = relationship()
+
+
+class BackgroundJob(Base):
+    __tablename__ = "background_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'running', 'completed', 'failed', "
+            "'cancel_requested', 'cancelled')",
+            name="ck_background_jobs_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    audit_id: Mapped[int | None] = mapped_column(
+        ForeignKey("audits.id", ondelete="CASCADE"), nullable=True
+    )
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=True
+    )
+    status: Mapped[BackgroundJobStatus] = mapped_column(
+        SQLEnum(
+            BackgroundJobStatus,
+            values_callable=lambda enum: [item.value for item in enum],
+            native_enum=False,
+        ),
+        nullable=False,
+        default=BackgroundJobStatus.QUEUED,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_message_safe: Mapped[str | None] = mapped_column(Text, nullable=True)
+    progress_metadata: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    audit: Mapped[Audit | None] = relationship()
+    user: Mapped[User | None] = relationship()
 
 
 class Run(Base):

@@ -177,7 +177,8 @@
     "states": {
       "running": "The audit is still running. Matrix cells may update as runs finish.",
       "partial": "This audit is partial. Completed cells are shown where backend data is available.",
-      "failed": "This audit failed. Diagnostics are shown where backend data is available."
+      "failed": "This audit failed. Diagnostics are shown where backend data is available.",
+      "cancelled": "This audit was cancelled. Completed cells are preserved where backend data is available."
     },
     "empty": {
       "noData": "No answer matrix data is available yet.",
@@ -202,6 +203,7 @@
       "completed": "Completed",
       "failed": "Failed",
       "partial": "Partial",
+      "cancelled": "Cancelled",
       "not_run": "Not run",
       "processing": "Processing",
       "missing": "Missing"

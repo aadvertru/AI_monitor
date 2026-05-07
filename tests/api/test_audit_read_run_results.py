@@ -4,17 +4,20 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
-from fastapi import HTTPException, Request
+from fastapi import BackgroundTasks, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from apps.api.main import (
+    cancel_audit_run,
     get_audit_detail,
+    get_audit_progress,
     get_audit_results,
     get_audit_status,
     get_audit_summary,
     get_raw_response_inspection,
     list_audits,
+    retry_failed_audit_runs,
     run_audit,
     run_audit_pipeline_dev,
     run_audit_pipeline_owner,
@@ -27,6 +30,8 @@ from libs.storage.models import (
     Audit,
     AuditStatus,
     AuditTarget,
+    BackgroundJob,
+    BackgroundJobStatus,
     Base,
     Brand,
     CompetitorCandidate,
@@ -110,7 +115,7 @@ class AuditReadRunResultsAPITests(unittest.IsolatedAsyncioTestCase):
                 brand=brand,
                 user_id=user.id,
                 status=status,
-                providers=providers or ["mock"],
+                providers=providers if providers is not None else ["mock"],
                 runs_per_query=runs_per_query,
                 scdl_level=scdl_level,
                 created_at=created_at,
@@ -118,7 +123,9 @@ class AuditReadRunResultsAPITests(unittest.IsolatedAsyncioTestCase):
             )
             session.add(audit)
             await session.flush()
-            for query_text in query_texts or ["best ai visibility monitor"]:
+            for query_text in (
+                query_texts if query_texts is not None else ["best ai visibility monitor"]
+            ):
                 session.add(Query(audit_id=audit.id, text=query_text))
             await session.commit()
             await session.refresh(audit)
@@ -205,6 +212,404 @@ class AuditReadRunResultsAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary.audit_id, audit.id)
         self.assertEqual(trigger.audit_id, audit.id)
         self.assertEqual(trigger.status, "running")
+
+    async def test_progress_endpoint_rejects_unauthenticated_request(self) -> None:
+        owner = await self._create_user()
+        audit = await self._create_audit(owner)
+
+        async with self.session_factory() as session:
+            with (
+                patch.dict("os.environ", AUTH_ENV, clear=True),
+                self.assertRaises(HTTPException) as context,
+            ):
+                await get_audit_progress(
+                    audit_id=audit.id,
+                    request=self._anonymous_request(),
+                    session=session,
+                )
+
+        self.assertEqual(context.exception.status_code, 401)
+
+    async def test_progress_endpoint_hides_cross_user_audit(self) -> None:
+        owner = await self._create_user("owner@example.com")
+        other = await self._create_user("other@example.com")
+        audit = await self._create_audit(owner)
+
+        async with self.session_factory() as session:
+            with (
+                patch.dict("os.environ", AUTH_ENV, clear=True),
+                self.assertRaises(HTTPException) as context,
+            ):
+                await get_audit_progress(
+                    audit_id=audit.id,
+                    request=self._authenticated_request(other),
+                    session=session,
+                )
+
+        self.assertEqual(context.exception.status_code, 404)
+
+    async def test_progress_endpoint_reports_created_audit_zero_percent(self) -> None:
+        owner = await self._create_user()
+        audit = await self._create_audit(owner, query_texts=["query one", "query two"])
+
+        async with self.session_factory() as session:
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                result = await get_audit_progress(
+                    audit_id=audit.id,
+                    request=self._authenticated_request(owner),
+                    session=session,
+                )
+
+        self.assertEqual(result.status, "created")
+        self.assertEqual(result.total_runs, 2)
+        self.assertEqual(result.queued_runs, 0)
+        self.assertEqual(result.percent_complete, 0.0)
+
+    async def test_progress_endpoint_reports_running_audit_counts(self) -> None:
+        owner = await self._create_user()
+        audit = await self._create_audit(owner, status=AuditStatus.RUNNING)
+
+        async with self.session_factory() as session:
+            query = (
+                await session.execute(select(Query).where(Query.audit_id == audit.id))
+            ).scalars().one()
+            session.add_all(
+                [
+                    Job(
+                        audit_id=audit.id,
+                        query_id=query.id,
+                        provider="mock",
+                        run_number=1,
+                        status=JobStatus.PENDING,
+                        idempotency_key=f"{audit.id}:{query.id}:mock:1",
+                    ),
+                    Job(
+                        audit_id=audit.id,
+                        query_id=query.id,
+                        provider="mock",
+                        run_number=2,
+                        status=JobStatus.RUNNING,
+                        idempotency_key=f"{audit.id}:{query.id}:mock:2",
+                    ),
+                    BackgroundJob(
+                        job_type="audit_pipeline",
+                        audit_id=audit.id,
+                        user_id=owner.id,
+                        status=BackgroundJobStatus.RUNNING,
+                        progress_metadata={"stage": "execution"},
+                    ),
+                ]
+            )
+            await session.commit()
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                result = await get_audit_progress(
+                    audit_id=audit.id,
+                    request=self._authenticated_request(owner),
+                    session=session,
+                )
+
+        self.assertEqual(result.status, "running")
+        self.assertEqual(result.queued_runs, 1)
+        self.assertEqual(result.running_runs, 1)
+        self.assertIsNotNone(result.current_job_id)
+        self.assertEqual(result.percent_complete, 0.0)
+
+    async def test_progress_endpoint_reports_completed_and_failed_runs_safely(self) -> None:
+        owner = await self._create_user()
+        audit = await self._create_audit(
+            owner,
+            status=AuditStatus.PARTIAL,
+            query_texts=["success query", "failed query"],
+        )
+
+        async with self.session_factory() as session:
+            queries = (
+                await session.execute(
+                    select(Query).where(Query.audit_id == audit.id).order_by(Query.id)
+                )
+            ).scalars().all()
+            success_run = Run(
+                audit_id=audit.id,
+                query_id=queries[0].id,
+                provider="mock",
+                run_number=1,
+                status=RunStatus.SUCCESS,
+            )
+            failed_run = Run(
+                audit_id=audit.id,
+                query_id=queries[1].id,
+                provider="mock",
+                run_number=1,
+                status=RunStatus.ERROR,
+            )
+            session.add_all([success_run, failed_run])
+            await session.flush()
+            session.add(
+                RawResponse(
+                    run_id=failed_run.id,
+                    request_snapshot={"raw_prompt": "hidden"},
+                    raw_answer=None,
+                    citations=[],
+                    provider_metadata={"provider": "mock"},
+                    provider_status="error",
+                    error_object={
+                        "code": "PROVIDER_REQUEST_FAILED",
+                        "message": "Provider failed with sk-hidden",
+                        "provider": "mock",
+                    },
+                )
+            )
+            await session.commit()
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                result = await get_audit_progress(
+                    audit_id=audit.id,
+                    request=self._authenticated_request(owner),
+                    session=session,
+                )
+
+        self.assertEqual(result.status, "partial")
+        self.assertEqual(result.completed_runs, 1)
+        self.assertEqual(result.failed_runs, 1)
+        self.assertEqual(result.percent_complete, 100.0)
+        dumped = str(result.model_dump())
+        self.assertNotIn("sk-hidden", dumped)
+        self.assertNotIn("raw_prompt", dumped)
+
+    async def test_progress_endpoint_zero_total_is_safe(self) -> None:
+        owner = await self._create_user()
+        audit = await self._create_audit(owner, providers=[], query_texts=[])
+
+        async with self.session_factory() as session:
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                result = await get_audit_progress(
+                    audit_id=audit.id,
+                    request=self._authenticated_request(owner),
+                    session=session,
+                )
+
+        self.assertEqual(result.total_runs, 0)
+        self.assertEqual(result.percent_complete, 0.0)
+
+    async def test_cancel_endpoint_owner_can_cancel_running_audit(self) -> None:
+        owner = await self._create_user()
+        audit = await self._create_audit(owner, status=AuditStatus.RUNNING)
+
+        async with self.session_factory() as session:
+            query = (
+                await session.execute(select(Query).where(Query.audit_id == audit.id))
+            ).scalars().one()
+            completed_run = Run(
+                audit_id=audit.id,
+                query_id=query.id,
+                provider="mock",
+                run_number=1,
+                status=RunStatus.SUCCESS,
+            )
+            pending_job = Job(
+                audit_id=audit.id,
+                query_id=query.id,
+                provider="mock",
+                run_number=2,
+                status=JobStatus.PENDING,
+                idempotency_key=f"{audit.id}:{query.id}:mock:2",
+            )
+            background_job = BackgroundJob(
+                job_type="audit_pipeline",
+                audit_id=audit.id,
+                user_id=owner.id,
+                status=BackgroundJobStatus.RUNNING,
+                progress_metadata={"stage": "execution"},
+            )
+            session.add_all([completed_run, pending_job, background_job])
+            await session.commit()
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                result = await cancel_audit_run(
+                    audit_id=audit.id,
+                    request=self._authenticated_request(owner),
+                    session=session,
+                )
+            saved_job = await session.get(Job, pending_job.id)
+            saved_background_job = await session.get(BackgroundJob, background_job.id)
+            saved_audit = await session.get(Audit, audit.id)
+
+        self.assertEqual(result.status, "cancel_requested")
+        self.assertEqual(result.audit_status, "cancelled")
+        self.assertEqual(result.cancelled_jobs, 1)
+        self.assertEqual(result.completed_runs_preserved, 1)
+        assert saved_job is not None
+        self.assertEqual(saved_job.status, JobStatus.CANCELLED)
+        assert saved_background_job is not None
+        self.assertEqual(saved_background_job.status, BackgroundJobStatus.CANCEL_REQUESTED)
+        assert saved_audit is not None
+        self.assertEqual(saved_audit.status, AuditStatus.CANCELLED)
+
+    async def test_cancel_endpoint_hides_cross_user_audit(self) -> None:
+        owner = await self._create_user("owner@example.com")
+        other = await self._create_user("other@example.com")
+        audit = await self._create_audit(owner, status=AuditStatus.RUNNING)
+
+        async with self.session_factory() as session:
+            with (
+                patch.dict("os.environ", AUTH_ENV, clear=True),
+                self.assertRaises(HTTPException) as context,
+            ):
+                await cancel_audit_run(
+                    audit_id=audit.id,
+                    request=self._authenticated_request(other),
+                    session=session,
+                )
+
+        self.assertEqual(context.exception.status_code, 404)
+
+    async def test_cancel_endpoint_rejects_completed_audit(self) -> None:
+        owner = await self._create_user()
+        audit = await self._create_audit(owner, status=AuditStatus.COMPLETED)
+
+        async with self.session_factory() as session:
+            with (
+                patch.dict("os.environ", AUTH_ENV, clear=True),
+                self.assertRaises(HTTPException) as context,
+            ):
+                await cancel_audit_run(
+                    audit_id=audit.id,
+                    request=self._authenticated_request(owner),
+                    session=session,
+                )
+
+        self.assertEqual(context.exception.status_code, 409)
+
+    async def test_retry_failed_endpoint_retries_failed_runs_only(self) -> None:
+        owner = await self._create_user()
+        audit = await self._create_audit(
+            owner,
+            status=AuditStatus.PARTIAL,
+            query_texts=["success query", "failed query"],
+        )
+
+        async with self.session_factory() as session:
+            queries = (
+                await session.execute(
+                    select(Query).where(Query.audit_id == audit.id).order_by(Query.id)
+                )
+            ).scalars().all()
+            session.add_all(
+                [
+                    Run(
+                        audit_id=audit.id,
+                        query_id=queries[0].id,
+                        provider="mock",
+                        run_number=1,
+                        status=RunStatus.SUCCESS,
+                    ),
+                    Run(
+                        audit_id=audit.id,
+                        query_id=queries[1].id,
+                        provider="mock",
+                        run_number=1,
+                        status=RunStatus.ERROR,
+                    ),
+                ]
+            )
+            await session.commit()
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                result = await retry_failed_audit_runs(
+                    audit_id=audit.id,
+                    request=self._authenticated_request(owner),
+                    background_tasks=BackgroundTasks(),
+                    session=session,
+                )
+            retry_jobs = (
+                await session.execute(
+                    select(Job).where(Job.audit_id == audit.id).order_by(Job.id)
+                )
+            ).scalars().all()
+            saved_audit = await session.get(Audit, audit.id)
+
+        self.assertEqual(result.retry_run_count, 1)
+        self.assertEqual(result.status, "running")
+        self.assertEqual(result.background_job_status, "queued")
+        self.assertEqual(len(retry_jobs), 1)
+        self.assertEqual(retry_jobs[0].query_id, queries[1].id)
+        self.assertEqual(retry_jobs[0].run_number, 2)
+        self.assertEqual(retry_jobs[0].status, JobStatus.PENDING)
+        assert saved_audit is not None
+        self.assertEqual(saved_audit.status, AuditStatus.RUNNING)
+
+    async def test_retry_failed_endpoint_hides_cross_user_audit(self) -> None:
+        owner = await self._create_user("owner@example.com")
+        other = await self._create_user("other@example.com")
+        audit = await self._create_audit(owner, status=AuditStatus.FAILED)
+
+        async with self.session_factory() as session:
+            with (
+                patch.dict("os.environ", AUTH_ENV, clear=True),
+                self.assertRaises(HTTPException) as context,
+            ):
+                await retry_failed_audit_runs(
+                    audit_id=audit.id,
+                    request=self._authenticated_request(other),
+                    background_tasks=BackgroundTasks(),
+                    session=session,
+                )
+
+        self.assertEqual(context.exception.status_code, 404)
+
+    async def test_retry_failed_endpoint_rejects_when_no_failed_runs(self) -> None:
+        owner = await self._create_user()
+        audit = await self._create_audit(owner, status=AuditStatus.COMPLETED)
+
+        async with self.session_factory() as session:
+            with (
+                patch.dict("os.environ", AUTH_ENV, clear=True),
+                self.assertRaises(HTTPException) as context,
+            ):
+                await retry_failed_audit_runs(
+                    audit_id=audit.id,
+                    request=self._authenticated_request(owner),
+                    background_tasks=BackgroundTasks(),
+                    session=session,
+                )
+
+        self.assertEqual(context.exception.status_code, 409)
+
+    async def test_retry_failed_endpoint_retries_cancelled_jobs(self) -> None:
+        owner = await self._create_user()
+        audit = await self._create_audit(owner, status=AuditStatus.PARTIAL)
+
+        async with self.session_factory() as session:
+            query = (
+                await session.execute(select(Query).where(Query.audit_id == audit.id))
+            ).scalars().one()
+            session.add(
+                Job(
+                    audit_id=audit.id,
+                    query_id=query.id,
+                    provider="mock",
+                    run_number=1,
+                    status=JobStatus.CANCELLED,
+                    idempotency_key=f"{audit.id}:{query.id}:mock:1",
+                )
+            )
+            await session.commit()
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                result = await retry_failed_audit_runs(
+                    audit_id=audit.id,
+                    request=self._authenticated_request(owner),
+                    background_tasks=BackgroundTasks(),
+                    session=session,
+                )
+            retry_jobs = (
+                await session.execute(
+                    select(Job).where(
+                        Job.audit_id == audit.id,
+                        Job.status == JobStatus.PENDING,
+                    )
+                )
+            ).scalars().all()
+
+        self.assertEqual(result.retry_run_count, 1)
+        self.assertEqual(len(retry_jobs), 1)
+        self.assertEqual(retry_jobs[0].run_number, 2)
 
     async def test_authenticated_user_can_fetch_owned_audit_detail(self) -> None:
         owner = await self._create_user()
@@ -602,7 +1007,7 @@ class AuditReadRunResultsAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context.exception.status_code, 409)
 
     async def test_run_trigger_state_values_are_documented(self) -> None:
-        documented = {"created", "running", "partial", "completed", "failed"}
+        documented = {"created", "running", "partial", "completed", "failed", "cancelled"}
         self.assertEqual({status.value for status in AuditStatus}, documented)
 
     async def test_dev_pipeline_endpoint_rejects_unauthenticated_request(self) -> None:
@@ -811,6 +1216,7 @@ class AuditReadRunResultsAPITests(unittest.IsolatedAsyncioTestCase):
                 await run_audit_pipeline_owner(
                     audit_id=audit.id,
                     request=self._anonymous_request(),
+                    background_tasks=BackgroundTasks(),
                     session=session,
                 )
 
@@ -822,49 +1228,30 @@ class AuditReadRunResultsAPITests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         owner = await self._create_user("owner@example.com")
         audit = await self._create_audit(owner)
-        pipeline_summary = AuditPipelineSummary(
-            audit_id=audit.id,
-            scheduling=AuditSchedulingSummary(
-                audit_id=audit.id,
-                scheduled_jobs=1,
-                total_jobs=1,
-            ),
-            execution=AuditJobExecutionSummary(
-                audit_id=audit.id,
-                total_jobs_inspected=1,
-                jobs_executed=1,
-                success_count=1,
-            ),
-            post_processing=AuditPostProcessingSummary(
-                audit_id=audit.id,
-                total_runs_inspected=1,
-                runs_processed=1,
-                audit_status="completed",
-            ),
-            final_audit_status="completed",
-        )
 
         async with self.session_factory() as session:
             with (
                 patch.dict("os.environ", AUTH_ENV, clear=True),
-                patch(
-                    "apps.api.main.run_audit_pipeline",
-                    new=AsyncMock(return_value=pipeline_summary),
-                ) as pipeline_mock,
+                patch("apps.api.main.run_audit_pipeline", new_callable=AsyncMock) as pipeline_mock,
             ):
                 result = await run_audit_pipeline_owner(
                     audit_id=audit.id,
                     request=self._authenticated_request(owner),
+                    background_tasks=BackgroundTasks(),
                     session=session,
                 )
+                background_job = await session.get(BackgroundJob, result.job_id)
+                saved_audit = await session.get(Audit, audit.id)
 
         self.assertEqual(result.audit_id, audit.id)
-        self.assertEqual(result.final_audit_status, "completed")
-        self.assertEqual(result.scheduling.scheduled_jobs, 1)
-        self.assertEqual(result.execution.jobs_executed, 1)
-        self.assertEqual(result.post_processing.runs_processed, 1)
-        pipeline_mock.assert_awaited_once()
-        self.assertEqual(pipeline_mock.await_args.args[1], audit.id)
+        self.assertEqual(result.status, "running")
+        self.assertEqual(result.background_job_status, "queued")
+        assert background_job is not None
+        self.assertEqual(background_job.status, BackgroundJobStatus.QUEUED)
+        self.assertEqual(background_job.audit_id, audit.id)
+        assert saved_audit is not None
+        self.assertEqual(saved_audit.status, AuditStatus.RUNNING)
+        pipeline_mock.assert_not_called()
 
     async def test_owner_pipeline_endpoint_admin_can_run_another_users_audit(
         self,
@@ -872,28 +1259,22 @@ class AuditReadRunResultsAPITests(unittest.IsolatedAsyncioTestCase):
         owner = await self._create_user("owner@example.com")
         admin = await self._create_user("admin@example.com", role=UserRole.ADMIN)
         audit = await self._create_audit(owner)
-        pipeline_summary = AuditPipelineSummary(
-            audit_id=audit.id,
-            scheduling=AuditSchedulingSummary(audit_id=audit.id),
-            final_audit_status="completed",
-        )
 
         async with self.session_factory() as session:
             with (
                 patch.dict("os.environ", AUTH_ENV, clear=True),
-                patch(
-                    "apps.api.main.run_audit_pipeline",
-                    new=AsyncMock(return_value=pipeline_summary),
-                ) as pipeline_mock,
+                patch("apps.api.main.run_audit_pipeline", new_callable=AsyncMock) as pipeline_mock,
             ):
                 result = await run_audit_pipeline_owner(
                     audit_id=audit.id,
                     request=self._authenticated_request(admin),
+                    background_tasks=BackgroundTasks(),
                     session=session,
                 )
 
         self.assertEqual(result.audit_id, audit.id)
-        pipeline_mock.assert_awaited_once()
+        self.assertEqual(result.background_job_status, "queued")
+        pipeline_mock.assert_not_called()
 
     async def test_owner_pipeline_endpoint_cross_user_is_hidden(self) -> None:
         owner = await self._create_user("owner@example.com")
@@ -909,6 +1290,7 @@ class AuditReadRunResultsAPITests(unittest.IsolatedAsyncioTestCase):
                 await run_audit_pipeline_owner(
                     audit_id=audit.id,
                     request=self._authenticated_request(other),
+                    background_tasks=BackgroundTasks(),
                     session=session,
                 )
 
@@ -927,6 +1309,7 @@ class AuditReadRunResultsAPITests(unittest.IsolatedAsyncioTestCase):
                 await run_audit_pipeline_owner(
                     audit_id=999,
                     request=self._authenticated_request(owner),
+                    background_tasks=BackgroundTasks(),
                     session=session,
                 )
 
@@ -946,12 +1329,44 @@ class AuditReadRunResultsAPITests(unittest.IsolatedAsyncioTestCase):
                 await run_audit_pipeline_owner(
                     audit_id=audit.id,
                     request=self._authenticated_request(owner),
+                    background_tasks=BackgroundTasks(),
                     session=session,
                 )
 
         self.assertEqual(context.exception.status_code, 409)
         self.assertEqual(context.exception.detail, "Audit is already running.")
         pipeline_mock.assert_not_called()
+
+    async def test_owner_pipeline_endpoint_prevents_duplicate_active_job(self) -> None:
+        owner = await self._create_user("owner@example.com")
+        audit = await self._create_audit(owner)
+
+        async with self.session_factory() as session:
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                first = await run_audit_pipeline_owner(
+                    audit_id=audit.id,
+                    request=self._authenticated_request(owner),
+                    background_tasks=BackgroundTasks(),
+                    session=session,
+                )
+                saved_audit = await session.get(Audit, audit.id)
+                assert saved_audit is not None
+                saved_audit.status = AuditStatus.CREATED
+                await session.commit()
+                with self.assertRaises(HTTPException) as context:
+                    await run_audit_pipeline_owner(
+                        audit_id=audit.id,
+                        request=self._authenticated_request(owner),
+                        background_tasks=BackgroundTasks(),
+                        session=session,
+                    )
+
+        self.assertGreater(first.job_id, 0)
+        self.assertEqual(context.exception.status_code, 409)
+        self.assertEqual(
+            context.exception.detail,
+            "Audit pipeline job is already queued or running.",
+        )
 
     async def test_owner_pipeline_endpoint_rejects_completed_audit_retrigger(self) -> None:
         owner = await self._create_user("owner@example.com")
@@ -966,6 +1381,7 @@ class AuditReadRunResultsAPITests(unittest.IsolatedAsyncioTestCase):
                 await run_audit_pipeline_owner(
                     audit_id=audit.id,
                     request=self._authenticated_request(owner),
+                    background_tasks=BackgroundTasks(),
                     session=session,
                 )
 
@@ -1000,6 +1416,7 @@ class AuditReadRunResultsAPITests(unittest.IsolatedAsyncioTestCase):
                 await run_audit_pipeline_owner(
                     audit_id=audit.id,
                     request=self._authenticated_request(owner),
+                    background_tasks=BackgroundTasks(),
                     session=session,
                 )
 
@@ -1008,34 +1425,21 @@ class AuditReadRunResultsAPITests(unittest.IsolatedAsyncioTestCase):
         pipeline_mock.assert_not_called()
         factory_mock.assert_not_called()
 
-    async def test_owner_pipeline_endpoint_response_does_not_expose_sensitive_fields(
+    async def test_owner_pipeline_endpoint_enqueue_response_does_not_expose_sensitive_fields(
         self,
     ) -> None:
         owner = await self._create_user("owner@example.com")
         audit = await self._create_audit(owner)
-        pipeline_summary = AuditPipelineSummary(
-            audit_id=audit.id,
-            scheduling=AuditSchedulingSummary(audit_id=audit.id),
-            execution=AuditJobExecutionSummary(
-                audit_id=audit.id,
-                fatal_error="Provider failed with key sk-secret-token",
-            ),
-            post_processing=AuditPostProcessingSummary(audit_id=audit.id),
-            final_audit_status="failed",
-            fatal_error="Bearer secret-cookie should not leak",
-        )
 
         async with self.session_factory() as session:
             with (
                 patch.dict("os.environ", AUTH_ENV, clear=True),
-                patch(
-                    "apps.api.main.run_audit_pipeline",
-                    new=AsyncMock(return_value=pipeline_summary),
-                ),
+                patch("apps.api.main.run_audit_pipeline", new_callable=AsyncMock),
             ):
                 result = await run_audit_pipeline_owner(
                     audit_id=audit.id,
                     request=self._authenticated_request(owner),
+                    background_tasks=BackgroundTasks(),
                     session=session,
                 )
 

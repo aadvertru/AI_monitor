@@ -14,7 +14,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 # SCDL mapping: L1 = no web access; L2 = web access.
 SCDLLevelValue = Literal["L1", "L2"]
-AuditStatusValue = Literal["created", "running", "partial", "completed", "failed"]
+AuditStatusValue = Literal[
+    "created",
+    "running",
+    "partial",
+    "completed",
+    "failed",
+    "cancelled",
+]
 SeedQueryTypeValue = Literal[
     "brand_direct",
     "category_discovery",
@@ -243,6 +250,59 @@ class AuditPipelineRunResponse(FrontendAuditSchema):
     final_audit_status: AuditStatusValue | None = None
     fatal_error: str | None = None
     provider_diagnostics: list["ProviderDiagnosticResponse"] = Field(default_factory=list)
+
+
+class AuditPipelineEnqueueResponse(FrontendAuditSchema):
+    audit_id: int
+    audit_number: int
+    job_id: int
+    status: AuditStatusValue
+    background_job_status: Literal[
+        "queued",
+        "running",
+        "completed",
+        "failed",
+        "cancel_requested",
+        "cancelled",
+    ]
+
+
+class AuditProgressResponse(FrontendAuditSchema):
+    audit_id: int
+    status: AuditStatusValue
+    total_runs: int = 0
+    queued_runs: int = 0
+    running_runs: int = 0
+    completed_runs: int = 0
+    failed_runs: int = 0
+    skipped_runs: int = 0
+    percent_complete: float = 0.0
+    current_job_id: int | None = None
+    provider_diagnostics: list["ProviderDiagnosticResponse"] = Field(default_factory=list)
+
+
+class AuditCancelResponse(FrontendAuditSchema):
+    audit_id: int
+    status: Literal["cancel_requested"]
+    audit_status: AuditStatusValue
+    cancelled_jobs: int = 0
+    completed_runs_preserved: int = 0
+    background_job_id: int | None = None
+
+
+class AuditRetryFailedResponse(FrontendAuditSchema):
+    audit_id: int
+    retry_run_count: int
+    job_id: int
+    status: AuditStatusValue
+    background_job_status: Literal[
+        "queued",
+        "running",
+        "completed",
+        "failed",
+        "cancel_requested",
+        "cancelled",
+    ]
 
 
 class ComponentScoresResponse(FrontendAuditSchema):

@@ -1,5 +1,11 @@
 export type UserRole = "user" | "admin";
-export type AuditStatus = "created" | "running" | "partial" | "completed" | "failed";
+export type AuditStatus =
+  | "created"
+  | "running"
+  | "partial"
+  | "completed"
+  | "failed"
+  | "cancelled";
 export type RunStatus = "pending" | "success" | "error" | "timeout" | "rate_limited";
 export type SCDLLevel = "L1" | "L2";
 export type ProviderDiagnosticCode =
@@ -165,6 +171,17 @@ export type ProfileResponse = {
     tokens_total: number;
     reset_at: string | null;
     is_demo: boolean;
+    actual_usage: {
+      total_tokens_used: number;
+      input_tokens: number;
+      output_tokens: number;
+      cached_tokens: number;
+      reasoning_tokens: number;
+      web_search_requests: number;
+      duration_ms: number;
+      run_count: number;
+      audit_count: number;
+    };
   };
   preferences: ProfilePreferences;
 };
@@ -403,6 +420,51 @@ export type AuditPipelineRunResponse = {
   final_audit_status: AuditStatus | null;
   fatal_error: string | null;
   provider_diagnostics?: ProviderDiagnostic[];
+};
+
+export type AuditPipelineEnqueueResponse = {
+  audit_id: number;
+  audit_number: number;
+  job_id: number;
+  status: AuditStatus;
+  background_job_status:
+    | "queued"
+    | "running"
+    | "completed"
+    | "failed"
+    | "cancel_requested"
+    | "cancelled";
+};
+
+export type AuditProgressResponse = {
+  audit_id: number;
+  status: AuditStatus;
+  total_runs: number;
+  queued_runs: number;
+  running_runs: number;
+  completed_runs: number;
+  failed_runs: number;
+  skipped_runs: number;
+  percent_complete: number;
+  current_job_id: number | null;
+  provider_diagnostics?: ProviderDiagnostic[];
+};
+
+export type AuditCancelResponse = {
+  audit_id: number;
+  status: "cancel_requested";
+  audit_status: AuditStatus;
+  cancelled_jobs: number;
+  completed_runs_preserved: number;
+  background_job_id: number | null;
+};
+
+export type AuditRetryFailedResponse = {
+  audit_id: number;
+  retry_run_count: number;
+  job_id: number;
+  status: AuditStatus;
+  background_job_status: AuditPipelineEnqueueResponse["background_job_status"];
 };
 
 export type RerunEvaluationResponse = {

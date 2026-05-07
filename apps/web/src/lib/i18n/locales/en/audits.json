@@ -104,6 +104,20 @@
     "runs": "{{count}} runs",
     "inline": "Provider issue: {{message}}"
   },
+  "progress": {
+    "total": "Total runs",
+    "completed": "Completed",
+    "failed": "Failed",
+    "queued": "Queued",
+    "running": "Running",
+    "percent": "Complete",
+    "cancel": "Cancel run",
+    "cancelling": "Cancelling...",
+    "cancelConfirm": "Cancel this audit run?",
+    "retryFailed": "Retry failed",
+    "retrying": "Retrying...",
+    "error": "Unable to load audit progress."
+  },
   "queryTypes": {
     "none": "No type",
     "brand_direct": "Brand direct",
@@ -201,7 +215,8 @@
     "running": "Running",
     "partial": "Partial",
     "completed": "Completed",
-    "failed": "Failed"
+    "failed": "Failed",
+    "cancelled": "Cancelled"
   },
   "runStatus": {
     "pending": "Pending",

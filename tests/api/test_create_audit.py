@@ -223,6 +223,67 @@ class CreateAuditAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.estimated_runs, 4)
         self.assertFalse(result.over_cap)
 
+    async def test_estimate_endpoint_accepts_empty_draft(self) -> None:
+        user = await self._create_user()
+        payload = AuditEstimateRequest.model_validate({})
+
+        async with self.session_factory() as session:
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                result = await estimate_audit(
+                    payload=payload,
+                    request=self._authenticated_request(user),
+                    session=session,
+                )
+
+        self.assertEqual(result.query_count, 0)
+        self.assertEqual(result.target_count, 0)
+        self.assertEqual(result.model_count, 0)
+        self.assertEqual(result.estimated_runs, 0)
+        self.assertFalse(result.over_cap)
+
+    async def test_estimate_endpoint_reports_legacy_payload_counts(self) -> None:
+        user = await self._create_user()
+        payload = AuditEstimateRequest.model_validate(
+            {
+                "seed_queries": ["query one", "query two"],
+                "providers": ["mock", "openai"],
+                "runs_per_query": 2,
+                "scdl_level": "L2",
+            }
+        )
+
+        async with self.session_factory() as session:
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                result = await estimate_audit(
+                    payload=payload,
+                    request=self._authenticated_request(user),
+                    session=session,
+                )
+
+        self.assertEqual(result.query_count, 2)
+        self.assertEqual(result.target_count, 2)
+        self.assertEqual(result.model_count, 2)
+        self.assertEqual(result.estimated_runs, 8)
+
+    async def test_estimate_request_rejects_invalid_target_payload(self) -> None:
+        with self.assertRaises(ValidationError):
+            AuditEstimateRequest.model_validate(
+                {
+                    "seed_queries": ["query one"],
+                    "model_targets": [
+                        {
+                            "ai_family": "chatgpt",
+                            "execution_provider": "openrouter",
+                            "model_provider": "openai",
+                            "model_id": "openai/gpt-4o-mini",
+                            "display_name": "Invalid L1 target",
+                            "level": "L1",
+                            "gateway_l2_experimental": True,
+                        }
+                    ],
+                }
+            )
+
     async def test_estimate_endpoint_reports_over_cap_violations(self) -> None:
         user = await self._create_user()
         payload = AuditEstimateRequest.model_validate(

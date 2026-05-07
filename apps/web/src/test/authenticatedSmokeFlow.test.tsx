@@ -7,8 +7,10 @@ import {
   auditCreateResponseFixture,
   auditDetailFixture,
   auditEstimateFixture,
-  auditPipelineRunFixture,
+  auditPipelineEnqueueFixture,
+  auditProgressFixture,
   auditResultsFixture,
+  auditStatusFixture,
   auditSummaryV2Fixture,
   auditSummaryFixture,
   currentUserFixture,
@@ -31,13 +33,43 @@ function mockSmokeBackend(responses: SmokeResponse[]) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const requestMethod = init?.method ?? "GET";
-    const next = queue.shift();
 
     if (!url.startsWith(apiBaseUrl)) {
       throw new Error(`Unexpected external request in smoke flow: ${url}`);
     }
+    let next = queue[0];
     if (!next) {
       throw new Error(`Unexpected API request in smoke flow: ${requestMethod} ${url}`);
+    }
+    if (`${apiBaseUrl}${next.path}` !== url && requestMethod === "GET") {
+      const matchingIndex = queue.findIndex(
+        (response) =>
+          `${apiBaseUrl}${response.path}` === url && (response.method ?? "GET") === requestMethod,
+      );
+      if (matchingIndex >= 0) {
+        next = queue.splice(matchingIndex, 1)[0] as SmokeResponse;
+      } else if (url.endsWith("/audits/42/progress")) {
+        return {
+          json: async () => ({
+            ...auditProgressFixture,
+            status: "completed",
+            percent_complete: 100,
+          }),
+          ok: true,
+          status: 200,
+          statusText: "OK",
+        } satisfies Partial<Response>;
+      }
+      if (url.endsWith("/audits/42/status")) {
+        return {
+          json: async () => ({ ...auditStatusFixture, status: "completed" }),
+          ok: true,
+          status: 200,
+          statusText: "OK",
+        } satisfies Partial<Response>;
+      }
+    } else {
+      queue.shift();
     }
 
     expect(url).toBe(`${apiBaseUrl}${next.path}`);
@@ -69,7 +101,7 @@ describe("authenticated SCDL smoke flow", () => {
       { path: "/audits/42/summary", body: auditSummaryFixture },
       { path: "/audits/42/summary-v2", body: auditSummaryV2Fixture },
       { path: "/audits/42/answer-matrix", body: auditAnswerMatrixFixture },
-      { path: "/audits/42/run-pipeline", method: "POST", body: auditPipelineRunFixture },
+      { path: "/audits/42/run-pipeline", method: "POST", body: auditPipelineEnqueueFixture },
       { path: "/audits/42", body: { ...auditDetailFixture, status: "completed" } },
       { path: "/audits/42/summary", body: { ...auditSummaryFixture, status: "completed" } },
       { path: "/audits/42/summary-v2", body: { ...auditSummaryV2Fixture, status: "completed" } },

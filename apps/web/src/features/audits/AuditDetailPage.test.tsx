@@ -5,7 +5,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   auditDetailFixture,
   auditAnswerMatrixFixture,
-  auditPipelineRunFixture,
+  auditPipelineEnqueueFixture,
+  auditProgressFixture,
   auditStatusFixture,
   auditSummaryV2Fixture,
   auditSummaryFixture,
@@ -22,6 +23,9 @@ function renderDetail(status: AuditStatus = "created") {
     { body: currentUserFixture },
     { body: { ...auditDetailFixture, status } },
     { body: { ...auditSummaryFixture, status } },
+    ...(status === "running" || status === "partial" || status === "failed"
+      ? [{ body: { ...auditProgressFixture, status } }]
+      : []),
     ...(status === "running" ? [{ body: { ...auditStatusFixture, status } }] : []),
     { body: { ...auditSummaryV2Fixture, status } },
     { body: auditAnswerMatrixFixture },
@@ -91,7 +95,7 @@ describe("audit detail page", () => {
     expect(screen.getByRole("button", { name: "Restore" })).toBeInTheDocument();
   });
 
-  it.each(["created", "running", "completed", "failed"] as const)(
+  it.each(["created", "running", "completed", "failed", "cancelled"] as const)(
     "renders %s audit status",
     async (status) => {
       renderDetail(status);
@@ -198,7 +202,7 @@ describe("audit detail page", () => {
       { body: auditSummaryFixture },
       { body: auditSummaryV2Fixture },
       { body: auditAnswerMatrixFixture },
-      { body: auditPipelineRunFixture },
+      { body: auditPipelineEnqueueFixture },
       { body: { ...auditDetailFixture, status: "completed" } },
       { body: { ...auditSummaryFixture, status: "completed", total_runs: 4 } },
       { body: { ...auditSummaryV2Fixture, status: "completed" } },
@@ -223,17 +227,15 @@ describe("audit detail page", () => {
     expect((await screen.findAllByText("Completed")).length).toBeGreaterThan(0);
   });
 
-  it("shows provider diagnostics returned by pipeline start", async () => {
+  it("shows safe provider diagnostics returned by progress", async () => {
     mockFetchSequence([
       { body: currentUserFixture },
-      { body: auditDetailFixture },
-      { body: auditSummaryFixture },
-      { body: auditSummaryV2Fixture },
-      { body: auditAnswerMatrixFixture },
+      { body: { ...auditDetailFixture, status: "failed" } },
+      { body: { ...auditSummaryFixture, status: "failed" } },
       {
         body: {
-          ...auditPipelineRunFixture,
-          final_audit_status: "failed",
+          ...auditProgressFixture,
+          status: "failed",
           provider_diagnostics: [
             {
               ...providerDiagnosticFixture,
@@ -242,20 +244,122 @@ describe("audit detail page", () => {
           ],
         },
       },
-      { body: { ...auditDetailFixture, status: "failed" } },
-      { body: { ...auditSummaryFixture, status: "failed" } },
       { body: { ...auditSummaryV2Fixture, status: "failed" } },
+      { body: auditAnswerMatrixFixture },
+    ]);
+
+    renderRoute("/audits/42");
+
+    expect((await screen.findAllByText("Provider issue")).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/sk-hidden/i)).not.toBeInTheDocument();
+  });
+
+  it("renders audit progress while a run is active", async () => {
+    renderDetail("running");
+
+    expect(await screen.findByText("Total runs")).toBeInTheDocument();
+    expect(screen.getAllByText("Completed").length).toBeGreaterThan(0);
+    expect(screen.getByText("Queued")).toBeInTheDocument();
+    expect(screen.getAllByText("Running").length).toBeGreaterThan(0);
+    expect(screen.getByText("Complete")).toBeInTheDocument();
+    expect(screen.getByText("50%")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel run" })).toBeInTheDocument();
+  });
+
+  it("cancels a running audit after confirmation", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const fetchMock = mockFetchSequence([
+      { body: currentUserFixture },
+      { body: { ...auditDetailFixture, status: "running" } },
+      { body: { ...auditSummaryFixture, status: "running" } },
+      { body: { ...auditProgressFixture, status: "running" } },
+      { body: { ...auditStatusFixture, status: "running" } },
+      { body: { ...auditSummaryV2Fixture, status: "running" } },
+      { body: auditAnswerMatrixFixture },
+      {
+        body: {
+          audit_id: 42,
+          status: "cancel_requested",
+          audit_status: "cancelled",
+          cancelled_jobs: 2,
+          completed_runs_preserved: 1,
+          background_job_id: 1001,
+        },
+      },
+      { body: { ...auditDetailFixture, status: "cancelled" } },
+      { body: { ...auditSummaryFixture, status: "cancelled" } },
+      { body: { ...auditProgressFixture, status: "cancelled", skipped_runs: 2 } },
+      { body: { ...auditSummaryV2Fixture, status: "cancelled" } },
       { body: auditAnswerMatrixFixture },
     ]);
     const user = userEvent.setup();
 
     renderRoute("/audits/42");
 
-    await user.click(await screen.findByRole("button", { name: "Start audit" }));
+    await user.click(await screen.findByRole("button", { name: "Cancel run" }));
 
-    expect((await screen.findAllByText("Provider issue")).length).toBeGreaterThan(0);
-    expect(screen.getByText("Provider issue details are unavailable.")).toBeInTheDocument();
-    expect(screen.queryByText(/sk-hidden/i)).not.toBeInTheDocument();
+    expect(confirmSpy).toHaveBeenCalledWith("Cancel this audit run?");
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://localhost:8000/audits/42/cancel",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    confirmSpy.mockRestore();
+  });
+
+  it("retries failed runs from a partial audit", async () => {
+    let retried = false;
+    const fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
+      let body: unknown = auditSummaryFixture;
+      if (url.endsWith("/auth/me")) {
+        body = currentUserFixture;
+      } else if (url.endsWith("/audits/42") && options?.method !== "POST") {
+        body = { ...auditDetailFixture, status: retried ? "running" : "partial" };
+      } else if (url.endsWith("/audits/42/summary")) {
+        body = { ...auditSummaryFixture, status: retried ? "running" : "partial" };
+      } else if (url.endsWith("/audits/42/progress")) {
+        body = {
+          ...auditProgressFixture,
+          status: retried ? "running" : "partial",
+          failed_runs: retried ? 0 : 1,
+        };
+      } else if (url.endsWith("/audits/42/status")) {
+        body = { ...auditStatusFixture, status: "running" };
+      } else if (url.endsWith("/audits/42/summary-v2")) {
+        body = { ...auditSummaryV2Fixture, status: retried ? "running" : "partial" };
+      } else if (url.endsWith("/audits/42/answer-matrix")) {
+        body = auditAnswerMatrixFixture;
+      } else if (url.endsWith("/audits/42/retry-failed")) {
+        retried = true;
+        body = {
+          audit_id: 42,
+          retry_run_count: 1,
+          job_id: 1002,
+          status: "running",
+          background_job_status: "queued",
+        };
+      }
+      return {
+        json: async () => body,
+        ok: true,
+        status: 200,
+        statusText: "OK",
+      } satisfies Partial<Response>;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderRoute("/audits/42");
+
+    await user.click(await screen.findByRole("button", { name: "Retry failed" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://localhost:8000/audits/42/retry-failed",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
   });
 
   it("shows provider diagnostics returned by status polling", async () => {
@@ -387,7 +491,7 @@ describe("audit detail page", () => {
       { body: auditSummaryFixture },
       { body: auditSummaryV2Fixture },
       { body: auditAnswerMatrixFixture },
-      { body: auditPipelineRunFixture },
+      { body: auditPipelineEnqueueFixture },
       { body: { ...auditDetailFixture, status: "completed" } },
       { body: { ...auditSummaryFixture, status: "completed" } },
       { body: { ...auditSummaryV2Fixture, status: "completed" } },
@@ -413,15 +517,13 @@ describe("audit detail page", () => {
         body = { ...auditDetailFixture, status: pipelineStarted ? "running" : "created" };
       } else if (url.endsWith("/audits/42/run-pipeline")) {
         pipelineStarted = true;
-        body = {
-          ...auditPipelineRunFixture,
-          final_audit_status: "running",
-          post_processing: null,
-        };
+        body = auditPipelineEnqueueFixture;
       } else if (url.endsWith("/audits/42/summary")) {
         body = { ...auditSummaryFixture, status: pipelineStarted ? "running" : "created" };
       } else if (url.endsWith("/audits/42/summary-v2")) {
         body = { ...auditSummaryV2Fixture, status: pipelineStarted ? "running" : "created" };
+      } else if (url.endsWith("/audits/42/progress")) {
+        body = { ...auditProgressFixture, status: "running" };
       } else if (url.endsWith("/audits/42/status")) {
         body = { ...auditStatusFixture, status: "running" };
       }

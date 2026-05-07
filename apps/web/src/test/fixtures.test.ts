@@ -36,6 +36,7 @@ const documentedAuditStatuses = new Set<AuditStatus>([
   "partial",
   "completed",
   "failed",
+  "cancelled",
 ]);
 const documentedRunStatuses = new Set<RunStatus>([
   "pending",
