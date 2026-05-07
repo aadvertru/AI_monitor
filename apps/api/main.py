@@ -32,6 +32,7 @@ from apps.api.audit_schemas import (
     AnswerMatrixResponse,
     AnswerMatrixRowResponse,
     AuditCancelResponse,
+    AuditComparisonResponse,
     AuditDetailResponse,
     AuditListItemResponse,
     AuditPipelineEnqueueResponse,
@@ -48,6 +49,11 @@ from apps.api.audit_schemas import (
     AuditSummaryV2Response,
     AuditSummaryV2TotalsResponse,
     AuditTargetResponse,
+    AuditTrendPointResponse,
+    AuditTrendsResponse,
+    ComparisonCandidateResponse,
+    ComparisonCandidatesResponse,
+    ComparisonCandidateSummaryResponse,
     CompetitorCandidateResponse,
     CompetitorSummaryItemResponse,
     ComponentScoresResponse,
@@ -55,7 +61,10 @@ from apps.api.audit_schemas import (
     CriticalQueryItemResponse,
     GeneratedSeedQuerySuggestionResponse,
     GenerateSeedQuerySuggestionsResponse,
+    LongitudinalChangeItemResponse,
     MentionabilityMetricResponse,
+    MetricDeltaResponse,
+    ModelDeltaResponse,
     ProviderDiagnosticResponse,
     QueryTypeCoverageItemResponse,
     RawResponseInspectionResponse,
@@ -97,6 +106,17 @@ from libs.analysis.aggregation import (
     build_audit_summary,
     compute_query_type_coverage,
     find_critical_queries,
+)
+from libs.analysis.longitudinal_diffs import (
+    ChangeItem,
+    diff_competitors,
+    diff_concepts,
+    diff_source_domains,
+)
+from libs.analysis.longitudinal_snapshots import (
+    build_snapshot_payload,
+    create_audit_metrics_snapshot,
+    latest_audit_snapshot,
 )
 from libs.analysis.source_intelligence import (
     SourceDomainAggregationResult,
@@ -144,6 +164,7 @@ from libs.execution.usage_aggregation import aggregate_user_usage
 from libs.storage.models import (
     AnswerEvaluation,
     Audit,
+    AuditMetricsSnapshot,
     AuditStatus,
     AuditTarget,
     BackgroundJob,
@@ -1934,6 +1955,7 @@ async def cancel_audit_run_record(
     audit.status = AuditStatus.CANCELLED
     await session.commit()
     await session.refresh(audit)
+    await create_audit_metrics_snapshot(session, audit.id)
     if active_job is not None:
         await session.refresh(active_job)
 
@@ -2003,6 +2025,328 @@ async def retry_failed_audit_runs_record(
         status=audit.status.value,
         background_job_status=job.status.value,
     )
+
+
+LONGITUDINAL_TERMINAL_STATUSES = {
+    AuditStatus.COMPLETED,
+    AuditStatus.PARTIAL,
+    AuditStatus.CANCELLED,
+    AuditStatus.FAILED,
+}
+
+
+async def _longitudinal_snapshot_view(
+    session: AsyncSession,
+    audit: Audit,
+    brand: Brand,
+) -> dict[str, Any] | None:
+    snapshot = await latest_audit_snapshot(session, audit.id)
+    if snapshot is not None:
+        return _snapshot_model_view(snapshot)
+    if audit.status not in LONGITUDINAL_TERMINAL_STATUSES:
+        return None
+    payload = await build_snapshot_payload(session, audit, brand)
+    view = {
+        "audit_id": audit.id,
+        "brand_id": audit.brand_id,
+        "user_id": audit.user_id,
+        "normalized_domain": payload["normalized_domain"],
+        "normalized_brand_name": payload["normalized_brand_name"],
+        "audit_status": audit.status.value,
+        "audit_created_at": audit.created_at,
+        "audit_completed_at": audit.updated_at,
+        "summary_metrics": payload["summary_metrics"],
+        "model_summaries": payload["model_summaries"],
+        "source_domains_summary": payload["source_domains_summary"],
+        "concepts_summary": payload["concepts_summary"],
+        "competitors_summary": payload["competitors_summary"],
+    }
+    return view if _snapshot_view_has_usable_data(view) else None
+
+
+def _snapshot_model_view(snapshot: AuditMetricsSnapshot) -> dict[str, Any]:
+    return {
+        "audit_id": snapshot.audit_id,
+        "brand_id": snapshot.brand_id,
+        "user_id": snapshot.user_id,
+        "normalized_domain": snapshot.normalized_domain,
+        "normalized_brand_name": snapshot.normalized_brand_name,
+        "audit_status": snapshot.audit_status.value,
+        "audit_created_at": snapshot.audit_created_at,
+        "audit_completed_at": snapshot.audit_completed_at,
+        "summary_metrics": snapshot.summary_metrics or {},
+        "model_summaries": snapshot.model_summaries or [],
+        "source_domains_summary": snapshot.source_domains_summary or [],
+        "concepts_summary": snapshot.concepts_summary or [],
+        "competitors_summary": snapshot.competitors_summary or [],
+    }
+
+
+def _snapshot_view_has_usable_data(view: dict[str, Any]) -> bool:
+    metrics = view.get("summary_metrics") if isinstance(view, dict) else {}
+    if not isinstance(metrics, dict):
+        return False
+    return bool(metrics.get("completed_runs") or metrics.get("run_count"))
+
+
+def _same_longitudinal_group(
+    current: dict[str, Any],
+    previous: dict[str, Any],
+) -> tuple[bool, list[str]]:
+    current_domain = current.get("normalized_domain")
+    previous_domain = previous.get("normalized_domain")
+    if current_domain and previous_domain:
+        return current_domain == previous_domain, []
+    if current.get("normalized_brand_name") == previous.get("normalized_brand_name"):
+        return True, ["Matched by normalized brand name because normalized domain is missing."]
+    return False, []
+
+
+def _metric_delta(current: object, previous: object) -> MetricDeltaResponse:
+    current_number = _number_or_none(current)
+    previous_number = _number_or_none(previous)
+    delta = (
+        round(current_number - previous_number, 4)
+        if current_number is not None and previous_number is not None
+        else None
+    )
+    return MetricDeltaResponse(current=current_number, previous=previous_number, delta=delta)
+
+
+def _number_or_none(value: object) -> float | int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return value
+    return None
+
+
+def _overall_delta(
+    current: dict[str, Any],
+    previous: dict[str, Any],
+) -> dict[str, MetricDeltaResponse]:
+    current_metrics = current.get("summary_metrics") or {}
+    previous_metrics = previous.get("summary_metrics") or {}
+    keys = [
+        "mentionability_l1",
+        "mentionability_l2",
+        "accuracy_l1",
+        "accuracy_l2",
+        "run_count",
+        "target_count",
+        "query_count",
+    ]
+    return {
+        key: _metric_delta(current_metrics.get(key), previous_metrics.get(key))
+        for key in keys
+    }
+
+
+def _model_deltas(
+    current: dict[str, Any],
+    previous: dict[str, Any],
+) -> list[ModelDeltaResponse]:
+    current_models = {
+        str(item.get("model_id")): item
+        for item in current.get("model_summaries", [])
+        if isinstance(item, dict) and item.get("model_id")
+    }
+    previous_models = {
+        str(item.get("model_id")): item
+        for item in previous.get("model_summaries", [])
+        if isinstance(item, dict) and item.get("model_id")
+    }
+    deltas: list[ModelDeltaResponse] = []
+    for model_id in sorted(set(current_models) | set(previous_models)):
+        current_item = current_models.get(model_id)
+        previous_item = previous_models.get(model_id)
+        status = (
+            "added"
+            if previous_item is None
+            else "removed"
+            if current_item is None
+            else "persisted"
+        )
+        mentionability = _metric_delta(
+            current_item.get("mentionability") if current_item else None,
+            previous_item.get("mentionability") if previous_item else None,
+        )
+        accuracy = _metric_delta(
+            current_item.get("accuracy") if current_item else None,
+            previous_item.get("accuracy") if previous_item else None,
+        )
+        label_item = current_item or previous_item or {}
+        deltas.append(
+            ModelDeltaResponse(
+                model_id=model_id,
+                label=label_item.get("label") if isinstance(label_item, dict) else None,
+                current_mentionability=mentionability.current,
+                previous_mentionability=mentionability.previous,
+                mentionability_delta=mentionability.delta,
+                current_accuracy=accuracy.current,
+                previous_accuracy=accuracy.previous,
+                accuracy_delta=accuracy.delta,
+                status=status,  # type: ignore[arg-type]
+            )
+        )
+    return deltas
+
+
+def _change_response(item: ChangeItem) -> LongitudinalChangeItemResponse:
+    return LongitudinalChangeItemResponse(
+        key=item.key,
+        label=item.label,
+        current_count=item.current_count,
+        previous_count=item.previous_count,
+        delta=item.delta,
+        status=item.status,  # type: ignore[arg-type]
+    )
+
+
+async def build_comparison_candidates_response(
+    session: AsyncSession,
+    audit: Audit,
+    brand: Brand,
+) -> ComparisonCandidatesResponse:
+    current_view = await _longitudinal_snapshot_view(session, audit, brand)
+    if current_view is None:
+        return ComparisonCandidatesResponse(audit_id=audit.id, candidates=[])
+    rows = (
+        await session.execute(
+            select(Audit, Brand)
+            .join(Brand, Audit.brand_id == Brand.id)
+            .where(
+                Audit.user_id == audit.user_id,
+                Audit.id != audit.id,
+                Audit.status.in_(LONGITUDINAL_TERMINAL_STATUSES),
+            )
+            .order_by(Audit.updated_at.desc(), Audit.id.desc())
+        )
+    ).all()
+    candidates: list[ComparisonCandidateResponse] = []
+    for candidate, candidate_brand in rows:
+        candidate_view = await _longitudinal_snapshot_view(
+            session,
+            candidate,
+            candidate_brand,
+        )
+        if candidate_view is None:
+            continue
+        matches, warnings = _same_longitudinal_group(current_view, candidate_view)
+        if not matches and candidate.brand_id != audit.brand_id:
+            continue
+        metrics = candidate_view["summary_metrics"]
+        candidates.append(
+            ComparisonCandidateResponse(
+                audit_id=candidate.id,
+                audit_number=await get_relative_audit_number(session, candidate),
+                created_at=candidate.created_at,
+                completed_at=candidate_view.get("audit_completed_at"),
+                status=candidate.status.value,
+                query_count=int(metrics.get("query_count") or 0),
+                target_count=int(metrics.get("target_count") or 0),
+                summary=ComparisonCandidateSummaryResponse(
+                    mentionability_l1=metrics.get("mentionability_l1"),
+                    mentionability_l2=metrics.get("mentionability_l2"),
+                    accuracy_l1=metrics.get("accuracy_l1"),
+                    accuracy_l2=metrics.get("accuracy_l2"),
+                ),
+                warnings=warnings,
+            )
+        )
+    return ComparisonCandidatesResponse(audit_id=audit.id, candidates=candidates)
+
+
+async def build_audit_comparison_response(
+    session: AsyncSession,
+    current_audit: Audit,
+    current_brand: Brand,
+    previous_audit: Audit,
+    previous_brand: Brand,
+) -> AuditComparisonResponse:
+    current_view = await _longitudinal_snapshot_view(session, current_audit, current_brand)
+    previous_view = await _longitudinal_snapshot_view(
+        session,
+        previous_audit,
+        previous_brand,
+    )
+    if current_view is None or previous_view is None:
+        raise HTTPException(status_code=409, detail="Both audits need usable analytics data.")
+    matches, warnings = _same_longitudinal_group(current_view, previous_view)
+    if not matches and current_audit.brand_id != previous_audit.brand_id:
+        warnings.append("Audits do not share normalized domain or brand fallback.")
+    return AuditComparisonResponse(
+        current_audit_id=current_audit.id,
+        previous_audit_id=previous_audit.id,
+        overall_delta=_overall_delta(current_view, previous_view),
+        model_deltas=_model_deltas(current_view, previous_view),
+        source_domain_changes=[
+            _change_response(item)
+            for item in diff_source_domains(
+                current_view.get("source_domains_summary", []),
+                previous_view.get("source_domains_summary", []),
+            )
+        ],
+        concept_changes=[
+            _change_response(item)
+            for item in diff_concepts(
+                current_view.get("concepts_summary", []),
+                previous_view.get("concepts_summary", []),
+            )
+        ],
+        competitor_changes=[
+            _change_response(item)
+            for item in diff_competitors(
+                current_view.get("competitors_summary", []),
+                previous_view.get("competitors_summary", []),
+            )
+        ],
+        warnings=warnings,
+    )
+
+
+async def build_brand_trends_response(
+    session: AsyncSession,
+    brand_id: int,
+    user: User,
+) -> AuditTrendsResponse:
+    rows = (
+        await session.execute(
+            select(Audit, Brand)
+            .join(Brand, Audit.brand_id == Brand.id)
+            .where(
+                Audit.brand_id == brand_id,
+                Audit.user_id == user.id,
+                Audit.status.in_(LONGITUDINAL_TERMINAL_STATUSES),
+            )
+            .order_by(Audit.updated_at, Audit.id)
+        )
+    ).all()
+    if not rows:
+        raise HTTPException(status_code=404, detail=AUDIT_NOT_FOUND_DETAIL)
+
+    points: list[AuditTrendPointResponse] = []
+    for audit, brand in rows:
+        view = await _longitudinal_snapshot_view(session, audit, brand)
+        if view is None:
+            continue
+        metrics = view["summary_metrics"]
+        points.append(
+            AuditTrendPointResponse(
+                audit_id=audit.id,
+                audit_number=await get_relative_audit_number(session, audit),
+                completed_at=view.get("audit_completed_at"),
+                status=audit.status.value,
+                mentionability_l1=metrics.get("mentionability_l1"),
+                mentionability_l2=metrics.get("mentionability_l2"),
+                accuracy_l1=metrics.get("accuracy_l1"),
+                accuracy_l2=metrics.get("accuracy_l2"),
+                run_count=int(metrics.get("run_count") or 0),
+                target_count=int(metrics.get("target_count") or 0),
+                query_count=int(metrics.get("query_count") or 0),
+            )
+        )
+    return AuditTrendsResponse(brand_id=brand_id, points=points)
 
 
 async def _retry_source_identities(
@@ -3752,6 +4096,71 @@ async def delete_audit(
     except SQLAlchemyError as exc:
         await session.rollback()
         raise HTTPException(status_code=500, detail="Failed to delete audit.") from exc
+
+
+@app.get(
+    "/audits/{audit_id}/comparison-candidates",
+    response_model=ComparisonCandidatesResponse,
+)
+async def get_comparison_candidates(
+    audit_id: int,
+    request: Request,
+    session: AsyncSession = DB_SESSION_DEPENDENCY,
+) -> ComparisonCandidatesResponse:
+    try:
+        current_user = await get_authenticated_user_from_request(session, request)
+        audit, brand = await load_accessible_audit(session, audit_id, current_user)
+        return await build_comparison_candidates_response(session, audit, brand)
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to load comparison candidates.",
+        ) from exc
+
+
+@app.get("/audits/{audit_id}/compare", response_model=AuditComparisonResponse)
+async def compare_audits(
+    audit_id: int,
+    previous_audit_id: int,
+    request: Request,
+    session: AsyncSession = DB_SESSION_DEPENDENCY,
+) -> AuditComparisonResponse:
+    try:
+        current_user = await get_authenticated_user_from_request(session, request)
+        audit, brand = await load_accessible_audit(session, audit_id, current_user)
+        previous, previous_brand = await load_accessible_audit(
+            session,
+            previous_audit_id,
+            current_user,
+        )
+        return await build_audit_comparison_response(
+            session,
+            audit,
+            brand,
+            previous,
+            previous_brand,
+        )
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=500, detail="Failed to compare audits.") from exc
+
+
+@app.get("/brands/{brand_id}/audit-trends", response_model=AuditTrendsResponse)
+async def get_brand_audit_trends(
+    brand_id: int,
+    request: Request,
+    session: AsyncSession = DB_SESSION_DEPENDENCY,
+) -> AuditTrendsResponse:
+    try:
+        current_user = await get_authenticated_user_from_request(session, request)
+        return await build_brand_trends_response(session, brand_id, current_user)
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=500, detail="Failed to load audit trends.") from exc
 
 
 @app.get("/audits/{audit_id}/status", response_model=AuditStatusResponse)

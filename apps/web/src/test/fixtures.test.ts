@@ -9,6 +9,7 @@ import type {
 import {
   auditDetailWithModelTargetsFixture,
   auditAnswerMatrixFixture,
+  auditComparisonFixture,
   auditListFixture,
   auditPipelineRunFixture,
   auditResultsFixture,
@@ -19,6 +20,7 @@ import {
   createAuditModelTargetsPayloadFixture,
   createAuditModelTargetsWireFixture,
   currentUserFixture,
+  comparisonCandidatesFixture,
   emptyAuditResultsFixture,
   emptyAuditSummaryFixture,
   failedAuditSummaryFixture,
@@ -28,6 +30,7 @@ import {
   openRouterL2AuditTargetWireFixture,
   partialAuditSummaryFixture,
   sourceDomainsFixture,
+  auditTrendsFixture,
 } from "./fixtures";
 
 const documentedAuditStatuses = new Set<AuditStatus>([
@@ -151,6 +154,26 @@ describe("frontend-backend contract fixtures", () => {
     });
     expect(dumped).not.toContain("raw_answer");
     expect(dumped).not.toContain("request_snapshot");
+    expect(dumped).not.toContain("api_key");
+    expect(dumped).not.toContain("authorization");
+  });
+
+  it("covers longitudinal comparison and trend fixtures without raw provider data", () => {
+    expect(comparisonCandidatesFixture.candidates[0]?.summary.mentionability_l1).toBe(50);
+    expect(auditComparisonFixture.overall_delta.mentionability_l1?.delta).toBe(50);
+    expect(auditComparisonFixture.model_deltas[0]?.status).toBe("persisted");
+    expect(auditComparisonFixture.source_domain_changes[0]?.status).toBe("increased");
+    expect(auditTrendsFixture.points).toHaveLength(2);
+    expect(auditTrendsFixture.points[0]?.accuracy_l2).toBeNull();
+
+    const dumped = JSON.stringify({
+      comparisonCandidatesFixture,
+      auditComparisonFixture,
+      auditTrendsFixture,
+    });
+    expect(dumped).not.toContain("raw_answer");
+    expect(dumped).not.toContain("request_snapshot");
+    expect(dumped).not.toContain("raw_prompt");
     expect(dumped).not.toContain("api_key");
     expect(dumped).not.toContain("authorization");
   });

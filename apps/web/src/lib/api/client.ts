@@ -26,10 +26,13 @@ import type {
   RegisterRequest,
   AuditTarget,
   AuditTargetWire,
+  AuditComparisonResponse,
+  AuditTrendsResponse,
   ModelCatalogFamilyWire,
   ModelCatalogModelWire,
   ModelCatalogResponse,
   ModelCatalogResponseWire,
+  ComparisonCandidatesResponse,
   ProfilePreferences,
   ProfileResponse,
   RerunEvaluationResponse,
@@ -481,6 +484,40 @@ export function getAuditAnswerMatrix(auditId: number) {
 export function getAuditSourceDomains(auditId: number) {
   return apiFetch<SourceDomainsResponse>(`/audits/${auditId}/source-domains`).then(
     mapSourceDomainsFromWire,
+  );
+}
+
+export function getComparisonCandidates(auditId: number) {
+  return apiFetch<ComparisonCandidatesResponse>(
+    `/audits/${auditId}/comparison-candidates`,
+  ).then((response) => ({
+    audit_id: response.audit_id,
+    candidates: response.candidates ?? [],
+  }));
+}
+
+export function compareAudits(auditId: number, previousAuditId: number) {
+  const previous = encodeURIComponent(String(previousAuditId));
+  return apiFetch<AuditComparisonResponse>(
+    `/audits/${auditId}/compare?previous_audit_id=${previous}`,
+  ).then((response) => ({
+    ...response,
+    overall_delta: response.overall_delta ?? {},
+    model_deltas: response.model_deltas ?? [],
+    source_domain_changes: response.source_domain_changes ?? [],
+    concept_changes: response.concept_changes ?? [],
+    competitor_changes: response.competitor_changes ?? [],
+    warnings: response.warnings ?? [],
+  }));
+}
+
+export function getBrandAuditTrends(brandId: number) {
+  return apiFetch<AuditTrendsResponse>(`/brands/${brandId}/audit-trends`).then(
+    (response) => ({
+      brand_id: response.brand_id,
+      points: response.points ?? [],
+      warnings: response.warnings ?? [],
+    }),
   );
 }
 

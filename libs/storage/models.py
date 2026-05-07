@@ -263,6 +263,9 @@ class Audit(Base):
     competitor_candidates: Mapped[list["CompetitorCandidate"]] = relationship(
         back_populates="audit", cascade="all, delete-orphan"
     )
+    metric_snapshots: Mapped[list["AuditMetricsSnapshot"]] = relationship(
+        back_populates="audit", cascade="all, delete-orphan"
+    )
 
 
 class BrandFact(Base):
@@ -664,6 +667,62 @@ class CompetitorCandidate(Base):
     )
 
     audit: Mapped[Audit] = relationship(back_populates="competitor_candidates")
+
+
+class AuditMetricsSnapshot(Base):
+    __tablename__ = "audit_metrics_snapshots"
+    __table_args__ = (
+        CheckConstraint("snapshot_version >= 1", name="ck_snapshot_version_positive"),
+        UniqueConstraint(
+            "audit_id",
+            "snapshot_version",
+            name="uq_audit_metrics_snapshots_audit_version",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    audit_id: Mapped[int] = mapped_column(
+        ForeignKey("audits.id", ondelete="CASCADE"), nullable=False
+    )
+    brand_id: Mapped[int] = mapped_column(
+        ForeignKey("brands.id", ondelete="RESTRICT"), nullable=False
+    )
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+    normalized_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    normalized_brand_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    snapshot_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    audit_status: Mapped[AuditStatus] = mapped_column(
+        SQLEnum(AuditStatus, native_enum=False), nullable=False
+    )
+    audit_created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    audit_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    summary_metrics: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    model_summaries: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    source_domains_summary: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    concepts_summary: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    competitors_summary: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    parser_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    scoring_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    evaluation_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_aggregation_version: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    competitor_extractor_version: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False
+    )
+
+    audit: Mapped[Audit] = relationship(back_populates="metric_snapshots")
+    brand: Mapped[Brand] = relationship()
+    user: Mapped[User | None] = relationship()
 
 
 class RawResponse(Base):

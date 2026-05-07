@@ -14,6 +14,8 @@ import {
   getAuditSourceDomains,
   getAuditSummary,
   getAuditSummaryV2,
+  getBrandAuditTrends,
+  getComparisonCandidates,
   getCurrentUser,
   getModelCatalog,
   loginUser,
@@ -21,6 +23,7 @@ import {
   resolveApiBaseUrl,
   restoreAudit,
   cancelAuditRun,
+  compareAudits,
   rerunAuditEvaluation,
   runAuditPipeline,
   retryFailedAuditRuns,
@@ -31,6 +34,7 @@ import {
   auditDetailWithModelTargetsFixture,
   auditEstimateFixture,
   auditAnswerMatrixFixture,
+  auditComparisonFixture,
   auditListFixture,
   auditPipelineEnqueueFixture,
   auditPipelineRunFixture,
@@ -43,12 +47,14 @@ import {
   createAuditModelTargetsPayloadFixture,
   createAuditModelTargetsWireFixture,
   currentUserFixture,
+  comparisonCandidatesFixture,
   legacyAuditDetailWithoutModelTargetsFixture,
   modelCatalogWireFixture,
   openRouterL2AuditTargetFixture,
   openRouterL2AuditTargetWireFixture,
   rerunEvaluationFixture,
   sourceDomainsFixture,
+  auditTrendsFixture,
   unauthenticatedAuthErrorFixture,
 } from "../../test/fixtures";
 import { mockFetchSequence } from "../../test/mockFetch";
@@ -429,6 +435,39 @@ describe("api client", () => {
       "https://docs.example.com/path",
     );
     expect(sourceDomainsFixture.warnings).toContain("Skipped 1 invalid source URL(s).");
+  });
+
+  it("loads longitudinal comparison candidates with credentialed requests", async () => {
+    const fetchMock = mockFetchSequence([{ body: comparisonCandidatesFixture }]);
+
+    await expect(getComparisonCandidates(42)).resolves.toEqual(comparisonCandidatesFixture);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/audits/42/comparison-candidates",
+      expect.objectContaining({ credentials: "include" }),
+    );
+  });
+
+  it("loads audit comparisons with deltas and warnings", async () => {
+    const fetchMock = mockFetchSequence([{ body: auditComparisonFixture }]);
+
+    await expect(compareAudits(42, 41)).resolves.toEqual(auditComparisonFixture);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/audits/42/compare?previous_audit_id=41",
+      expect.objectContaining({ credentials: "include" }),
+    );
+    expect(auditComparisonFixture.overall_delta.accuracy_l1?.previous).toBe(0.5);
+    expect(auditComparisonFixture.warnings).toContain("Compared by normalized domain.");
+  });
+
+  it("loads brand audit trends with safe empty defaults", async () => {
+    const fetchMock = mockFetchSequence([{ body: auditTrendsFixture }]);
+
+    await expect(getBrandAuditTrends(7)).resolves.toEqual(auditTrendsFixture);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/brands/7/audit-trends",
+      expect.objectContaining({ credentials: "include" }),
+    );
+    expect(auditTrendsFixture.points[0]?.accuracy_l2).toBeNull();
   });
 
   it("normalizes source domain optional fields and strips unsafe extras", async () => {

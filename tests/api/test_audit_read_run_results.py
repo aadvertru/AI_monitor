@@ -10,11 +10,14 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from apps.api.main import (
     cancel_audit_run,
+    compare_audits,
     get_audit_detail,
     get_audit_progress,
     get_audit_results,
     get_audit_status,
     get_audit_summary,
+    get_brand_audit_trends,
+    get_comparison_candidates,
     get_raw_response_inspection,
     list_audits,
     retry_failed_audit_runs,
@@ -131,6 +134,79 @@ class AuditReadRunResultsAPITests(unittest.IsolatedAsyncioTestCase):
             await session.refresh(audit)
             return audit
 
+    async def _add_successful_snapshot_data(
+        self,
+        audit: Audit,
+        *,
+        visible: bool = True,
+        final_score: float = 0.8,
+        source_domain: str = "example.com",
+        concept_text: str = "Visibility",
+        competitor_name: str = "Rival",
+    ) -> None:
+        async with self.session_factory() as session:
+            query = (
+                await session.execute(select(Query).where(Query.audit_id == audit.id))
+            ).scalars().first()
+            assert query is not None
+            target = AuditTarget(
+                audit_id=audit.id,
+                ai_family="mock",
+                execution_provider="mock",
+                model_provider="mock",
+                model_id="mock/default",
+                display_name="Mock",
+                level=SCDLLevel.L1,
+            )
+            session.add(target)
+            await session.flush()
+            run = Run(
+                audit_id=audit.id,
+                query_id=query.id,
+                audit_target_id=target.id,
+                provider="mock",
+                run_number=1,
+                status=RunStatus.SUCCESS,
+            )
+            session.add(run)
+            await session.flush()
+            session.add_all(
+                [
+                    ParsedResult(
+                        run_id=run.id,
+                        visible_brand=visible,
+                        competitors=[],
+                        sources=[{"domain": source_domain, "url": f"https://{source_domain}/a"}],
+                        parsed_payload={"raw_prompt": "hidden"},
+                    ),
+                    Score(run_id=run.id, final_score=final_score),
+                    RawResponse(
+                        run_id=run.id,
+                        request_snapshot={"raw_prompt": "hidden"},
+                        raw_answer="hidden raw answer",
+                        citations=[],
+                        provider_metadata={"api_key": "sk-hidden"},
+                        provider_status="success",
+                    ),
+                    Concept(
+                        audit_id=audit.id,
+                        run_id=run.id,
+                        query_id=query.id,
+                        target_id=target.id,
+                        text=concept_text,
+                        count=1,
+                        evidence_count=1,
+                    ),
+                    CompetitorCandidate(
+                        audit_id=audit.id,
+                        name=competitor_name,
+                        confidence=0.8,
+                        evidence_count=1,
+                    ),
+                ]
+            )
+            await session.commit()
+
     async def test_authenticated_user_can_list_only_owned_audits_ordered_newest_first(
         self,
     ) -> None:
@@ -212,6 +288,176 @@ class AuditReadRunResultsAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary.audit_id, audit.id)
         self.assertEqual(trigger.audit_id, audit.id)
         self.assertEqual(trigger.status, "running")
+
+    async def test_comparison_candidates_returns_owned_terminal_same_domain(
+        self,
+    ) -> None:
+        owner = await self._create_user("owner@example.com")
+        other = await self._create_user("other@example.com")
+        current = await self._create_audit(
+            owner,
+            brand_name="Acme Current",
+            status=AuditStatus.COMPLETED,
+            created_at=NOW,
+        )
+        previous = await self._create_audit(
+            owner,
+            brand_name="Acme Previous",
+            status=AuditStatus.COMPLETED,
+            created_at=NOW - timedelta(days=1),
+        )
+        other_audit = await self._create_audit(
+            other,
+            brand_name="Acme Other",
+            status=AuditStatus.COMPLETED,
+        )
+        async with self.session_factory() as session:
+            for audit in [current, previous, other_audit]:
+                stored = await session.get(Audit, audit.id)
+                assert stored is not None
+                brand = await session.get(Brand, stored.brand_id)
+                assert brand is not None
+                brand.domain = "acme.example"
+            await session.commit()
+        await self._add_successful_snapshot_data(current)
+        await self._add_successful_snapshot_data(previous, final_score=0.4)
+        await self._add_successful_snapshot_data(other_audit)
+
+        async with self.session_factory() as session:
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                result = await get_comparison_candidates(
+                    audit_id=current.id,
+                    request=self._authenticated_request(owner),
+                    session=session,
+                )
+
+        self.assertEqual([candidate.audit_id for candidate in result.candidates], [previous.id])
+        self.assertEqual(result.candidates[0].summary.mentionability_l1, 100.0)
+
+    async def test_compare_audits_returns_deltas_and_safe_changes(self) -> None:
+        owner = await self._create_user()
+        previous = await self._create_audit(
+            owner,
+            brand_name="Acme Previous",
+            status=AuditStatus.COMPLETED,
+            created_at=NOW - timedelta(days=1),
+        )
+        current = await self._create_audit(
+            owner,
+            brand_name="Acme Current",
+            status=AuditStatus.COMPLETED,
+            created_at=NOW,
+        )
+        async with self.session_factory() as session:
+            for audit in [previous, current]:
+                stored = await session.get(Audit, audit.id)
+                assert stored is not None
+                brand = await session.get(Brand, stored.brand_id)
+                assert brand is not None
+                brand.domain = "acme.example"
+            await session.commit()
+        await self._add_successful_snapshot_data(
+            previous,
+            visible=False,
+            source_domain="old.example",
+            concept_text="Old concept",
+            competitor_name="Old rival",
+        )
+        await self._add_successful_snapshot_data(
+            current,
+            visible=True,
+            source_domain="new.example",
+            concept_text="New concept",
+            competitor_name="New rival",
+        )
+
+        async with self.session_factory() as session:
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                result = await compare_audits(
+                    audit_id=current.id,
+                    previous_audit_id=previous.id,
+                    request=self._authenticated_request(owner),
+                    session=session,
+                )
+
+        self.assertEqual(result.current_audit_id, current.id)
+        self.assertEqual(result.overall_delta["mentionability_l1"].delta, 100.0)
+        self.assertTrue(any(item.status == "added" for item in result.source_domain_changes))
+        dumped = str(result.model_dump())
+        self.assertNotIn("raw_prompt", dumped)
+        self.assertNotIn("sk-hidden", dumped)
+
+    async def test_compare_audits_enforces_ownership_for_previous_audit(self) -> None:
+        owner = await self._create_user("owner@example.com")
+        other = await self._create_user("other@example.com")
+        current = await self._create_audit(
+            owner,
+            brand_name="Owner Compare",
+            status=AuditStatus.COMPLETED,
+        )
+        previous = await self._create_audit(
+            other,
+            brand_name="Other Compare",
+            status=AuditStatus.COMPLETED,
+        )
+
+        async with self.session_factory() as session:
+            with (
+                patch.dict("os.environ", AUTH_ENV, clear=True),
+                self.assertRaises(HTTPException) as context,
+            ):
+                await compare_audits(
+                    audit_id=current.id,
+                    previous_audit_id=previous.id,
+                    request=self._authenticated_request(owner),
+                    session=session,
+                )
+
+        self.assertEqual(context.exception.status_code, 404)
+
+    async def test_brand_trends_returns_owned_terminal_points_chronologically(self) -> None:
+        owner = await self._create_user()
+        old = await self._create_audit(
+            owner,
+            brand_name="Trend Brand",
+            status=AuditStatus.COMPLETED,
+            created_at=NOW - timedelta(days=2),
+        )
+        newer = await self._create_audit(
+            owner,
+            brand_name="Trend Brand Newer",
+            status=AuditStatus.COMPLETED,
+            created_at=NOW - timedelta(days=1),
+        )
+        draft = await self._create_audit(
+            owner,
+            brand_name="Trend Brand Draft",
+            status=AuditStatus.CREATED,
+            created_at=NOW,
+        )
+        async with self.session_factory() as session:
+            old_stored = await session.get(Audit, old.id)
+            newer_stored = await session.get(Audit, newer.id)
+            draft_stored = await session.get(Audit, draft.id)
+            assert old_stored is not None and newer_stored is not None and draft_stored is not None
+            brand_id = old_stored.brand_id
+            newer_stored.brand_id = brand_id
+            draft_stored.brand_id = brand_id
+            await session.commit()
+        await self._add_successful_snapshot_data(old, visible=False)
+        await self._add_successful_snapshot_data(newer, visible=True)
+
+        async with self.session_factory() as session:
+            with patch.dict("os.environ", AUTH_ENV, clear=True):
+                result = await get_brand_audit_trends(
+                    brand_id=brand_id,
+                    request=self._authenticated_request(owner),
+                    session=session,
+                )
+
+        self.assertEqual([point.audit_id for point in result.points], [old.id, newer.id])
+        self.assertEqual(result.points[0].mentionability_l1, 0.0)
+        self.assertEqual(result.points[1].mentionability_l1, 100.0)
 
     async def test_progress_endpoint_rejects_unauthenticated_request(self) -> None:
         owner = await self._create_user()

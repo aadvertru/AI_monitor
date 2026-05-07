@@ -743,3 +743,92 @@ export type AuditSummaryResponse = {
   sources: SourceSummaryItem[];
   provider_diagnostics?: ProviderDiagnostic[];
 };
+
+export type ComparisonCandidateSummary = {
+  mentionability_l1: number | null;
+  mentionability_l2: number | null;
+  accuracy_l1: number | null;
+  accuracy_l2: number | null;
+};
+
+export type ComparisonCandidate = {
+  audit_id: number;
+  audit_number: number;
+  created_at: string;
+  completed_at: string | null;
+  status: AuditStatus;
+  query_count: number;
+  target_count: number;
+  summary: ComparisonCandidateSummary;
+  warnings?: string[];
+};
+
+export type ComparisonCandidatesResponse = {
+  audit_id: number;
+  candidates: ComparisonCandidate[];
+};
+
+export type MetricDelta = {
+  current: number | null;
+  previous: number | null;
+  delta: number | null;
+};
+
+export type ModelDelta = {
+  model_id: string;
+  label: string | null;
+  current_mentionability: number | null;
+  previous_mentionability: number | null;
+  mentionability_delta: number | null;
+  current_accuracy: number | null;
+  previous_accuracy: number | null;
+  accuracy_delta: number | null;
+  status: "added" | "removed" | "persisted";
+};
+
+export type LongitudinalChangeStatus =
+  | "added"
+  | "removed"
+  | "persisted"
+  | "increased"
+  | "decreased";
+
+export type LongitudinalChangeItem = {
+  key: string;
+  label: string | null;
+  current_count: number | null;
+  previous_count: number | null;
+  delta: number | null;
+  status: LongitudinalChangeStatus;
+};
+
+export type AuditComparisonResponse = {
+  current_audit_id: number;
+  previous_audit_id: number;
+  overall_delta: Record<string, MetricDelta>;
+  model_deltas: ModelDelta[];
+  source_domain_changes: LongitudinalChangeItem[];
+  concept_changes: LongitudinalChangeItem[];
+  competitor_changes: LongitudinalChangeItem[];
+  warnings: string[];
+};
+
+export type AuditTrendPoint = {
+  audit_id: number;
+  audit_number: number;
+  completed_at: string | null;
+  status: AuditStatus;
+  mentionability_l1: number | null;
+  mentionability_l2: number | null;
+  accuracy_l1: number | null;
+  accuracy_l2: number | null;
+  run_count: number;
+  target_count: number;
+  query_count: number;
+};
+
+export type AuditTrendsResponse = {
+  brand_id: number;
+  points: AuditTrendPoint[];
+  warnings: string[];
+};

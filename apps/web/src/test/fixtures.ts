@@ -20,6 +20,9 @@ import type {
   ProfileResponse,
   AnswerMatrixResponse,
   AuditSummaryV2Response,
+  AuditComparisonResponse,
+  AuditTrendsResponse,
+  ComparisonCandidatesResponse,
   SourceDomainsResponse,
 } from "../lib/api/types";
 import type { ApiErrorPayload } from "../lib/api/client";
@@ -780,6 +783,122 @@ export const sourceDomainsFixture: SourceDomainsResponse = {
     },
   ],
   warnings: ["Skipped 1 invalid source URL(s)."],
+};
+
+export const comparisonCandidatesFixture: ComparisonCandidatesResponse = {
+  audit_id: 42,
+  candidates: [
+    {
+      audit_id: 41,
+      audit_number: 4,
+      created_at: "2026-05-01T10:00:00Z",
+      completed_at: "2026-05-01T10:05:00Z",
+      status: "completed",
+      query_count: 2,
+      target_count: 2,
+      summary: {
+        mentionability_l1: 50,
+        mentionability_l2: 25,
+        accuracy_l1: 0.5,
+        accuracy_l2: null,
+      },
+      warnings: [],
+    },
+  ],
+};
+
+export const auditComparisonFixture: AuditComparisonResponse = {
+  current_audit_id: 42,
+  previous_audit_id: 41,
+  overall_delta: {
+    mentionability_l1: {
+      current: 100,
+      previous: 50,
+      delta: 50,
+    },
+    accuracy_l1: {
+      current: 0.75,
+      previous: 0.5,
+      delta: 0.25,
+    },
+  },
+  model_deltas: [
+    {
+      model_id: "openai/gpt-4o-mini",
+      label: "GPT-4o mini",
+      current_mentionability: 100,
+      previous_mentionability: 50,
+      mentionability_delta: 50,
+      current_accuracy: 0.75,
+      previous_accuracy: 0.5,
+      accuracy_delta: 0.25,
+      status: "persisted",
+    },
+  ],
+  source_domain_changes: [
+    {
+      key: "example.com",
+      label: "example.com",
+      current_count: 3,
+      previous_count: 1,
+      delta: 2,
+      status: "increased",
+    },
+  ],
+  concept_changes: [
+    {
+      key: "ai visibility",
+      label: "AI visibility",
+      current_count: 2,
+      previous_count: 0,
+      delta: 2,
+      status: "added",
+    },
+  ],
+  competitor_changes: [
+    {
+      key: "contoso monitor",
+      label: "Contoso Monitor",
+      current_count: 1,
+      previous_count: 2,
+      delta: -1,
+      status: "decreased",
+    },
+  ],
+  warnings: ["Compared by normalized domain."],
+};
+
+export const auditTrendsFixture: AuditTrendsResponse = {
+  brand_id: 7,
+  points: [
+    {
+      audit_id: 41,
+      audit_number: 4,
+      completed_at: "2026-05-01T10:05:00Z",
+      status: "completed",
+      mentionability_l1: 50,
+      mentionability_l2: 25,
+      accuracy_l1: 0.5,
+      accuracy_l2: null,
+      run_count: 4,
+      target_count: 2,
+      query_count: 2,
+    },
+    {
+      audit_id: 42,
+      audit_number: 5,
+      completed_at: "2026-05-02T10:05:00Z",
+      status: "completed",
+      mentionability_l1: 100,
+      mentionability_l2: 50,
+      accuracy_l1: 0.75,
+      accuracy_l2: null,
+      run_count: 4,
+      target_count: 2,
+      query_count: 2,
+    },
+  ],
+  warnings: [],
 };
 
 export const emptyAuditSummaryFixture: AuditSummaryResponse = {

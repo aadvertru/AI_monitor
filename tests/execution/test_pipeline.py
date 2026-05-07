@@ -17,6 +17,7 @@ from libs.execution.post_processing import AuditPostProcessingSummary, process_a
 from libs.execution.provider_adapter import BaseProviderAdapter, ProviderResponse
 from libs.storage.models import (
     Audit,
+    AuditMetricsSnapshot,
     AuditStatus,
     Base,
     Brand,
@@ -198,6 +199,8 @@ class AuditPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(results.rows[0].visible_brand)
         self.assertIsNotNone(results.rows[0].final_score)
         self.assertEqual(api_summary.visibility_ratio, 1.0)
+        snapshot_count = await self._count(AuditMetricsSnapshot)
+        self.assertEqual(snapshot_count, 1)
 
     async def test_pipeline_sets_status_to_running_before_execution(self) -> None:
         audit = await self._create_audit()
@@ -260,6 +263,7 @@ class AuditPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(raw_count, 1)
         self.assertEqual(parsed_count, 1)
         self.assertEqual(score_count, 1)
+        self.assertEqual(await self._count(AuditMetricsSnapshot), 1)
 
     async def test_pipeline_calls_execution_and_post_processing_services(self) -> None:
         audit = await self._create_audit()

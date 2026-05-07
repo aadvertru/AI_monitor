@@ -498,6 +498,90 @@ class AuditSummaryV2Response(FrontendAuditSchema):
     provider_diagnostics: list[ProviderDiagnosticResponse] = Field(default_factory=list)
 
 
+class ComparisonCandidateSummaryResponse(FrontendAuditSchema):
+    mentionability_l1: float | None = None
+    mentionability_l2: float | None = None
+    accuracy_l1: float | None = None
+    accuracy_l2: float | None = None
+
+
+class ComparisonCandidateResponse(FrontendAuditSchema):
+    audit_id: int
+    audit_number: int
+    created_at: datetime
+    completed_at: datetime | None = None
+    status: AuditStatusValue
+    query_count: int = 0
+    target_count: int = 0
+    summary: ComparisonCandidateSummaryResponse = Field(
+        default_factory=ComparisonCandidateSummaryResponse
+    )
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ComparisonCandidatesResponse(FrontendAuditSchema):
+    audit_id: int
+    candidates: list[ComparisonCandidateResponse] = Field(default_factory=list)
+
+
+class MetricDeltaResponse(FrontendAuditSchema):
+    current: float | int | None = None
+    previous: float | int | None = None
+    delta: float | int | None = None
+
+
+class ModelDeltaResponse(FrontendAuditSchema):
+    model_id: str
+    label: str | None = None
+    current_mentionability: float | None = None
+    previous_mentionability: float | None = None
+    mentionability_delta: float | None = None
+    current_accuracy: float | None = None
+    previous_accuracy: float | None = None
+    accuracy_delta: float | None = None
+    status: Literal["added", "removed", "persisted"] = "persisted"
+
+
+class LongitudinalChangeItemResponse(FrontendAuditSchema):
+    key: str
+    label: str | None = None
+    current_count: int | None = None
+    previous_count: int | None = None
+    delta: int | None = None
+    status: Literal["added", "removed", "persisted", "increased", "decreased"]
+
+
+class AuditComparisonResponse(FrontendAuditSchema):
+    current_audit_id: int
+    previous_audit_id: int
+    overall_delta: dict[str, MetricDeltaResponse] = Field(default_factory=dict)
+    model_deltas: list[ModelDeltaResponse] = Field(default_factory=list)
+    source_domain_changes: list[LongitudinalChangeItemResponse] = Field(default_factory=list)
+    concept_changes: list[LongitudinalChangeItemResponse] = Field(default_factory=list)
+    competitor_changes: list[LongitudinalChangeItemResponse] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class AuditTrendPointResponse(FrontendAuditSchema):
+    audit_id: int
+    audit_number: int
+    completed_at: datetime | None = None
+    status: AuditStatusValue
+    mentionability_l1: float | None = None
+    mentionability_l2: float | None = None
+    accuracy_l1: float | None = None
+    accuracy_l2: float | None = None
+    run_count: int = 0
+    target_count: int = 0
+    query_count: int = 0
+
+
+class AuditTrendsResponse(FrontendAuditSchema):
+    brand_id: int
+    points: list[AuditTrendPointResponse] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 AnswerMatrixCellStatusValue = Literal[
     "completed",
     "failed",

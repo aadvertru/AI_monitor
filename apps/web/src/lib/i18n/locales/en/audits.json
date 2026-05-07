@@ -164,6 +164,26 @@
       "unknown": "Domain status is unknown"
     }
   },
+  "longitudinal": {
+    "eyebrow": "Longitudinal analytics",
+    "title": "Historical comparison",
+    "subtitle": "Compare this audit with previous runs for the same brand/domain.",
+    "load": "Load history",
+    "loaded": "History loaded",
+    "idle": "History is loaded on demand to keep the audit page fast.",
+    "loading": "Loading comparison history...",
+    "comparisonLoading": "Loading comparison...",
+    "errorTitle": "Unable to load history",
+    "errorBody": "Historical comparison data is unavailable.",
+    "empty": "No comparable previous audits were found.",
+    "compareWith": "Compare with",
+    "modelDeltas": "Model deltas",
+    "sourceChanges": "Source domains",
+    "conceptChanges": "Concepts",
+    "competitorChanges": "Competitors",
+    "trends": "Trend points",
+    "noTrends": "No trend points yet."
+  },
   "errors": {
     "create": "Unable to create audit.",
     "save": "Unable to save audit.",

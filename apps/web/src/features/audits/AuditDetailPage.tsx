@@ -34,6 +34,7 @@ import type {
 } from "../../lib/api/types";
 import { AuditArchiveBadge } from "./AuditArchiveBadge";
 import { AuditBreadcrumbs } from "./AuditBreadcrumbs";
+import { AuditLongitudinalPanel } from "./AuditLongitudinalPanel";
 import { AnswerMatrixShell } from "./AnswerMatrixShell";
 import { AuditSetupPanel } from "./AuditSetupPanel";
 import { AuditStatusBadge } from "./AuditStatusBadge";
@@ -417,6 +418,11 @@ export function AuditDetailPage() {
       <AuditSetupPanel audit={detail.data} />
       <Web5SummaryShell auditId={auditId} audit={detail.data} />
       <AnswerMatrixShell auditId={auditId} auditStatus={currentStatus} />
+      <AuditLongitudinalPanel
+        auditId={auditId}
+        brandId={detail.data.brand_id}
+        auditStatus={currentStatus}
+      />
       <AuditSummaryContent auditId={auditId} summary={summary.data} />
     </section>
   );

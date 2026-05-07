@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from libs.analysis.longitudinal_snapshots import create_audit_metrics_snapshot
 from libs.control.job_scheduler import schedule_jobs_for_audit
 from libs.execution.audit_execution import (
     AuditJobExecutionSummary,
@@ -159,6 +160,7 @@ async def run_audit_pipeline(
     )
     if execution.fatal_error is not None:
         final_status = await _set_audit_status(session, audit_id, AuditStatus.FAILED)
+        await _create_terminal_snapshot(session, audit_id)
         log_event(
             logger,
             "audit_pipeline_failed",
@@ -179,6 +181,7 @@ async def run_audit_pipeline(
     post_processing = await process_audit_results(session, audit_id)
     if post_processing.fatal_error is not None:
         final_status = await _set_audit_status(session, audit_id, AuditStatus.FAILED)
+        await _create_terminal_snapshot(session, audit_id)
         log_event(
             logger,
             "audit_pipeline_failed",
@@ -203,6 +206,7 @@ async def run_audit_pipeline(
         execution=execution,
         post_processing=post_processing,
     )
+    await _create_terminal_snapshot(session, audit_id)
     log_event(
         logger,
         "audit_pipeline_completed",
@@ -294,6 +298,37 @@ async def _set_audit_status(
         reason="provider_error" if status == AuditStatus.FAILED else "status_update",
     )
     return to_status
+
+
+async def _create_terminal_snapshot(session: AsyncSession, audit_id: int) -> None:
+    try:
+        result = await create_audit_metrics_snapshot(session, audit_id)
+    except Exception as exc:
+        await session.rollback()
+        log_event(
+            logger,
+            "audit_metrics_snapshot_failed",
+            log_level=logging.WARNING,
+            audit_id=audit_id,
+            error_code=exc.__class__.__name__,
+        )
+        return
+
+    if result.snapshot is not None:
+        log_event(
+            logger,
+            "audit_metrics_snapshot_created",
+            audit_id=audit_id,
+            snapshot_id=result.snapshot.id,
+            snapshot_version=result.snapshot.snapshot_version,
+        )
+    elif result.skipped_reason:
+        log_event(
+            logger,
+            "audit_metrics_snapshot_skipped",
+            audit_id=audit_id,
+            reason=result.skipped_reason,
+        )
 
 
 async def _job_count(session: AsyncSession, audit_id: int) -> int:
